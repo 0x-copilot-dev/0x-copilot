@@ -144,10 +144,27 @@ class WebSearchToolRegistry:
         ``content``, and LangChain — which reads the field off the tool it
         dispatches — stringified the whole pair into ``ToolMessage.content`` and
         left ``artifact`` ``None`` on every web search.
+
+        The tool declares its own Context Occupancy origin here, at the site
+        that authors its description and schema. ``ModelToolDeclaration.declared``
+        yields to an existing declaration precisely so an authoring site can do
+        this, and it has to: the factory composes injected registry tools as one
+        anonymous group and marks the whole group ``deepagents.middleware`` /
+        ``third_party=True``. That bucket was honest while nothing could tell
+        the members apart, but it is wrong about this tool — the ~200 resident
+        tokens are ours, in this file, and a report that blamed a dependency for
+        them would send a reader to go edit a package that does not contain the
+        string.
         """
         from langchain_core.tools import StructuredTool
 
         from agent_runtime.capabilities.retrying_tool import RetryingTool
+        from agent_runtime.observability.context_origin import (
+            ContextLifecycle,
+            ContextOrigin,
+            ContextSegmentClass,
+            declare_context_origin,
+        )
 
         inner = StructuredTool.from_function(
             func=self._search,
@@ -156,11 +173,22 @@ class WebSearchToolRegistry:
             args_schema=self.WebSearchInput,
             response_format="content_and_artifact",
         )
-        return RetryingTool.wrapping(
-            inner,
-            max_attempts=3,
-            initial_backoff_seconds=1.0,
-            max_backoff_seconds=8.0,
+        return declare_context_origin(
+            RetryingTool.wrapping(
+                inner,
+                max_attempts=3,
+                initial_backoff_seconds=1.0,
+                max_backoff_seconds=8.0,
+            ),
+            ContextOrigin(
+                # A literal rather than ``__name__`` so the PRD-02 inventory gate
+                # can read it statically; an owner it cannot resolve never
+                # reaches the reviewed pin.
+                owner="runtime_worker.dependencies",
+                name=self.Values.WEB_SEARCH_TOOL_NAME,
+                segment_class=ContextSegmentClass.TOOLS,
+                lifecycle=ContextLifecycle.RESIDENT,
+            ),
         )
 
     def _search(self, query: str) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:

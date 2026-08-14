@@ -670,8 +670,179 @@ class ThirdPartyContextOrigins:
         return (byte_count + cls.CHARS_PER_TOKEN - 1) // cls.CHARS_PER_TOKEN
 
 
+class ThirdPartyToolOrigins:
+    """Declare library-installed tools on their authoring module's behalf (§4.3).
+
+    The tool half of what :class:`ThirdPartyContextOrigins` does for prompt text,
+    and it exists because the declaration seam has exactly one first-party
+    composition site. ``ModelToolDeclaration`` stamps an origin at
+    ``factory._model_visible_tools``, and the PRD-02 AST gate sweeps that same
+    function — so a tool composed anywhere else is invisible to *both*. That is
+    not hypothetical: ``create_deep_agent`` installs its own middleware tools
+    inside the library, and the ``FilesystemMiddleware`` (``ls`` / ``read_file``
+    / ``write_file`` / ``edit_file`` / ``delete`` / ``glob`` / ``grep``), the
+    ``TodoListMiddleware`` (``write_todos``) and the ``SubAgentMiddleware``
+    (``task``) never pass an append site. They carried no stamp, the gate could
+    not see them, and they measured as ``UNDECLARED`` — thousands of estimated
+    tokens of resident rent per model call, reported through a field whose
+    contract says "first-party contract defect" about text no first-party edit
+    could fix.
+
+    **Resolution is by the tool's authoring callable, never by its class and
+    never by its name.** A name table would be the central registry §3.2
+    rejects, stale the moment the dependency adds a tool. The class is worse
+    than useless: ``StructuredTool`` is a ``langchain_core`` class whoever wrote
+    the tool, so ``type(tool).__module__`` would relabel *our* tools as
+    third-party and quietly delete the very signal this module protects. The
+    function a tool dispatches to is defined in the module that actually wrote
+    its description and schema, which is both the honest owner and exactly the
+    dotted shape :attr:`ContextOrigin.owner` wants.
+
+    **Only the pinned libraries named below are declarable, and everything else
+    resolves to ``None``.** The tempting inversion — declare anything whose
+    module is not one of this service's own packages — reads as equivalent and
+    is not. It assumes *unknown means theirs*, so the failure mode is silent
+    misattribution: a first-party module missing from the list, or a tool built
+    in a module nobody thought about, gets stamped ``third_party=True`` and the
+    report sends a reader off to edit a dependency that does not contain the
+    string. This direction fails the other way, which is the one §4.4 wants — an
+    unrecognised author lands in ``undeclared_tokens``, where it is loud,
+    reviewable, and obviously ours to fix.
+
+    That is not a theoretical preference. ``task`` looks exactly like a
+    ``deepagents`` built-in — same name, same middleware slot — but this
+    repository substitutes its own
+    :func:`~agent_runtime.delegation.subagents.atlas_task_tool.build_atlas_task_tool`
+    into that slot, and a resolver working off "not ours" would have labelled
+    ~390 tokens of text we wrote as the library's.
+
+    Never raises, like everything else on this path (§6.4). An unreadable
+    callable, a missing ``__module__`` and a name that cannot form a legal label
+    all degrade to ``None``, which is the pre-existing ``UNDECLARED`` behaviour.
+    """
+
+    class Keys:
+        """Attribute names read off an untrusted tool object.
+
+        The two callable slots are the ones LangChain fills from
+        ``StructuredTool.from_function`` and the ``@tool`` decorator, which is
+        how every library-installed tool in the pinned dependencies is built.
+        ``func`` is checked first because a tool that has both dispatches the
+        sync one from the same module.
+        """
+
+        FUNC: Final[str] = "func"
+        COROUTINE: Final[str] = "coroutine"
+        MODULE: Final[str] = "__module__"
+        NAME: Final[str] = "name"
+
+    AUTHOR_ATTRIBUTES: Final[tuple[str, ...]] = (Keys.FUNC, Keys.COROUTINE)
+
+    MODULE_SEPARATOR: Final[str] = "."
+
+    DECLARABLE_ROOTS: Final[frozenset[str]] = frozenset(
+        {
+            "deepagents",
+            "langchain",
+            "langchain_core",
+            "langgraph",
+        }
+    )
+    """The pinned packages this module is allowed to speak for.
+
+    §4.3 grants exactly one exception to "contributors declare themselves", and
+    it is scoped to the dependency: *one module declares on the library's
+    behalf*. An allowlist is that scope written down. These four are the
+    packages that can put a tool on the model surface without passing through
+    any code of ours — ``deepagents`` and ``langchain`` do so today via their
+    middleware, and the other two are the same lane's lower layers.
+
+    A dependency that moves its tools into a new top-level package makes them
+    measure as ``UNDECLARED`` until that package is added here. That is the
+    intended behaviour, not a gap: it is one line to fix, the occupancy report
+    names the tool, and the alternative — assuming any unfamiliar module is
+    somebody else's — is how first-party text gets quietly attributed to a
+    vendor.
+    """
+
+    def origin_for(self, tool: object) -> ContextOrigin | None:
+        """Declare ``tool`` on its authoring module's behalf, or ``None``.
+
+        ``None`` means "this resolver has nothing to say", which leaves the
+        caller's existing ``UNDECLARED`` path untouched. That is the answer for
+        a first-party tool, for a tool authored in any package outside
+        :attr:`DECLARABLE_ROOTS`, for a tool whose authoring callable cannot be
+        read, and for a tool whose name cannot form a legal label.
+        """
+
+        module = self._authoring_module(tool)
+        if module is None or not self._is_declarable(module):
+            return None
+        name = self._tool_name(tool)
+        if not name:
+            return None
+        try:
+            return ContextOrigin(
+                owner=module,
+                name=name,
+                segment_class=ContextSegmentClass.TOOLS,
+                lifecycle=ContextLifecycle.RESIDENT,
+                third_party=True,
+            )
+        except Exception:  # noqa: BLE001 — a declaration is never load-bearing
+            _LOGGER.debug(
+                "Library-installed tool %r in %s does not form a legal "
+                "declaration; it will measure as UNDECLARED.",
+                name,
+                module,
+                exc_info=True,
+            )
+            return None
+
+    @classmethod
+    def _authoring_module(cls, tool: object) -> str | None:
+        """Return the dotted module that defined ``tool``'s dispatch callable.
+
+        Deliberately no fallback to ``type(tool).__module__``. See the class
+        docstring: the class is a library class for first-party and third-party
+        tools alike, so falling back to it would misattribute ours rather than
+        degrade — and a wrong owner is worse than an absent one, because
+        ``undeclared_tokens`` would go quiet while the report named the wrong
+        package to go fix.
+        """
+
+        for attribute in cls.AUTHOR_ATTRIBUTES:
+            try:
+                callable_ = getattr(tool, attribute, None)
+            except Exception:  # noqa: BLE001 — unreadable is treated as absent
+                continue
+            if callable_ is None:
+                continue
+            module = getattr(callable_, cls.Keys.MODULE, None)
+            if isinstance(module, str) and module:
+                return module
+        return None
+
+    @classmethod
+    def _is_declarable(cls, module: str) -> bool:
+        """Whether ``module`` belongs to a package this adapter speaks for."""
+
+        root = module.split(cls.MODULE_SEPARATOR, 1)[0]
+        return root in cls.DECLARABLE_ROOTS
+
+    @staticmethod
+    def _tool_name(tool: object) -> str:
+        """Read the tool's model-facing name, or ``""`` when unreadable."""
+
+        try:
+            return str(getattr(tool, ThirdPartyToolOrigins.Keys.NAME, "")).strip()
+        except Exception:  # noqa: BLE001 — an unreadable name is an empty name
+            return ""
+
+
 __all__ = (
     "ThirdPartyContextOriginRegistry",
     "ThirdPartyContextOrigins",
     "ThirdPartyPromptConstant",
+    "ThirdPartyToolOrigins",
 )
