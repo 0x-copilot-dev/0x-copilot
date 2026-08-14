@@ -90,18 +90,22 @@ from agent_runtime.observability.context_token_counter import (
 )
 from agent_runtime.persistence.records import RuntimeContextGraphScope
 from agent_runtime.prompts import (
+    FactoryPromptFragmentProvider,
     PromptAssembler,
     PromptAssemblyContext,
+    PromptAssemblyPlan,
     PromptCacheEligibility,
     PromptCacheFallbackContext,
     PromptCacheFallbackHandoff,
     PromptFragment,
     PromptFragmentScope,
     PromptFragmentTier,
+    PromptRuntimeBinding,
     PromptRuntimeObservation,
     PromptRuntimeResult,
     PromptSensitivity,
     PromptTrustLabel,
+    ProviderCacheComposition,
     ProviderCacheRejectionAdapterRegistry,
 )
 from runtime_api.schemas.context_occupancy import ContextOccupancySnapshotPayload
@@ -449,16 +453,50 @@ class OccupancyMiddlewareMixin:
         handler: Any = None,
         middleware: ModelInvocationMiddleware | None = None,
         handoff: PromptCacheFallbackHandoff | None = None,
+        prompt_binding: PromptRuntimeBinding | None = None,
     ) -> ModelResponse[Any]:
         token = RunControlContext.bind_for_run(self.control())
         try:
             RunControlContext.install_model_invocation_runtime(binding)
+            if prompt_binding is not None:
+                RunControlContext.install_prompt_runtime(prompt_binding)
             with PromptCacheFallbackContext.bind(handoff):
                 return await (middleware or self.middleware()).awrap_model_call(
                     request, handler or self.handler
                 )
         finally:
             RunControlContext.unbind(token)
+
+    def build_time_binding(self) -> tuple[PromptRuntimeBinding, str]:
+        """The binding the factory installs on a default (F2 ``OFF``) build.
+
+        This is the shipped posture: ``PromptRuntimeBinding.prepare`` publishes
+        no per-call plan when the mode is ``OFF``, so nothing reaches the
+        capture seam through the handoff. The typed decomposition of the system
+        block still exists — the factory assembled it to produce the graph's
+        ``system_prompt`` — and it is reachable only through the binding's own
+        fragment provider. Building the binding exactly as ``factory`` does is
+        what makes the assertion about the product rather than about a fixture.
+        """
+
+        plan = self.assembly_plan()
+        composition = ProviderCacheComposition.from_signed_mode(FeatureMode.OFF)
+        return (
+            PromptRuntimeBinding(
+                mode=FeatureMode.OFF,
+                provider="openai",
+                model_family="gpt-5",
+                harness_revision="harness-v1",
+                fragment_provider=FactoryPromptFragmentProvider(
+                    legacy_plan=plan,
+                    run_scope_fingerprint=_SHA,
+                ),
+                cache_registry=composition.cache_registry,
+                cache_owner=composition.cache_owner,
+                framework_cache_installed=composition.framework_prompt_cache_enabled,
+            ),
+            plan.rendered_prompt,
+        )
 
     def plan_handoff(self) -> tuple[PromptCacheFallbackHandoff, str]:
         """An F2 handoff carrying a real assembly plan, plus its rendered text.
@@ -468,7 +506,40 @@ class OccupancyMiddlewareMixin:
         outer middleware bound for it, and attributes the system block from it.
         """
 
-        plan = PromptAssembler(
+        plan = self.assembly_plan()
+        result = PromptRuntimeResult(
+            system_message=SystemMessage(content=plan.rendered_prompt),
+            tools=(),
+            plan=plan,
+            decoration=None,
+            observation=PromptRuntimeObservation(
+                mode=FeatureMode.ENFORCE,
+                provider="openai",
+                model_family="gpt-5",
+                execution_scope="supervisor",
+                harness_revision="harness-v1",
+                tool_schema_revision="a" * 64,
+                cache_reason_code="test",
+                sent_assembled_prompt=True,
+            ),
+        )
+        return (
+            PromptCacheFallbackHandoff(
+                result=result,
+                rejection_adapters=ProviderCacheRejectionAdapterRegistry(()),
+            ),
+            plan.rendered_prompt,
+        )
+
+    def assembly_plan(self) -> PromptAssemblyPlan:
+        """One real assembled plan, shared by both plan-delivery postures.
+
+        Shared so a test that asserts the build-time fallback and a test that
+        asserts the per-call handoff differ in *how the plan is delivered* and
+        in nothing else — which is the only difference either test is about.
+        """
+
+        return PromptAssembler(
             context=PromptAssemblyContext(
                 provider="openai",
                 model_family="gpt-5",
@@ -493,29 +564,6 @@ class OccupancyMiddlewareMixin:
                     cache_eligibility=PromptCacheEligibility.STABLE_PREFIX,
                 ),
             )
-        )
-        result = PromptRuntimeResult(
-            system_message=SystemMessage(content=plan.rendered_prompt),
-            tools=(),
-            plan=plan,
-            decoration=None,
-            observation=PromptRuntimeObservation(
-                mode=FeatureMode.ENFORCE,
-                provider="openai",
-                model_family="gpt-5",
-                execution_scope="supervisor",
-                harness_revision="harness-v1",
-                tool_schema_revision="a" * 64,
-                cache_reason_code="test",
-                sent_assembled_prompt=True,
-            ),
-        )
-        return (
-            PromptCacheFallbackHandoff(
-                result=result,
-                rejection_adapters=ProviderCacheRejectionAdapterRegistry(()),
-            ),
-            plan.rendered_prompt,
         )
 
 
@@ -615,6 +663,72 @@ class TestOccupancyCapture(OccupancyMiddlewareMixin):
             binding=self.binding(journal=journal, authority=authority, sink=sink),
             request=self.request(system_text=rendered),
             handoff=handoff,
+        )
+
+        labels = {segment["label"] for segment in sink.records[0].segments}
+        assert "agent_runtime.prompts:00_base_runtime" in labels
+
+    async def test_the_build_time_plan_attributes_the_system_block_when_f2_is_off(
+        self,
+    ) -> None:
+        # The shipped posture. F2 ``OFF`` publishes no per-call plan, so before
+        # the binding was readable here the whole system block measured as one
+        # anonymous ``UNDECLARED`` span — 4,853 tokens on a real run, 58% of its
+        # measured input. No handoff is bound: the plan can only arrive through
+        # ``RunControlContext.prompt_runtime()``.
+        journal, authority, sink = Journal(), AuthorityAdapter(), OccupancySink()
+        prompt_binding, rendered = self.build_time_binding()
+
+        await self.invoke(
+            binding=self.binding(journal=journal, authority=authority, sink=sink),
+            request=self.request(system_text=rendered),
+            prompt_binding=prompt_binding,
+        )
+
+        row = sink.records[0]
+        labels = {segment["label"] for segment in row.segments}
+        assert "agent_runtime.prompts:00_base_runtime" in labels
+        assert UNDECLARED_CONTEXT_LABEL not in labels
+        assert row.undeclared_tokens == 0
+
+    async def test_a_plan_that_does_not_describe_the_prompt_attributes_nothing(
+        self,
+    ) -> None:
+        # The failure mode of a stale build-time plan must be "no better than
+        # before", never "confidently wrong": the attributor verifies every
+        # located fragment by ``content_digest``, so a system block the plan
+        # does not describe stays exactly as unexplained as it was.
+        journal, authority, sink = Journal(), AuthorityAdapter(), OccupancySink()
+        prompt_binding, _rendered = self.build_time_binding()
+
+        await self.invoke(
+            binding=self.binding(journal=journal, authority=authority, sink=sink),
+            request=self.request(system_text="a system prompt from another graph"),
+            prompt_binding=prompt_binding,
+        )
+
+        row = sink.records[0]
+        system_labels = {
+            segment["label"]
+            for segment in row.segments
+            if segment["segment_class"] == ContextSegmentClass.SYSTEM.value
+        }
+        assert system_labels == {UNDECLARED_CONTEXT_LABEL}
+        assert row.undeclared_tokens > 0
+
+    async def test_the_per_call_plan_wins_over_the_build_time_plan(self) -> None:
+        # Under ``ENFORCE`` the request carries a re-assembled prompt and the
+        # build-time plan would describe a prefix of it at best, so the handoff
+        # must be preferred whenever it carries one.
+        journal, authority, sink = Journal(), AuthorityAdapter(), OccupancySink()
+        handoff, rendered = self.plan_handoff()
+        prompt_binding, _build_time = self.build_time_binding()
+
+        await self.invoke(
+            binding=self.binding(journal=journal, authority=authority, sink=sink),
+            request=self.request(system_text=rendered),
+            handoff=handoff,
+            prompt_binding=prompt_binding,
         )
 
         labels = {segment["label"] for segment in sink.records[0].segments}
