@@ -150,7 +150,9 @@ class _ErrorRetryability:
     #: Listed for the record: repeating these is guaranteed to fail identically.
     #: PERMISSION_DENIED needs a grant, WORKSPACE_UNAVAILABLE needs a folder,
     #: and TOOL_CANCELLED was the user's own decision — re-running is a new
-    #: instruction, not a retry.
+    #: instruction, not a retry. The two refusal codes are the same story at
+    #: the tool gate: the cap holds for the rest of the run, and a duplicate
+    #: dispatch needs a revised plan rather than another attempt.
     _NOT_RETRYABLE = frozenset(
         {
             "PERMISSION_DENIED",
@@ -158,6 +160,8 @@ class _ErrorRetryability:
             "WORKSPACE_UNAVAILABLE",
             "WORKSPACE_NO_GRANTS",
             "WORKSPACE_PERMISSION_DENIED",
+            "TOOL_BUDGET_EXCEEDED",
+            "TOOL_POLICY_REJECTED",
         }
     )
 

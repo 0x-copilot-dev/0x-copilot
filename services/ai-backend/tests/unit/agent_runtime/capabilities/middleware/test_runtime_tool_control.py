@@ -27,6 +27,7 @@ from agent_runtime.capabilities.tool_budget_middleware import (
     ToolBudgetReject,
 )
 from agent_runtime.execution.tool_errors import ToolBudgetRejected
+from agent_runtime.execution.tool_refusals import ToolRefusals
 from agent_runtime.persistence.records import ToolBudgetEnforcement, ToolBudgetRecord
 from agent_runtime.capabilities.tools.tool_use_enforcement import PolicyBlockedTool
 
@@ -484,8 +485,15 @@ async def test_budget_rejection_short_circuits_framework_tool_safely() -> None:
 
     assert handler_calls == 0
     assert isinstance(result, ToolMessage)
+    # `error` is for the model: the call returned no data, and LangChain has no
+    # third status to say "declined" with. The typed marker is what stops the
+    # stream from repeating that word to the user, for whom a refused call is a
+    # working budget rather than a broken step.
     assert result.status == "error"
     assert "finalize" in str(result.content)
+    refusal = ToolRefusals.read(result)
+    assert refusal is not None
+    assert refusal.code == "tool_budget_exceeded"
     assert guard.started == []
 
 

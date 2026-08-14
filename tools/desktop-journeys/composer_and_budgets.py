@@ -522,7 +522,11 @@ TB_TOOL_CARDS = """(()=>JSON.stringify(
     .map((n)=>({
       testId:n.getAttribute('data-testid'),
       status:n.getAttribute('data-tool-status'),
-      text:(n.innerText||'').slice(0,240),
+      // `textContent`, not `innerText`: a tool card is a collapsed <details>,
+      // and innerText answers for what is RENDERED — it came back empty for
+      // every card on the run that first caught this, which silently zeroed
+      // the web_search tally below as well.
+      text:(n.textContent||'').slice(0,240),
     }))
 ))()"""
 
@@ -597,11 +601,9 @@ def tb_run_prompt_and_check(s: DriverSession, limit: int) -> None:
     time.sleep(3)
     cards = json.loads(s.evaluate(TB_TOOL_CARDS) or "[]")
     searches = [c for c in cards if "web_search" in c["text"]]
-    errored = [c for c in cards if c["status"] == "error"]
     s.shot("tool-budget-setting")
 
     log(f"      web_search cards rendered: {len(searches)}")
-    assert not errored, f"errored tool cards: {errored!r}"
 
     # A card is rendered for every *attempted* call, refused ones included, so
     # the card count cannot tell enforcement from execution. The runtime log is
@@ -611,8 +613,11 @@ def tb_run_prompt_and_check(s: DriverSession, limit: int) -> None:
     log_text = (s._user_data_dir / "logs" / "ai-backend.log").read_text(
         encoding="utf-8", errors="replace"
     )
-    refusals = log_text.count("tool_budget_rejected")
+    # `tool_budget_rejected` is a prefix of `tool_budget_rejected_fatal`, so the
+    # raw count includes escalations; subtract them to get the refusals that
+    # were surfaced to the model as tool results.
     fatal = log_text.count("tool_budget_rejected_fatal")
+    refusals = log_text.count("tool_budget_rejected") - fatal
     load_failures = log_text.count("workspace_tool_call_cap_load_failed")
 
     log(f"      budget refusals: {refusals}, fatal escalations: {fatal}")
@@ -623,7 +628,36 @@ def tb_run_prompt_and_check(s: DriverSession, limit: int) -> None:
         "did not reach the runtime"
     )
     assert fatal == 0, "a refusal escalated to a run-fatal error"
-    log(f"PASS  run finalized and the configured limit of {limit} was enforced")
+
+    # What the refusals must LOOK like. The budget did its job, so a card that
+    # says "Failed" is the product lying about a working control — it teaches
+    # users that an enforced limit is a broken run, and it puts a policy
+    # decision into the failure taxonomy that `unavailable` exists to keep it
+    # out of (the same distinction CB-5 pins for a declined capability).
+    #
+    # This is the assertion that first caught the defect. It read `not errored`
+    # then, which is the absence of the very signal this phase produces: the
+    # refusals WERE the errored cards. It now names the state they should be in.
+    declined = [c for c in cards if c["status"] == "unavailable"]
+    errored = [c for c in cards if c["status"] == "error"]
+    assert not errored, (
+        f"a tool call refused by the budget was rendered as a failed step: {errored!r}"
+    )
+    # `>=`, not `==`: the task policy can decline a duplicate dispatch too, and
+    # that refusal is correctly `unavailable` without a budget log line.
+    assert len(declined) >= refusals, (
+        f"the runtime refused {refusals} call(s) but only {len(declined)} card(s) "
+        f"rendered as declined; cards={cards!r}"
+    )
+    # A card with no words is no better than a wrong one — the refusal sentence
+    # is what tells the user the limit held and nothing broke.
+    silent = [c for c in declined if not c["text"].strip()]
+    assert not silent, f"declined cards carried no explanation: {silent!r}"
+
+    log(
+        f"PASS  run finalized, the configured limit of {limit} was enforced, "
+        f"and {len(declined)} refusal(s) rendered as declined rather than failed"
+    )
 
 
 # ── setup ────────────────────────────────────────────────────────────────────
@@ -874,6 +908,10 @@ def cb7_settings_tool_limit_governs_the_runtime(s: DriverSession) -> None:
     and require the run to finalize AND to have executed no more than the cap.
     A limit the UI stores but the runtime ignores passes the first two steps and
     is still broken.
+
+    A limit the runtime enforces and the UI reports as a fault is broken too,
+    which is the second thing this pins: the refusals must render as declined,
+    not failed. See `tb_run_prompt_and_check`.
     """
 
     assert s.wait_for(SETTINGS_BUTTON, 60), "app rail never mounted"
