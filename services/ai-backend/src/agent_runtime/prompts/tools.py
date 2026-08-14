@@ -20,10 +20,13 @@ from typing import Final
 #: formatted per tool rather than stated once in ``/tools/TOOLS.md`` because the
 #: pointer has to be in front of the model at the moment it is choosing THIS
 #: tool; an index it has to already know about is the silent-failure shape.
+#:
+#: It is also the one piece of text that is paid THREE times, once per deferred
+#: tool, so it is written to be short: at 48 estimated tokens the first draft
+#: spent a third of the whole resident budget restating itself.
 _GUIDANCE_POINTER: Final[str] = (
-    '\n\nFull rules: read_file("/tools/{tool}.md"). The argument schema below '
-    "is complete, so a direct call is well-formed — read the file when the call "
-    "is non-obvious or one was refused."
+    '\n\nFull rules: read_file("/tools/{tool}.md"). The schema below is '
+    "complete — a direct call is valid; read the file if one is refused."
 )
 
 
