@@ -151,6 +151,10 @@ from agent_runtime.hooks import (
     RunLifecycleInput,
     RuntimeHookContext,
 )
+from agent_runtime.hooks.builtin import (
+    ToolCallObservationContext,
+    install_builtin_hooks,
+)
 from agent_runtime.persistence import with_optimistic_retry
 from agent_runtime.persistence.records import BudgetReservationRecord, ToolBudgetRecord
 from agent_runtime.observability.attribution import Purpose
@@ -419,6 +423,14 @@ class RuntimeRunHandler:
                 persistence=self.persistence,
             )
         )
+        # The runtime's own hook registrations. Installed from the handler
+        # rather than from an entrypoint because this constructor is the single
+        # object every run-executing path builds — the worker process, the API's
+        # in-process worker, and any harness that drives a run — so one call
+        # here replaces three that would each have to be remembered. Idempotent
+        # and process-level: the registration table is read once per run by
+        # ``RuntimeHookContext.bind_for_run`` below.
+        install_builtin_hooks()
 
     async def handle(self, command: RuntimeRunCommand) -> None:
         """Run the agent and persist lifecycle events."""
@@ -654,6 +666,12 @@ class RuntimeRunHandler:
             phase=HookPhase.RUN_START,
         )
         hook_token = RuntimeHookContext.bind_for_run()
+        # The tally the builtin tool observer writes into. Bound beside the hook
+        # session and for the same lifetime: registration alone records nothing,
+        # so this binding is what turns the seam's tool phases into a fact about
+        # THIS run. Bound BEFORE graph construction for the same reason the hook
+        # session is — a tool call can be dispatched the moment the graph runs.
+        tool_observation_token = ToolCallObservationContext.bind_for_run()
         hook_run_status = AgentRunStatus.COMPLETED.value
         HookDispatch.observe(HookPhase.RUN_START, hook_lifecycle)
         try:
@@ -1054,6 +1072,8 @@ class RuntimeRunHandler:
                 ),
             )
             self._emit_hook_ledger_summary(run)
+            self._emit_tool_observation_summary(run)
+            ToolCallObservationContext.unbind(tool_observation_token)
             RuntimeHookContext.unbind(hook_token)
             if run_control_token is not None:
                 RunControlContext.unbind(run_control_token)  # type: ignore[arg-type]
@@ -1151,6 +1171,36 @@ class RuntimeRunHandler:
         logging.getLogger(__name__).log(
             logging.WARNING if summary.failed else logging.INFO,
             "runtime_hooks.run_summary run_id=%s %s",
+            run.run_id,
+            summary.as_log_fields(),
+        )
+
+    @staticmethod
+    def _emit_tool_observation_summary(run: RunRecord) -> None:
+        """Publish this run's per-tool wall time and result footprint.
+
+        The consumer half of the builtin registered in ``__init__``: without a
+        reader the two handlers would be writing into a structure nothing looks
+        at, which is the exact defect the hook seam was accused of.
+
+        Emitted at WARNING when a call failed or never settled — a tool that
+        raised through the seam is the case an operator wants surfaced — and
+        skipped entirely when the run called no tool, so a direct-answer turn
+        logs nothing new. Tool NAMES and counts only; no arguments, no result
+        text, nothing a tool authored.
+        """
+
+        ledger = ToolCallObservationContext.current()
+        if ledger is None:
+            return
+        summary = ledger.summary()
+        if summary is None:
+            return
+        logging.getLogger(__name__).log(
+            logging.WARNING
+            if (summary.failures or summary.unsettled)
+            else logging.INFO,
+            "runtime_hooks.tool_summary run_id=%s %s",
             run.run_id,
             summary.as_log_fields(),
         )
