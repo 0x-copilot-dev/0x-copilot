@@ -13,8 +13,11 @@ is byte-identical to today:
   stores are the desktop file object store.
 * **Batched tool programs** (``run_tool_program``) — a *factory*, not a built
   tool, because the surface it may schedule is the run's own model-visible
-  toolset and that is composed later, by ``execution.factory``. Bounded by the
-  ``tool_program`` hyperparameter section; no document, no capability.
+  toolset and that is composed later, by ``execution.factory``. Gated and
+  bounded by the ``tool_program`` hyperparameter section; no document, no
+  capability, and **off by default** (``tool_program.enabled``) because its
+  schema is 600 measured tokens resident on every model call and nothing has
+  ever called it.
 * **Remote sandbox execute** (``run_in_sandbox``) — gated by an injected,
   file-first worker bundle plus ``single_user_desktop``. The handler supplies
   that bundle only when C1 retained snapshots, A2 artifacts, D3 file records,
@@ -247,20 +250,33 @@ class CapabilityToolWiring:
     # -- Batched tool programs ---------------------------------------------
 
     def tool_program_factory(self) -> object | None:
-        """Return the ``run_tool_program`` factory, or ``None`` when unbounded.
+        """Return the ``run_tool_program`` factory, or ``None`` when withheld.
 
         Unlike the two tools above this returns a *factory*: a program's
         authorized surface is the run's own model-visible toolset, which does
         not exist until ``execution.factory`` has composed it, so the tool is
         built at that handshake instead of here. What is resolved here is the
-        one thing the graph factory has no business owning — the bounds, taken
-        from the run's already-loaded, operator-overridable hyperparameter
-        document.
+        one thing the graph factory has no business owning — the gate and the
+        bounds, taken from the run's already-loaded, operator-overridable
+        hyperparameter document.
 
-        ``None`` when no document was supplied. A program without an enforced
-        step, concurrency, wall-clock and payload ceiling is exactly the
-        unbounded fan-out this capability exists to bound, so it fails closed to
-        no capability rather than open to a default.
+        Two ``None`` paths, and they are different facts:
+
+        * **No document** — a program without an enforced step, concurrency,
+          wall-clock and payload ceiling is exactly the unbounded fan-out this
+          capability exists to bound, so it fails closed to no capability rather
+          than open to a default.
+        * **``tool_program.enabled`` is false** (the shipped default) — the
+          capability is bounded and working, and deliberately not offered. This
+          is the *only* place that decision can be taken cheaply: the cost of
+          the tool is its 600-token schema resident on every model call, which
+          is paid at registration, so a tool registered here and refusing later
+          would save nothing. Returning ``None`` means ``execution.factory``
+          never builds it and never appends its schema.
+
+        Both return the same thing for the same reason — the run composes no
+        program tool — and both are byte-identical to a run that never had the
+        capability.
         """
 
         from agent_runtime.capabilities.tool_program import (  # noqa: PLC0415
@@ -271,6 +287,9 @@ class CapabilityToolWiring:
         section = getattr(self._hyperparameters, "tool_program", None)
         if section is None:
             logger.debug("tool_program.hyperparameters_absent")
+            return None
+        if not section.enabled:
+            logger.debug("tool_program.disabled")
             return None
         return ToolProgramToolFactory(
             limits=ToolProgramLimits(

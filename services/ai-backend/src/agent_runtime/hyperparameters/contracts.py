@@ -596,7 +596,7 @@ class CitationHyperparameters(HyperparameterSection):
 
 
 class ToolProgramHyperparameters(HyperparameterSection):
-    """Hard bounds on one ``run_tool_program`` plan.
+    """Whether ``run_tool_program`` is offered at all, and the bounds if it is.
 
     The model authors the plan; it authors none of these. Every one is a
     *ceiling* the executor enforces itself rather than a number the plan may
@@ -609,6 +609,29 @@ class ToolProgramHyperparameters(HyperparameterSection):
     escaping it.
     """
 
+    #: Whether the model is offered ``run_tool_program`` at all.
+    #:
+    #: **Default OFF, and measured rather than cautious.** Scored from
+    #: ``context_occupancy.jsonl`` on the packaged app against a real model
+    #: (``tools/harness-bench/FINDINGS.md`` §3), this tool's schema is **600 of
+    #: the 9,759 tokens of tool block** carried on every model call of every
+    #: run, and across the measured set nothing ever called it. The same
+    #: measurement says 97% of a warm run's input is a cache read while a cold
+    #: start pays list price — and cold starts were 71% of total measured cost —
+    #: so a resident schema nobody invokes is a cold-start tax and nothing else.
+    #:
+    #: Registering the tool and having it *refuse* would save nothing: what is
+    #: billed is the schema, not the invocation. So this gate is read **before
+    #: the tool is constructed**, by
+    #: :meth:`runtime_worker.capability_tool_wiring.CapabilityToolWiring.tool_program_factory`,
+    #: which returns no factory at all — and ``execution.factory`` therefore
+    #: composes no program tool and appends no schema.
+    #:
+    #: Off is not a verdict on the capability, which is fully implemented and
+    #: tested underneath. Flip this to ``true`` here, or set
+    #: ``COPILOT_HP__TOOL_PROGRAM__ENABLED=true``, and the executor, its bounds
+    #: and its step policy are exactly what they were.
+    enabled: bool = False
     max_steps: int = Field(
         default=16, ge=1, le=HyperparameterBounds.TOOL_PROGRAM_STEPS_MAX
     )

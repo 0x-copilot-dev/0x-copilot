@@ -1231,6 +1231,13 @@ def _model_visible_tools(
     # it, and that is precisely the set a program may schedule. Moving this call
     # earlier would silently narrow what a batch can reach; there is no ordering
     # at which it could widen it, because the mapping is built from this list.
+    #
+    # On a default deployment ``tool_program_factory`` arrives ``None`` and no
+    # schema is appended: ``tool_program.enabled`` is false in
+    # ``hyperparameters.json``, so ``CapabilityToolWiring.tool_program_factory``
+    # withholds the factory rather than letting a 600-token schema nobody calls
+    # become resident on every model call. The gate is deliberately *there* and
+    # not here — refusing at call time would already have paid the schema.
     program_tool = _tool_program_tool(
         tool_program_factory,
         model_tools=model_tools,
