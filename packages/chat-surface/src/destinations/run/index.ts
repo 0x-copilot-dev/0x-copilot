@@ -107,6 +107,15 @@ export {
 // === WC-P6a — citation projection (in-chat chip resolution, AD-11) ===
 export { projectCitations, type CitationProjection } from "./projectCitations";
 
+// === Context-compaction dividers (`compression_note`) ===
+// The pure selector only. The DIVIDER itself is `TcCompactionDivider` in
+// `thread-canvas/`, mounted through `TcChat`'s `compactionNotices` prop — the
+// same shape every other transcript family takes.
+export {
+  projectCompactionNotices,
+  type CompactionNoticeEntry,
+} from "./compactionProjection";
+
 // === Phase 3 (PR-3.11) run empty state ===
 // `RunMultiSelect` used to ship alongside this: the multi-run selector rail.
 // It was removed outright (not just unmounted) — the cockpit binds one run.

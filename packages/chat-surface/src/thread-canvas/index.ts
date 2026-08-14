@@ -263,6 +263,15 @@ export { TcSurfaceFrame, type TcSurfaceFrameProps } from "./TcSurfaceFrame";
 export { TcStatusStrip, type TcStatusStripProps } from "./TcStatusStrip";
 // === end PRD-B2 ===
 
+// === Context-compaction divider (`compression_note`) ===
+// A rule with a sentence in it, not a card — see the file header for why the
+// distinction is the design. Mounted by `TcChat` through `compactionNotices`.
+export {
+  TcCompactionDivider,
+  type TcCompactionDividerProps,
+} from "./TcCompactionDivider";
+// === end context-compaction divider ===
+
 // === Phase 2-C swimlanes ===
 export {
   TcSwimlanes,

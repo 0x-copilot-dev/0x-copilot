@@ -1662,6 +1662,25 @@ export {
 export { projectCitations, type CitationProjection } from "./destinations/run";
 // === end WC-P6a ===
 
+// === Context-compaction divider (`compression_note`) ===
+// The runtime has bounded oversized tool results out of model context for a long
+// time; the transcript never said so, and the user could only observe the
+// consequence — the agent not knowing something it had "already read".
+// `projectCompactionNotices` is a PURE selector over the same `session.events`
+// every other cockpit family reads (FR-3.3), and `TcCompactionDivider` draws the
+// boundary as a quiet rule rather than a card: there is nothing on it to decide,
+// expand or open. `RunDestination` performs the wiring (memo → `TcChat`'s
+// `compactionNotices` prop); both are exported for standalone hosts + tests.
+export {
+  projectCompactionNotices,
+  type CompactionNoticeEntry,
+} from "./destinations/run";
+export {
+  TcCompactionDivider,
+  type TcCompactionDividerProps,
+} from "./thread-canvas";
+// === end context-compaction divider ===
+
 // === Phase 3 (PR-3.11) run empty state ===
 // The empty/idle goal composer `RunDestination` mounts internally
 // (`RunEmptyState`, FR-3.25 — shown when the conversation has no active run;

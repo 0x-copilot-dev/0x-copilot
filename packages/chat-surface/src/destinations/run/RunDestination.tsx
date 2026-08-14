@@ -98,6 +98,15 @@ import {
 import { CitationsProvider } from "../../citations/CitationsContext";
 import type { MarkdownTextProps } from "../../messages/MarkdownText";
 import { projectCitations } from "./projectCitations";
+// The context-compaction boundary. Another pure selector over the SAME
+// `session.events` (FR-3.3) — the runtime emits `compression_note` beside the
+// `tool_result` it bounded out of model context, and until now nothing drew it,
+// so "the agent forgot something it had already read" was observable only as a
+// consequence.
+import {
+  projectCompactionNotices,
+  type CompactionNoticeEntry,
+} from "./compactionProjection";
 // PRD-09c: the host-owned edit-on-surface overlay. Mounted OVER the pure adapter
 // via ThreadCanvas.editSlot → TcSurfaceMount; its submit reuses resolveApproval.
 import { EditOverlay } from "../../surfaces/edit/EditOverlay";
@@ -265,6 +274,8 @@ const EMPTY_DECISIONS: ReadonlyMap<string, RunApprovalDecision> = new Map();
 const EMPTY_CLOSED_URIS: ReadonlySet<string> = new Set();
 /** Stable identity so the flag-off / scrubbed path never churns the transcript. */
 const EMPTY_INLINE_ARTIFACTS: readonly InlineArtifactEntry[] = [];
+/** Same reason: the scrubbed path must not churn the transcript. */
+const EMPTY_COMPACTION_NOTICES: readonly CompactionNoticeEntry[] = [];
 const EMPTY_EXPLICIT_ARTIFACT_TABS: readonly ExplicitArtifactTab[] = [];
 // Generative Surfaces v2 mount-pass empties (flag-off = referentially stable so
 // the memos/props never churn when the cockpit is byte-identical to today).
@@ -3943,6 +3954,19 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
     accentByArtifactId,
   ]);
 
+  // The compaction boundaries, on the same rules as the artifacts above: one
+  // pure selector over `session.events`, and empty while scrubbed because a
+  // compaction that happened after the scrub point had not happened yet.
+  //
+  // Deliberately NOT gated on `surfacesV2`. Compaction is ordinary runtime
+  // behaviour that every run is subject to, flag or no flag — gating the only
+  // account of it on a Generative-Surfaces flag would leave the majority of runs
+  // silently forgetting things, which is the exact defect this renders.
+  const compactionNotices = useMemo(() => {
+    if (isScrubbed) return EMPTY_COMPACTION_NOTICES;
+    return projectCompactionNotices(session.events);
+  }, [isScrubbed, session.events]);
+
   // "Review →" on a parked write. The payload lives on the Studio canvas
   // (`run-v2-gate-region` → `TcWriteGateCard`), which is the only surface
   // holding the real `ledgerId` this decision will be recorded under — so
@@ -4198,6 +4222,10 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
         // `ArtifactSurface` Studio mounts, and "Open in Studio" stays as a
         // choice rather than the only way to look.
         inlineArtifacts={inlineArtifacts}
+        // The compaction boundary, at the seq the runtime bounded a tool result
+        // out of model context. A quiet rule, not a card — the transcript now
+        // says WHY the agent stopped holding something it had already read.
+        compactionNotices={compactionNotices}
         artifactTransport={transport}
         {...(artifactDownloadPort === undefined
           ? {}

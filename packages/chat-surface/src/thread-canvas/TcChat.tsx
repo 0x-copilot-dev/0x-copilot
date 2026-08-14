@@ -81,6 +81,12 @@ import {
 } from "./groupActivity";
 import { InlineToolResultCard } from "./InlineToolResultCard";
 import { useSwimlaneScrub } from "./SwimlaneScrubContext";
+// The context-compaction boundary. Projected upstream off the same
+// `session.events` (`projectCompactionNotices`) and interleaved here by seq like
+// every other family — but drawn as a rule rather than a card, because it is a
+// statement ABOUT the transcript and there is nothing on it to act on.
+import type { CompactionNoticeEntry } from "../destinations/run/compactionProjection";
+import { TcCompactionDivider } from "./TcCompactionDivider";
 import { TcTodoList } from "./TcTodoList";
 import { ToolCallCard } from "./ToolCallCard";
 import { TcWriteGateRow } from "./TcWriteGateRow";
@@ -606,11 +612,20 @@ export interface TcChatProps {
   readonly artifactDownloadPort?: ArtifactDownloadPort;
   /** Hands the reader the full Studio workspace for one artifact. */
   readonly onOpenArtifactInStudio?: (subjectKey: string) => void;
+  /**
+   * Context-compaction boundaries, interleaved at the seq the runtime bounded a
+   * tool result out of model context. Host-owned (the cockpit holds the
+   * projection); omitted ⇒ the transcript is byte-identical to before this
+   * existed, which is what makes the prop safe to land unmounted.
+   */
+  readonly compactionNotices?: readonly CompactionNoticeEntry[];
 }
 
 const EMPTY_FLEETS: readonly FleetProjection[] = [];
 /** Stable identity, so an unwired host never re-runs the merge on every render. */
 const EMPTY_INLINE_ARTIFACTS: readonly InlineArtifactEntry[] = [];
+/** Same reason as the artifact default above. */
+const EMPTY_COMPACTION_NOTICES: readonly CompactionNoticeEntry[] = [];
 const EMPTY_SUBAGENT_ACTIVITIES: ReadonlyMap<
   string,
   readonly SubagentActivityRecord[]
@@ -681,6 +696,7 @@ export function TcChat(props: TcChatProps): ReactElement {
     artifactTransport,
     artifactDownloadPort,
     onOpenArtifactInStudio,
+    compactionNotices,
   } = props;
   const transport = useTransport();
   const scrub = useSwimlaneScrub();
@@ -844,6 +860,7 @@ export function TcChat(props: TcChatProps): ReactElement {
         activeRunId={activeRunId}
         awaitingFirstOutput={awaitingFirstOutput}
         {...(inlineArtifacts === undefined ? {} : { inlineArtifacts })}
+        {...(compactionNotices === undefined ? {} : { compactionNotices })}
         {...(artifactTransport === undefined ? {} : { artifactTransport })}
         {...(artifactDownloadPort === undefined
           ? {}
@@ -1399,6 +1416,8 @@ interface MessageListBodyProps {
   readonly artifactTransport?: Transport;
   readonly artifactDownloadPort?: ArtifactDownloadPort;
   readonly onOpenArtifactInStudio?: (subjectKey: string) => void;
+  /** Compaction boundaries, interleaved on the same seq order as every card. */
+  readonly compactionNotices?: readonly CompactionNoticeEntry[];
 }
 
 function MessageListBody(props: MessageListBodyProps): ReactNode {
@@ -1423,6 +1442,7 @@ function MessageListBody(props: MessageListBodyProps): ReactNode {
     artifactTransport,
     artifactDownloadPort,
     onOpenArtifactInStudio,
+    compactionNotices = EMPTY_COMPACTION_NOTICES,
   } = props;
   // The message-load notice never SUPPRESSES the live cards any more. It used
   // to be an early return, which was harmless while approvals lived in a strip
@@ -1471,6 +1491,7 @@ function MessageListBody(props: MessageListBodyProps): ReactNode {
     approvals,
     activeRunId ?? null,
     inlineArtifacts,
+    compactionNotices,
   );
 
   const renderItem = (item: StreamItem): ReactNode => {
@@ -1529,6 +1550,24 @@ function MessageListBody(props: MessageListBodyProps): ReactNode {
           data-approval-pending={item.approval.resolved ? "false" : "true"}
         >
           {content}
+        </li>
+      );
+    }
+    if (item.kind === "compaction") {
+      // A boundary, so it gets the transcript's row wrapper and nothing else —
+      // no `approvalItemStyle` frame margins, because the divider IS the
+      // separation those margins exist to create.
+      return (
+        <li
+          key={`compaction-item-${item.notice.eventId}`}
+          data-testid={`tc-chat-compaction-item-${item.notice.eventId}`}
+        >
+          <TcCompactionDivider
+            label={item.notice.label}
+            beforeTokens={item.notice.beforeTokens}
+            afterTokens={item.notice.afterTokens}
+            testId={`tc-chat-compaction-${item.notice.eventId}`}
+          />
         </li>
       );
     }
@@ -1831,7 +1870,8 @@ type StreamItem =
     }
   | ActivityItem
   | { readonly kind: "approval"; readonly approval: TcChatApproval }
-  | { readonly kind: "artifact"; readonly artifact: InlineArtifactEntry };
+  | { readonly kind: "artifact"; readonly artifact: InlineArtifactEntry }
+  | { readonly kind: "compaction"; readonly notice: CompactionNoticeEntry };
 
 /** An item anchored to a `sequence_no`, for the interleave pass. */
 interface AnchoredItem {
@@ -1888,6 +1928,7 @@ function mergeStream(
   approvals: readonly TcChatApproval[],
   activeRunId: string | null,
   artifacts: readonly InlineArtifactEntry[] = [],
+  compactions: readonly CompactionNoticeEntry[] = [],
 ): readonly StreamItem[] {
   const runId = activeRunId ?? inferActiveRunId(messages);
   const anchored: AnchoredItem[] = [];
@@ -1991,6 +2032,18 @@ function mergeStream(
       item: { kind: "artifact", artifact },
     });
   }
+  // Compaction dividers last, so a note sharing a seq with the tool result it
+  // describes draws BELOW that card. The order is the sentence: here is what the
+  // tool returned, and here is the line where the model stopped holding all of
+  // it. Reversed, the divider would announce a narrowing of something the reader
+  // has not been shown yet. Same stable-sort convention as the three families
+  // above.
+  for (const notice of compactions) {
+    anchored.push({
+      seq: cardSeq(notice.seq),
+      item: { kind: "compaction", notice },
+    });
+  }
 
   // A settled run with no message in this transcript (a turn still loading, or
   // one whose message failed to fetch) would otherwise have its cards silently
@@ -2021,10 +2074,15 @@ function mergeStream(
  * at the text, and that tool stays a peer, because it happened after the
  * thought ended.
  *
- * Two kinds are deliberately NOT absorbable:
+ * Three kinds are deliberately NOT absorbable:
  * - **approvals**, for the reason the group predicate already documents — an
  *   approval buried inside a collapsed row hides a parked run's only way out;
- * - **artifacts**, which are the run's output, not its working.
+ * - **artifacts**, which are the run's output, not its working;
+ * - **compaction dividers**, which are a statement about the transcript rather
+ *   than work the thought did. One landing mid-thought therefore ENDS the
+ *   absorbed run and the tools after it stay peers. That is the honest reading:
+ *   the model's view narrowed at that line, so what came after is not the same
+ *   stretch of thinking as what came before.
  *
  * Operates on the ACTIVE run's sorted items only. Cards flushed from settled
  * runs are already in `out` by the time this runs, and they must stay peers:
