@@ -89,7 +89,8 @@ jobs:
             tools/test_check_dark_wiring.py \
             tools/test_apply_branch_protection.py \
             tools/test_cli_release.py \
-            tools/test_desktop_journey_ci.py
+            tools/test_desktop_journey_ci.py \
+            tools/test_harness_bench_heavy_tasks.py
 
       - name: Dark capabilities
         run: python tools/check_dark_capabilities.py

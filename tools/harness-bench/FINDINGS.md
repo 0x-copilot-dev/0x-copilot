@@ -130,3 +130,95 @@ Unmeasured and worth measuring next: what fraction of real runs hit a cold cache
 `tool_rounds` still counts COMPLETED tool invocations and is still a lower bound
 on super-step spend. It is retained as a rough cost signal only; the ceiling
 question is now answered by `terminal_code`.
+
+## 5. The four short prompts cannot reach most of the remaining claims
+
+`recursion_ceiling_ab.py`'s tasks peak at **3 completed tool rounds** (4 distinct
+invocations, one of which never ran — see below). That is enough to trip a
+ceiling of 25 and nothing else. Rescoring both arms with the extended scorer says
+how far short they fall:
+
+```
+peak COMPLETED tool rounds in any task: 3      (4 invocations)
+peak ESTIMATED super-steps in any task: 22     (fit: 6 + 4/round, ceiling 25)
+peak tool result entering context:      122 tokens   (the cap is 8,192)
+delegated rounds, in any task:          0
+peak parallel tool calls, in any task:  1
+MCP tool names with an mcp__ prefix:    0
+```
+
+The super-step estimate is the useful one: `t3-todo-driven` sat at **22 of its
+25**, and the next round's four steps would have taken it past — which is what
+the ceiling did. That is a metric agreeing with a known ground truth, not a
+prediction, and it is the reason the fit is worth carrying.
+
+So **delegation, parallel execution, the tool-result cap and MCP namespacing are
+all still unmeasured** — not because they failed, but because nothing in the set
+touches them. `heavy_tasks_ab.py` is the task set built to reach them: seven
+tasks, five of which need no folder grant and no connector, each declaring what
+it needs from the machine, what it plans to spend per tool _name_, and a regex
+its final answer must match. `--plan` prints all of that for free.
+
+Two design constraints came out of reading the runtime rather than guessing:
+
+- `execution.tool_call_budget` is **10 calls of one tool name per run**. A task
+  planning more measures the budget cutting the chain off, which looks identical
+  from outside to a ceiling stop. Every task declares `planned_calls` and a gate
+  test fails on any plan that reaches the budget.
+- A grant-free task must address `/memories/`, not a host-absolute path
+  (refused without a grant), and must never ask for `grep`/`glob` there —
+  `FileMemoryBackend` answers both with an **empty result, not an error**, which
+  is the same green-tick-over-nothing shape as the original `ls ~/Downloads`
+  defect.
+
+### The scorer re-derived finding 2 without being told it
+
+`reconciled_rounds` counts invocations that reached a terminal row carrying an
+**empty `result_summary`** — closed by the blanket handler rather than by
+running. Pointed at the arm-25 store it names `write_todos` in `t3-todo-driven`
+unprompted, which is exactly the mis-stamped innocent of §2. `orphaned_rounds`
+does **not** see that case, and that is worth stating plainly: the reconciler
+leaves no open row behind, so "count the calls that never closed" finds zero.
+Two metrics, two different blind spots, and neither is a substitute for the
+other. Every column in `rescore.py` now carries its blind spot in the header.
+
+### The heavy set has NOT been run yet, and that is a statement about this box
+
+It is structurally validated — `--plan`, 19 offline gate tests, and a mutation
+check confirming each design test fails on the defect it names and only that one
+— but no arm has been driven against a model. The reason is worth recording
+because it will be the next person's reason too:
+
+```
+apps/desktop/resources/runtime/darwin-arm64/services/ai-backend/src   Aug 10 19:50
+newest commit touching services/ai-backend/src                       Aug 14 13:17
+```
+
+**The only staged runtime on this machine is four days behind the tree.** Per
+[the journeys README §1b](../desktop-journeys/README.md) it would run old backend
+code and report its verdict with total confidence — and specifically it predates
+the `TOOL_RUN_FAILED` fix that finding 2 above produced, so it would measure the
+error taxonomy this file has already corrected.
+
+Re-stage first, then validate for the price of one task, then pay for the arms:
+
+```bash
+node tools/desktop-runtime/stage.mjs --platform darwin --arch arm64
+npm run build --workspace @0x-copilot/desktop
+
+BENCH_ARM=500 HEAVY_TASKS=h1-corpus python tools/harness-bench/heavy_tasks_ab.py
+BENCH_ARM=25  python tools/harness-bench/heavy_tasks_ab.py     # own process
+BENCH_ARM=500 python tools/harness-bench/heavy_tasks_ab.py     # own process
+python tools/harness-bench/rescore.py heavy-arm-25 heavy-arm-500
+```
+
+Each arm runs in its OWN process: the arms share nothing, and the ceiling is read
+once per service start.
+
+What the heavy tasks should be expected to cost, so a surprise is legible: about
+**45-60 model calls per arm**, ~1.2M listed input tokens, ~10k output, ~150k
+full-price-equivalent, 5-8 minutes — a bit under $1 an arm at Sonnet-class list
+prices, and about 15x the recursion set. A number far from that is itself the
+finding: far below means the model batched work the prompts asked it to serialise
+(read `peak_parallel`), far above means something is looping (read `budget_notes`
+and `terminal_code` before concluding anything about the ceiling).

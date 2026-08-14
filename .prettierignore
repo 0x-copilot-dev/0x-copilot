@@ -13,3 +13,10 @@ tools/design-parity/surfaces/generative-surfaces-v3/design/copilot.css
 # their emission under runner control avoids a second Markdown writer.
 tools/design-parity/surfaces/chat-tool-call-shell/out/*.md
 tools/design-parity/surfaces/generative-surfaces-v3/out/*.md
+
+# Benchmark arm reports are machine-written by tools/harness-bench/rescore.py
+# with `json.dumps(indent=2)`, which always expands arrays. Prettier collapses
+# short ones, so every rescore would otherwise land a whitespace-only diff over
+# real measurements — and re-formatting evidence is how evidence stops being
+# byte-comparable across arms.
+tools/harness-bench/runs/*.json
