@@ -562,8 +562,8 @@ class Arm:
         )
         return row
 
-    def collect(self) -> None:
-        for task in selected_tasks():
+    def collect(self, tasks: tuple[HeavyTask, ...] = TASKS) -> None:
+        for task in tasks:
             self.results.append(self.run_task(task))
             # Written after EVERY task, not once at the end. An arm is minutes
             # of paid model time; a crash in task six must not throw away the
@@ -664,6 +664,12 @@ def run_arm(limit: str) -> int:
     # ABSENT stage would report a defect. A missing local prerequisite is exit
     # 3, and that distinction is the whole contract of `PhaseSkipped`.
     preflight_staged_runtime()
+    # Resolve the pin BEFORE the boot, for the same reason `JourneyPlan` pins
+    # phases before its factory: a mistyped id must not cost initdb, migrations
+    # and three uvicorns — ~110s of boot — to then raise inside the phase.
+    pinned = selected_tasks()
+    if pinned is not TASKS:
+        log(f"pinned to {len(pinned)} task(s): {', '.join(t.task_id for t in pinned)}")
     plan = JourneyPlan(f"bench-heavy-{limit}")
     holder: dict[str, Arm] = {}
 
@@ -699,7 +705,7 @@ def run_arm(limit: str) -> int:
             (
                 f"HEAVY-{limit}",
                 f"every heavy task at recursion_limit={limit}",
-                lambda _: holder["arm"].collect(),
+                lambda _: holder["arm"].collect(pinned),
             )
         ],
     )
