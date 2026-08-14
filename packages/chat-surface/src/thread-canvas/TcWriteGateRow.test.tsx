@@ -1209,11 +1209,15 @@ describe("TcWriteGateRow — the durable grant arm", () => {
   });
 
   it("hands the host the SCOPE, and only on a real press", () => {
-    const props = row({ grantAlways: grantArm() });
+    // Held locally rather than read back off the returned props: `row` merges
+    // through `Partial<TcWriteGateRowProps>`, so `grantAlways` is optional
+    // there and a `!` would be asserting away the very thing under test.
+    const arm = grantArm();
+    const props = row({ grantAlways: arm });
     fireEvent.click(screen.getByTestId("tc-write-gate-review"));
-    expect(props.grantAlways.onGrant).not.toHaveBeenCalled();
+    expect(arm.onGrant).not.toHaveBeenCalled();
     screen.getByTestId("tc-write-gate-grant-always").click();
-    expect(props.grantAlways.onGrant).toHaveBeenCalledTimes(1);
+    expect(arm.onGrant).toHaveBeenCalledTimes(1);
     // The durable arm never resolves through the once POST — that would resume
     // the run without a grant, which is the defect the whole path exists to
     // prevent (an ungranted read answered with an empty listing and a tick).
@@ -1241,11 +1245,12 @@ describe("TcWriteGateRow — the durable grant arm", () => {
   });
 
   it("shows a dialog in flight as cancellable, not as a dead button", () => {
-    const props = row({ grantAlways: grantArm({ state: "granting" }) });
+    const arm = grantArm({ state: "granting" });
+    row({ grantAlways: arm });
     fireEvent.click(screen.getByTestId("tc-write-gate-review"));
     expect(screen.queryByTestId("tc-write-gate-grant-always")).toBeNull();
     screen.getByTestId("tc-write-gate-grant-cancel").click();
-    expect(props.grantAlways.onCancel).toHaveBeenCalledTimes(1);
+    expect(arm.onCancel).toHaveBeenCalledTimes(1);
   });
 
   it("shows the host's failure verbatim and leaves the ask answerable", () => {
