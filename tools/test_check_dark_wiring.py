@@ -70,11 +70,11 @@ AUDITED_DARK = (
         "test-only",
         id="approvals-expires-at",
     ),
-    pytest.param(
-        "agent_runtime.capabilities.skills:SkillManifest.allowed_tools",
-        "prompt-only",
-        id="skills-allowed-tools",
-    ),
+    # `SkillManifest.allowed_tools` was here, and is deliberately gone: it was
+    # confirmed prompt-only by the nine-dimension audit and has since been
+    # enforced at the tool surface, so the gate correctly stops reporting it.
+    # A case asserting a symbol is STILL dark has to be retired the moment the
+    # symbol is wired — leaving it would fail the build for the fix landing.
 )
 
 

@@ -255,17 +255,25 @@ class TestCaptureAndRevert(JournalStackMixin):
 
         assert target.read_text() == "please come back\n"
 
-    def test_the_model_delete_tool_is_denied_by_the_rule_set(self, tmp_path):
-        """Pins the claim the test above depends on, so it cannot rot.
+    def test_a_model_driven_delete_is_never_silently_unrecoverable(self, tmp_path):
+        """Either the rule set refuses it, or the floor captured it. Never neither.
 
-        The WIP this branch finishes asserted that ``delete`` reached the real
-        filesystem ungoverned because deepagents classifies it as the ``write``
-        op and the matcher is blind to dotted segments. That is only half true:
-        the ALLOW rule for a granted root indeed fails to match a hidden
-        segment, but the catch-all DENY ``/**`` matches it, so the tool is
-        refused before any backend sees it — for an ordinary path and a dotted
-        one alike. If a future deepagents drops that catch-all, this test
-        flips and the floor's own delete guard becomes load-bearing.
+        This asserted a MECHANISM — that deepagents' catch-all DENY ``/**``
+        refuses the model's ``delete`` tool — and the mechanism is version
+        dependent. It holds on deepagents 0.7.1 and NOT on the 0.7.4 the service
+        pins: there the tool runs and the file goes. The test passed on a
+        developer venv and failed in CI, which is the version skew doing its job.
+
+        So it now pins the property the feature exists for instead, which is
+        true on both: a delete the model asked for is either refused before any
+        backend sees it, or captured by ``HostFilesystemFloor`` into the journal
+        so ``HostWriteReverter`` can put it back. A delete that happens with no
+        record is the one outcome nothing can undo, and it is the only outcome
+        this test rejects.
+
+        Both a plain path and a dotted one, because the glob matcher is blind to
+        hidden segments (``$COPILOT_HOME`` reproduces the same blind spot) and
+        the two therefore travel different rule paths.
         """
 
         root = tmp_path / "Projects"
@@ -276,10 +284,24 @@ class TestCaptureAndRevert(JournalStackMixin):
             middleware = self.middleware(root, self.journal(store))
 
             message = self.call(middleware, "delete", file_path=str(target))
+            records = self.records(store)
 
-            assert "permission denied" in message
+            if "permission denied" in message:
+                # Refused: the file must be untouched and nothing journalled.
+                assert target.read_text() == "still here\n"
+                assert records == ()
+                continue
+
+            # Allowed: it must be revertible, which means captured.
+            assert not target.exists(), (
+                "the delete tool reported success without removing the file"
+            )
+            assert [record.kind for record in records] == [HostWriteKind.DELETED], (
+                "a model-driven delete reached the disk without being captured — "
+                "nothing can revert it"
+            )
+            HostWriteReverter(store).revert(records)
             assert target.read_text() == "still here\n"
-            assert self.records(store) == ()
 
     def test_a_binary_file_round_trips(self, tmp_path):
         """Pre-images are bytes, so no encoding can corrupt them."""

@@ -61,6 +61,7 @@ from _lib import (  # noqa: E402
 def log(line: str) -> None:
     print(f"  {line}", flush=True)
 
+
 OUT_DIR = Path(__file__).resolve().parent / "runs"
 
 #: Ordered by how many tool/model rounds the request should honestly need. The
@@ -226,7 +227,10 @@ def compare() -> int:
         return 2
 
     print(f"\n{'task':<16} " + " ".join(f"{('limit=' + k):<34}" for k in sorted(arms)))
-    print(f"{'':<16} " + " ".join(f"{'status  llm  tool   in/out    s':<34}" for _ in arms))
+    print(
+        f"{'':<16} "
+        + " ".join(f"{'status  llm  tool   in/out    s':<34}" for _ in arms)
+    )
     max_rounds = 0
     completions: dict[str, int] = {k: 0 for k in arms}
     for index, (task_id, _) in enumerate(TASKS):
