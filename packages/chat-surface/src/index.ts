@@ -1690,6 +1690,19 @@ export {
 } from "./thread-canvas";
 // === end context-compaction divider ===
 
+// === Mid-run steer (`POST /v1/agent/runs/{id}/steer` + `run_steered`) ===
+// The composer used to be a dead box while a run was executing: `Composer.send`
+// refused on `running`, so a user who typed a correction and pressed ⏎ got
+// nothing at all. The runtime has accepted a durable, queued steer the whole
+// time. `RunDestination` now routes a submit against a live run to that
+// endpoint through the Transport port, and `projectSteerNotes` +`TcSteerNote`
+// draw the `run_steered` event the coordinator appends, so the transcript shows
+// that the user intervened and when. Both halves are exported for standalone
+// hosts + tests; `RunDestination` performs the wiring.
+export { projectSteerNotes, type SteerNoteEntry } from "./destinations/run";
+export { TcSteerNote, type TcSteerNoteProps } from "./thread-canvas";
+// === end mid-run steer ===
+
 // === Phase 3 (PR-3.11) run empty state ===
 // The empty/idle goal composer `RunDestination` mounts internally
 // (`RunEmptyState`, FR-3.25 — shown when the conversation has no active run;

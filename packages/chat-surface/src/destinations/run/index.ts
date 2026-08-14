@@ -121,6 +121,12 @@ export {
   type CompactionNoticeEntry,
 } from "./compactionProjection";
 
+// === Mid-run steer notes (`run_steered`) ===
+// The pure selector only, on the same arrangement as the compaction sibling
+// above: the ROW itself is `TcSteerNote` in `thread-canvas/`, mounted through
+// `TcChat`'s `steerNotes` prop.
+export { projectSteerNotes, type SteerNoteEntry } from "./steerProjection";
+
 // === Phase 3 (PR-3.11) run empty state ===
 // `RunMultiSelect` used to ship alongside this: the multi-run selector rail.
 // It was removed outright (not just unmounted) — the cockpit binds one run.
