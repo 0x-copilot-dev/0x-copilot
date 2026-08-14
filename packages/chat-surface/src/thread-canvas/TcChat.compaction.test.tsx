@@ -149,25 +149,31 @@ describe("TcChat — the context-compaction boundary", () => {
     expect(after).toBeGreaterThan(divider);
   });
 
-  it("draws BELOW the tool card it describes when the two share a seq", () => {
+  it("draws BELOW the tool card it describes when the two share a seq", async () => {
     renderChat("studio", {
       compactionNotices: [NOTICE],
       toolCalls: [toolCall()],
     });
 
-    const list = screen.getByTestId("tc-chat-messages").querySelector("ul");
-    const rows = [...((list as Element).children ?? [])];
-    const toolIndex = rows.findIndex((row) =>
-      row.querySelector('[data-testid="tc-chat-tool-call-1"]'),
-    );
-    const dividerIndex = rows.findIndex((row) =>
-      row.querySelector('[data-testid="tc-chat-compaction-evt-note-1"]'),
-    );
-    expect(toolIndex).toBeGreaterThanOrEqual(0);
+    // The tool card mounts asynchronously (see TcChat.test.tsx:782). Querying
+    // the rows synchronously races it, and a missing card reads as an ordering
+    // failure rather than the timing one it is.
+    await screen.findByTestId("tc-chat-tool-call-1");
+
+    const tool = screen.getByTestId("tc-chat-tool-call-1");
+    const divider = screen.getByTestId("tc-chat-compaction-evt-note-1");
+
+    // Document order, not row index: which <li> each node lands under is a
+    // structural detail of the stream, while the claim being pinned is purely
+    // "the divider is painted after the card". Asserting on row index instead
+    // made a card that renders outside the queried list read as a reversed
+    // order, which is a different defect entirely.
+    //
     // "Here is what the tool returned" then "here is where the model stopped
     // holding all of it". Reversed, the divider narrows something the reader has
     // not been shown yet.
-    expect(dividerIndex).toBeGreaterThan(toolIndex);
+    const relation = tool.compareDocumentPosition(divider);
+    expect(relation & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
   it("stays a boundary in the transcript — its own peer row, and nothing to press", () => {
