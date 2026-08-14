@@ -834,6 +834,54 @@ def create_app(
             identity=identity,
         )
 
+    # Agent-as-configuration — declare an agent with its own tools, skills and
+    # scopes. Per-route and explicit, like every other entry in this table: the
+    # facade is the only thing an app may call, so a route absent here is a
+    # route the product cannot reach however completely it is implemented
+    # upstream — which is exactly the state ``subagent_defs/*.json`` was in.
+    @app.get("/v1/agent/subagents")
+    async def list_declared_subagents(request: Request) -> dict[str, object]:
+        identity = FacadeAuthenticator.authenticate_request(request)
+        return await forward_json(
+            app,
+            "GET",
+            "/v1/agent/subagents",
+            target="ai_backend",
+            params=identity.scoped_params(),
+            identity=identity,
+        )
+
+    @app.put("/v1/agent/subagents/{name}")
+    async def declare_subagent(
+        request: Request,
+        name: str,
+        payload: dict[str, object],
+    ) -> dict[str, object]:
+        identity = FacadeAuthenticator.authenticate_request(request)
+        return await forward_json(
+            app,
+            "PUT",
+            f"/v1/agent/subagents/{name}",
+            target="ai_backend",
+            params=identity.scoped_params(),
+            json=payload,
+            identity=identity,
+        )
+
+    @app.delete("/v1/agent/subagents/{name}", status_code=status.HTTP_204_NO_CONTENT)
+    async def undeclare_subagent(request: Request, name: str) -> Response:
+        identity = FacadeAuthenticator.authenticate_request(request)
+        await forward_json(
+            app,
+            "DELETE",
+            f"/v1/agent/subagents/{name}",
+            target="ai_backend",
+            params=identity.scoped_params(),
+            expect_json=False,
+            identity=identity,
+        )
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+
     # PR 4.3 — read-only effective retention TTL (Privacy & data panel).
     # Open to any tenant member; the ai-backend route shares the same
     # ``runtime:use`` gate.

@@ -1323,6 +1323,15 @@ class RuntimeApiRouter:
         )
 
         register_workspace_data_routes(router)
+        # Agent-as-configuration — read/declare/undeclare the agents this
+        # installation has configured. The entry point ``subagent_defs/*.json``
+        # never had: the file store could always read AND write one, and
+        # nothing in the product could reach either half.
+        from runtime_api.http.subagent_definition_routes import (
+            register_declared_subagent_routes,
+        )
+
+        register_declared_subagent_routes(router)
         # PR 6.1 — conversation sharing (create / list / update / revoke
         # + recipient view). Mounted before the fork routes below so the
         # ``/v1/agent/shares/{share_token}`` GET registers ahead of the

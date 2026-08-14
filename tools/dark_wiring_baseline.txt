@@ -109,7 +109,6 @@ runtime_adapters.file._audit_manifest:AuditManifestVerifier.verify_rows :: no sr
 runtime_adapters.file.agent_state_store:FileMemoryStore.rebuild_human_views :: no src caller at all; referenced only by 1 test file(s)
 runtime_adapters.file.agent_state_store:FileSkillsStore.write_asset :: no src caller at all; referenced only by 1 test file(s)
 runtime_adapters.file.agent_state_store:FileSkillsStore.write_skill :: no src caller at all; referenced only by 4 test file(s)
-runtime_adapters.file.agent_state_store:FileSubagentDefinitionStore.write_definition :: no src caller at all; referenced only by 1 test file(s)
 runtime_adapters.file.repair:StoreDiagnosis.total_dangling_refs :: no src caller at all; referenced only by 1 test file(s)
 runtime_adapters.file.runtime_api_store:FileRuntimeApiStore.conversation_health :: no src caller at all; referenced only by 1 test file(s)
 runtime_adapters.file.runtime_api_store:FileRuntimeApiStore.verify_audit_log :: no src caller at all; referenced only by 1 test file(s)
@@ -327,7 +326,6 @@ runtime_adapters.file._telemetry:FileStoreTelemetry.store_opened :: capability e
 runtime_adapters.file._telemetry:FileStoreTelemetry.torn_tail_ignored :: capability exists only on the file store backend, on no sibling backend and no Protocol port, and nothing outside runtime_adapters/file/ names it
 runtime_adapters.file.agent_state_store:FileAgentStoreGate.active_layout :: capability exists only on the file store backend, on no sibling backend and no Protocol port, and nothing outside runtime_adapters/file/ names it
 runtime_adapters.file.agent_state_store:FileMemoryStore.list_documents :: capability exists only on the file store backend, on no sibling backend and no Protocol port, and nothing outside runtime_adapters/file/ names it
-runtime_adapters.file.agent_state_store:FileSubagentDefinitionStore.read_raw_definitions :: capability exists only on the file store backend, on no sibling backend and no Protocol port, and nothing outside runtime_adapters/file/ names it
 runtime_adapters.file.artifact_blob_store:FileArtifactBlobStore.integrity_path :: capability exists only on the file store backend, on no sibling backend and no Protocol port, and nothing outside runtime_adapters/file/ names it
 runtime_adapters.file.artifact_publication:FileArtifactPublicationCoordinator.reaping_path :: capability exists only on the file store backend, on no sibling backend and no Protocol port, and nothing outside runtime_adapters/file/ names it
 runtime_adapters.file.export_import:ConversationArchiver.import_ :: capability exists only on the file store backend, on no sibling backend and no Protocol port, and nothing outside runtime_adapters/file/ names it
