@@ -49,6 +49,7 @@ from agent_runtime.observability.context_tool_ledger import ToolSchemaLedger
 from agent_runtime.settings import RuntimeSettings
 from runtime_adapters.in_memory.runtime_api_store import InMemoryRuntimeApiStore
 from runtime_api.schemas import AgentRunStatus, RunRecord, RuntimeRunCommand
+from runtime_worker.handlers.approval import RuntimeApprovalHandler
 from runtime_worker.handlers.run import RuntimeRunHandler
 
 
@@ -182,6 +183,17 @@ class ArtifactSurfaceMixin:
             ),
         )
 
+    def approval_handler(self, settings: RuntimeSettings) -> RuntimeApprovalHandler:
+        """The resume path's handler, built the same way as the run path's."""
+
+        store = InMemoryRuntimeApiStore()
+        return RuntimeApprovalHandler(
+            persistence=store,
+            event_store=store,
+            settings=settings,
+            artifact_service=object(),
+        )
+
     def names(self, composed: Sequence[object]) -> frozenset[str]:
         return frozenset(str(getattr(tool, "name", "")) for tool in composed)
 
@@ -285,3 +297,55 @@ class TestArtifactFamilyFailsTowardIncluding(ArtifactSurfaceMixin):
         )
 
         assert not section.admits_artifact_family(lane_enabled=False)
+
+
+class TestArtifactFamilySurvivesAnApproval(ArtifactSurfaceMixin):
+    """The family may not appear or vanish *mid-task*, which is the real risk.
+
+    A run parks on a write approval and resumes through
+    ``RuntimeApprovalHandler``. If the two handlers read different sources, an
+    approved run could resume without the tool it was mid-way through using —
+    silently omitting it mid-task, which the design forbids — or gain three
+    schemas it did not start with, invalidating the prompt-cache prefix for the
+    whole remainder of the run (97% of input tokens are cache reads).
+
+    ``stage_rowset_write`` is deliberately not asserted here: the resume path
+    has never composed it (``RuntimeApprovalHandler`` builds publish and revise
+    only). That asymmetry predates this knob and is left exactly as it was.
+    """
+
+    RESUMED_FAMILY = frozenset({"publish_artifact", "revise_artifact"})
+
+    def resumed_names(self, exposure: str | None) -> frozenset[str]:
+        settings = self.settings(exposure)
+        handler = self.approval_handler(settings)
+        run = self.run()
+        return self.names(
+            _model_visible_tools(
+                tools=(),
+                mcp_registry=_McpRegistry(),
+                skill_registry=_SkillRegistry(),
+                prior_tool_result_loader=None,
+                mcp_discovery_cache=None,
+                runtime_context=self.runtime_context(),
+                publish_artifact_tool=handler._publish_artifact_tool(run),
+                revise_artifact_tool=handler._revise_artifact_tool(run),
+            )
+        )
+
+    def test_a_run_that_started_with_the_family_resumes_with_it(self) -> None:
+        assert self.RESUMED_FAMILY <= self.resumed_names("always")
+
+    def test_a_run_that_started_without_the_family_does_not_gain_it(self) -> None:
+        assert not (self.RESUMED_FAMILY & self.resumed_names("off"))
+
+    def test_both_handlers_agree_under_every_exposure(self) -> None:
+        """The decision is one frozen document, so it cannot drift by path."""
+
+        for exposure in (None, "always", "off"):
+            started = self.names(self.compose(exposure)) & self.RESUMED_FAMILY
+            resumed = self.resumed_names(exposure) & self.RESUMED_FAMILY
+            assert started == resumed, (
+                f"exposure={exposure!r} composed {sorted(started)} on the run "
+                f"path but {sorted(resumed)} on the approval-resume path"
+            )
