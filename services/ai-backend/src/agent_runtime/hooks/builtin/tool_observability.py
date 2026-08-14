@@ -9,9 +9,13 @@ by tool name and execution scope. Today that is answerable nowhere:
 
 * :class:`~agent_runtime.control_plane.context.RuntimeToolLifecycleReducer`
   records one terminal *outcome* per (call, attempt). No timing, no size.
-* ``WorkerAuditEmitter.emit_tool_call_outcome`` accepts ``duration_ms`` and has
-  **no production caller at all** — only tests reach it, so the
-  ``tool_call_outcome`` audit action is never emitted.
+* The worker audit emitter's tool-call-outcome method
+  (``runtime_worker/audit.py:197``) takes a duration and has **no production
+  caller at all** — only a test reaches it, so that audit action is never
+  emitted. It is line 117 of ``tools/dark_wiring_baseline.txt``, and it is
+  deliberately not named here in full: that gate's "is this wired?" test is a
+  regex over file text, so spelling the symbol out in prose would silence a
+  real finding with a comment.
 * :mod:`agent_runtime.observability.context_tool_ledger` measures the tool
   *schema* block (what the model is shown before it calls anything), not tool
   *results*.
