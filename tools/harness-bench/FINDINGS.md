@@ -181,3 +181,44 @@ does **not** see that case, and that is worth stating plainly: the reconciler
 leaves no open row behind, so "count the calls that never closed" finds zero.
 Two metrics, two different blind spots, and neither is a substitute for the
 other. Every column in `rescore.py` now carries its blind spot in the header.
+
+### The heavy set has NOT been run yet, and that is a statement about this box
+
+It is structurally validated — `--plan`, 19 offline gate tests, and a mutation
+check confirming each design test fails on the defect it names and only that one
+— but no arm has been driven against a model. The reason is worth recording
+because it will be the next person's reason too:
+
+```
+apps/desktop/resources/runtime/darwin-arm64/services/ai-backend/src   Aug 10 19:50
+newest commit touching services/ai-backend/src                       Aug 14 13:17
+```
+
+**The only staged runtime on this machine is four days behind the tree.** Per
+[the journeys README §1b](../desktop-journeys/README.md) it would run old backend
+code and report its verdict with total confidence — and specifically it predates
+the `TOOL_RUN_FAILED` fix that finding 2 above produced, so it would measure the
+error taxonomy this file has already corrected.
+
+Re-stage first, then validate for the price of one task, then pay for the arms:
+
+```bash
+node tools/desktop-runtime/stage.mjs --platform darwin --arch arm64
+npm run build --workspace @0x-copilot/desktop
+
+BENCH_ARM=500 HEAVY_TASKS=h1-corpus python tools/harness-bench/heavy_tasks_ab.py
+BENCH_ARM=25  python tools/harness-bench/heavy_tasks_ab.py     # own process
+BENCH_ARM=500 python tools/harness-bench/heavy_tasks_ab.py     # own process
+python tools/harness-bench/rescore.py heavy-arm-25 heavy-arm-500
+```
+
+Each arm runs in its OWN process: the arms share nothing, and the ceiling is read
+once per service start.
+
+What the heavy tasks should be expected to cost, so a surprise is legible: about
+**45-60 model calls per arm**, ~1.2M listed input tokens, ~10k output, ~150k
+full-price-equivalent, 5-8 minutes — a bit under $1 an arm at Sonnet-class list
+prices, and about 15x the recursion set. A number far from that is itself the
+finding: far below means the model batched work the prompts asked it to serialise
+(read `peak_parallel`), far above means something is looping (read `budget_notes`
+and `terminal_code` before concluding anything about the ceiling).

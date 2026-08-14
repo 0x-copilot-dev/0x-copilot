@@ -31,6 +31,13 @@ cold prompt at full price plus ~2.6k per warm call) — comfortably under $1 per
 arm at Sonnet-class list prices. The whole two-arm experiment is therefore about
 15x the recursion set and still cheap enough to re-run.
 
+Those are the numbers for a healthy arm. The per-task wait ceiling is 420s, so a
+thoroughly stuck arm walks to ~45 minutes before reporting — long, deliberately,
+because a benchmark that gives up early records a timeout where the interesting
+answer was. Validate the plumbing with `HEAVY_TASKS=h1-corpus` first; it is one
+task, well under a minute of model time, and it exercises the whole path from
+boot through report to `rescore.py`.
+
 Why these tasks and not livelier ones
 -------------------------------------
 Four constraints, each of which killed a more interesting design:
