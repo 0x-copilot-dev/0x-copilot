@@ -388,7 +388,10 @@ def score(arm: str) -> dict | None:
         task["terminal_code"] = codes.get(run_id, "?")
     report["session_dir"] = str(directory)
     report["memory_files"] = memory_files(directory)
-    report_path.write_text(json.dumps(report, indent=2))
+    # Trailing newline: these reports are committed as evidence, and without it
+    # `end-of-file-fixer` and `prettier` rewrite the file on every commit — so
+    # each rescore lands a diff that is pure whitespace churn over real numbers.
+    report_path.write_text(json.dumps(report, indent=2) + "\n")
     return report
 
 

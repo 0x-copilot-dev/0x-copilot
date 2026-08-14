@@ -519,6 +519,12 @@ class Arm:
     def collect(self) -> None:
         for task in TASKS:
             self.results.append(self.run_task(task))
+            # Written after EVERY task, not once at the end. An arm is minutes
+            # of paid model time; a crash in task six must not throw away the
+            # five that already ran, because re-running them costs real money.
+            self.write_report()
+
+    def write_report(self) -> None:
         OUT_DIR.mkdir(parents=True, exist_ok=True)
         (OUT_DIR / f"heavy-arm-{self.limit}.json").write_text(
             json.dumps(
@@ -534,6 +540,9 @@ class Arm:
                 },
                 indent=2,
             )
+            # Trailing newline so a committed report does not get rewritten by
+            # `end-of-file-fixer` and `prettier` on every single commit.
+            + "\n"
         )
 
 

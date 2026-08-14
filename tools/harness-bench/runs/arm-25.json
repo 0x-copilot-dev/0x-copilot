@@ -78,7 +78,9 @@
       "total_tokens": 24397,
       "duration_ms": 15030,
       "tool_rounds": 3,
-      "tool_failures": ["write_todos:tool_exception"],
+      "tool_failures": [
+        "write_todos:tool_exception"
+      ],
       "terminal_code": "recursion_limit_exceeded",
       "tool_invocations": 4,
       "orphaned_rounds": 0,
@@ -92,7 +94,9 @@
       "peak_result_bytes": 312,
       "budget_notes": 0,
       "super_steps_estimate": 22,
-      "reconciled_rounds": ["write_todos"]
+      "reconciled_rounds": [
+        "write_todos"
+      ]
     },
     {
       "task": "t4-long-chain",
