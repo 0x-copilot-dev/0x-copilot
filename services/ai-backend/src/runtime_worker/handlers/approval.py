@@ -1078,8 +1078,25 @@ class RuntimeApprovalHandler:
             run_status=run.status,
         )
 
+    def _artifact_family_model_visible(self, *, lane_enabled: bool) -> bool:
+        """Read the SAME exposure decision the run handler read.
+
+        This is the mid-task guarantee. The knob lives on the frozen document
+        resolved once at the composition root, so a run that started with the
+        artifact family keeps it when it resumes past an approval, and a run
+        that started without it does not suddenly gain three tool schemas
+        (which would invalidate the prompt-cache prefix for the whole
+        remainder of the run — 97% of input tokens are cache reads).
+        """
+
+        return self.settings.hyperparameters.tool_surface.admits_artifact_family(
+            lane_enabled=lane_enabled
+        )
+
     def _publish_artifact_tool(self, run: RunRecord) -> PublishArtifactTool | None:
-        if not self._artifact_publication_enabled(run):
+        if not self._artifact_family_model_visible(
+            lane_enabled=self._artifact_publication_enabled(run)
+        ):
             return None
         return PublishArtifactTool(
             gateway=OperationGateway(descriptors=DEFAULT_OPERATION_DESCRIPTORS)
@@ -1087,7 +1104,9 @@ class RuntimeApprovalHandler:
 
     def _revise_artifact_tool(self, run: RunRecord) -> ReviseArtifactTool | None:
         # Same gate as publication — see the run handler for why they are paired.
-        if not self._artifact_publication_enabled(run):
+        if not self._artifact_family_model_visible(
+            lane_enabled=self._artifact_publication_enabled(run)
+        ):
             return None
         return ReviseArtifactTool(
             gateway=OperationGateway(descriptors=DEFAULT_OPERATION_DESCRIPTORS),

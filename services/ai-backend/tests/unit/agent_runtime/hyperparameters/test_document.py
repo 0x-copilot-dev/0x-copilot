@@ -49,6 +49,12 @@ class CheckedInDocumentMixin:
             "index_summary_max_bytes": 96,
             "index_summary_min_bytes": 24,
         },
+        # ``always`` is today's behaviour, so landing the knob changes nothing.
+        # The saving is realised by an operator writing ``off`` here — a
+        # reviewable one-line diff, which is the whole point of the document.
+        "tool_surface": {
+            "artifact_family": "always",
+        },
         "reads": {
             "default_line_limit": 2000,
             "offloaded_result_line_limit": 20000,

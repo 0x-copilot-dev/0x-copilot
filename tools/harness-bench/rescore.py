@@ -58,6 +58,37 @@ def load_state(directory: Path, name: str) -> list[dict]:
     return rows
 
 
+def terminal_codes(directory: Path) -> dict[str, str]:
+    """Map run_id → the typed code on its terminal event.
+
+    This exists because the first cut of this scorer inferred "did the ceiling
+    bind?" from the count of COMPLETED tool rounds, and that is not the same
+    question. A run that trips the ceiling with a call still open never
+    completes that call, so it is invisible to a completed-rounds count — the
+    scorer reported 3 rounds against a ceiling of 25 and I concluded the
+    ceiling was never approached. The run's own `run_failed` event said
+    ``recursion_limit_exceeded``. Read the terminal code; never infer it.
+    """
+
+    codes: dict[str, str] = {}
+    for path in directory.glob("agent-data/v1/workspaces/*/sessions/*/events.jsonl"):
+        for line in path.read_text().splitlines():
+            if not line.strip():
+                continue
+            try:
+                row = json.loads(line)
+            except ValueError:
+                continue
+            record = row.get("record", row)
+            if record.get("event_type") not in {"run_failed", "run_completed"}:
+                continue
+            payload = record.get("payload") or {}
+            run_id = record.get("run_id")
+            if isinstance(run_id, str) and isinstance(payload, dict):
+                codes[run_id] = str(payload.get("code") or record.get("event_type"))
+    return codes
+
+
 def score(arm: str) -> dict | None:
     report_path = RUNS / f"{arm}.json"
     if not report_path.is_file():
@@ -70,6 +101,7 @@ def score(arm: str) -> dict | None:
         return None
 
     usage = {r.get("run_id"): r for r in load_state(directory, "run_usage.jsonl")}
+    codes = terminal_codes(directory)
     tools: dict[str, list[dict]] = {}
     for row in load_state(directory, "tool_invocations.jsonl"):
         tools.setdefault(str(row.get("run_id")), []).append(row)
@@ -89,6 +121,7 @@ def score(arm: str) -> dict | None:
         task["tool_failures"] = [
             f"{c.get('tool_name')}:{c.get('safe_error_code')}" for c in failed
         ]
+        task["terminal_code"] = codes.get(run_id, "?")
     report["session_dir"] = str(directory)
     report_path.write_text(json.dumps(report, indent=2))
     return report
@@ -127,12 +160,22 @@ def main() -> int:
         )
 
     print(f"\n  peak COMPLETED tool rounds in any task: {peak}")
-    if peak <= 25:
+    ceiling_hits = [
+        (r["recursion_limit"], t["task"])
+        for r in scored
+        for t in r["tasks"]
+        if t.get("terminal_code") == "recursion_limit_exceeded"
+    ]
+    if ceiling_hits:
+        print("  runs stopped BY THE STEP CEILING (the only reliable signal):")
+        for limit, task in ceiling_hits:
+            print(f"    limit={limit}  {task}")
         print(
-            "  → the inherited ceiling of 25 was never approached, so raising it\n"
-            "    to 500 bought nothing on this task set. Do not claim a\n"
-            "    completion-rate win from this data."
+            "  → completed-round counts UNDERCOUNT: a run that trips the ceiling\n"
+            "    with a call still open never completes it. Read terminal_code."
         )
+    else:
+        print("  no run was stopped by the step ceiling in any arm.")
     return 0
 
 

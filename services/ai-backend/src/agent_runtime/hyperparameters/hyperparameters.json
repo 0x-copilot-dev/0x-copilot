@@ -13,6 +13,9 @@
     "index_summary_max_bytes": 96,
     "index_summary_min_bytes": 24
   },
+  "tool_surface": {
+    "artifact_family": "always"
+  },
   "reads": {
     "default_line_limit": 2000,
     "offloaded_result_line_limit": 20000
