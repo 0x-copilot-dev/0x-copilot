@@ -167,9 +167,7 @@ class ToolErrorPolicyTool(DelegatingTool):
 class ToolErrorPolicyRegistry:
     """Wrap a tool registry so every returned tool routes errors via policy.
 
-    Matches the decorator pattern used by
-    :class:`agent_runtime.capabilities.tool_budget_guard.ToolBudgetGuardedRegistry`:
-    the wrapped registry's ``list_available_tools`` is rewritten to wrap
+    The wrapped registry's ``list_available_tools`` is rewritten to wrap
     each LangChain ``BaseTool`` in a :class:`ToolErrorPolicyTool`. Non-
     ``BaseTool`` entries (internal adapters) pass through untouched.
     """

@@ -50,7 +50,6 @@ from agent_runtime.execution.factory import (
 )
 from agent_runtime.prompts.runtime import DEFAULT_INSTRUCTIONS
 from agent_runtime.prompts.observation import PromptAssemblyObserver
-from agent_runtime.capabilities.tool_budget_guard import ToolBudgetGuardedTool
 from agent_runtime.capabilities.mcp.cards import McpAuthState, McpServerCard
 from agent_runtime.capabilities.mcp.registry import DynamicMcpRegistry
 from tests.unit.agent_runtime.agent.helpers import CapturingAgentBuilder
@@ -188,7 +187,6 @@ async def test_factory_propagates_permissions_to_runtime_ports(
         ModelInvocationMiddleware,
         TodoListMiddleware,
     )
-    assert not any(isinstance(tool, ToolBudgetGuardedTool) for tool in call.tools)
 
 
 async def test_factory_installs_per_call_prompt_binding_for_verified_run(
