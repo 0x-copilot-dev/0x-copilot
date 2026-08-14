@@ -29,6 +29,7 @@ import { parseQuestion, type QuestionSpec } from "../../approvals/question";
 import {
   parseApprovalPresentation,
   parseConnectorTrust,
+  parseGrantScope,
   parseWorkspaceGrantRequest,
   type ApprovalPresentation,
   type ApprovalPreview,
@@ -139,6 +140,31 @@ export interface RunApproval {
    * dialog, so there is nothing for a `/decision` POST alone to do.
    */
   readonly workspaceGrant: WorkspaceGrantRequest | null;
+  /**
+   * The folder an "always allow" would attach — non-null ONLY when this ask
+   * genuinely offers the durable choice. Null keeps the ask once-only, which is
+   * what nearly every ask is.
+   *
+   * Decided HERE, from two wire fields at once, for the reason `irreversible`
+   * gives above: this is the one place that reads the payload, and a view that
+   * re-derived it could drift. Both fields are required, and the producer is why
+   * — `stream_events._FilesystemApproval` advertises `allow_always` in
+   * `grant_options` and names its subject in `grant_scope`, and its own comment
+   * calls "advertising the option without shipping its scope" the silent
+   * widening the card must never allow. Requiring both here means a payload that
+   * lost one of them offers nothing, rather than offering a durable grant over a
+   * folder the client would have had to guess.
+   *
+   * A WRITE reaches this null by the producer's design, not by a rule invented
+   * here: `_grant_scope` returns `None` for a non-read, so a write ships
+   * `grant_options: ["allow_once"]` and no scope. That is deliberate — an
+   * "always" on a write folder means ATTACH A FOLDER, which a write inside an
+   * already-attached folder does not need; what the user wants after the third
+   * card is "stop pausing for this run", and that is the composer's bypass pill.
+   * Reading the wire rather than branching on `read_only` here is what keeps the
+   * two controls from being conflated by a client that forgot the distinction.
+   */
+  readonly grantAlways: WorkspaceGrantRequest | null;
   readonly runId: string | null;
   /** Anchor for the rail's jump-to-card (the requesting event's id). */
   readonly messageId: string;
@@ -202,6 +228,7 @@ interface MutableApproval {
   connectorTrust: ConnectorTrust;
   question: QuestionSpec | null;
   workspaceGrant: WorkspaceGrantRequest | null;
+  grantAlways: WorkspaceGrantRequest | null;
   runId: string | null;
   messageId: string;
   sequenceNo: number;
@@ -389,6 +416,12 @@ function reduceRequested(
     // Approve/Reject for an action that was never the question.
     workspaceGrant:
       parseWorkspaceGrantRequest(payload) ?? existing?.workspaceGrant ?? null,
+    // Same replay rule as `presentation`, and it matters more here than
+    // anywhere: a redelivered frame that omits the option must not retract a
+    // choice the user is mid-way through making. It can only ever be RE-offered
+    // on the same folder, never widened — `buildGrantAlways` requires the wire
+    // to name a scope, so there is nothing for a sticky value to invent.
+    grantAlways: buildGrantAlways(payload) ?? existing?.grantAlways ?? null,
     runId: event.run_id,
     messageId: event.event_id,
     sequenceNo: existing?.sequenceNo ?? event.sequence_no,
@@ -436,6 +469,7 @@ function freeze(m: MutableApproval): RunApproval {
     connectorTrust: m.connectorTrust,
     question: m.question,
     workspaceGrant: m.workspaceGrant,
+    grantAlways: m.grantAlways,
     runId: m.runId,
     messageId: m.messageId,
     sequenceNo: m.sequenceNo,
@@ -592,6 +626,39 @@ function buildIrreversible(event: RuntimeEventEnvelope): boolean {
   }
   const risk = stringField(payload.risk_level)?.toLowerCase() ?? null;
   return risk === "high" || risk === "critical";
+}
+
+/**
+ * The wire's word for "this once", and for "from now on".
+ *
+ * Exported so a test can assert against the contract rather than a literal, and
+ * spelled exactly as `_FilesystemApproval.ALLOW_ONCE` / `ALLOW_ALWAYS`
+ * (`runtime_worker/stream_events.py`) — the two strings the producer puts in
+ * `grant_options`.
+ */
+export const GRANT_OPTION_ALLOW_ONCE = "allow_once";
+export const GRANT_OPTION_ALLOW_ALWAYS = "allow_always";
+
+/**
+ * The durable option, or null — see `RunApproval.grantAlways` for why both wire
+ * fields are required and why a write never reaches a non-null answer.
+ *
+ * Membership is tested on the ARRAY the producer sent, not on any local notion
+ * of which asks deserve the option. `grant_options` is the producer's decision
+ * and it is already load-bearing there; re-deciding it here would be a second
+ * authority on a consent question that must have exactly one.
+ */
+function buildGrantAlways(
+  payload: Record<string, unknown>,
+): WorkspaceGrantRequest | null {
+  const options = payload.grant_options;
+  if (!Array.isArray(options)) {
+    return null;
+  }
+  if (!options.includes(GRANT_OPTION_ALLOW_ALWAYS)) {
+    return null;
+  }
+  return parseGrantScope(payload);
 }
 
 /**
