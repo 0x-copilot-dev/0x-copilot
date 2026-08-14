@@ -139,6 +139,19 @@ class ToolCallObservationSummary:
         }
 
 
+class _ToolSlot:
+    """One tool name's running totals. Mutable, guarded by the ledger's lock."""
+
+    __slots__ = ("calls", "failures", "total_duration_us", "max_duration_us", "chars")
+
+    def __init__(self) -> None:
+        self.calls = 0
+        self.failures = 0
+        self.total_duration_us = 0
+        self.max_duration_us = 0
+        self.chars = 0
+
+
 class ToolCallObservationLedger:
     """Bounded, thread-safe tally of one run's tool calls.
 
@@ -152,7 +165,7 @@ class ToolCallObservationLedger:
     def __init__(self) -> None:
         self._lock = Lock()
         self._pending: dict[tuple[str, str], int] = {}
-        self._tools: dict[str, list[int]] = {}
+        self._tools: dict[str, _ToolSlot] = {}
         self._untimed = 0
 
     def start(self, *, execution_scope: str, tool_call_id: str) -> None:
@@ -194,16 +207,18 @@ class ToolCallObservationLedger:
             slot = self._tools.get(name)
             if slot is None:
                 if len(self._tools) >= _MAX_TRACKED_TOOLS:
+                    # A run past the bound folds every further name into one
+                    # bucket rather than growing the operator's log line.
                     name = _OTHER
                     slot = self._tools.get(_OTHER)
                 if slot is None:
-                    slot = [0, 0, 0, 0, 0]
+                    slot = _ToolSlot()
                     self._tools[name] = slot
-            slot[0] += 1
-            slot[1] += 0 if succeeded else 1
-            slot[2] += duration_us
-            slot[3] = max(slot[3], duration_us)
-            slot[4] += max(0, result_chars)
+            slot.calls += 1
+            slot.failures += 0 if succeeded else 1
+            slot.total_duration_us += duration_us
+            slot.max_duration_us = max(slot.max_duration_us, duration_us)
+            slot.chars += max(0, result_chars)
 
     def summary(self) -> ToolCallObservationSummary | None:
         """Roll the tally up for emission, or ``None`` when no tool ran.
@@ -221,11 +236,11 @@ class ToolCallObservationLedger:
             by_tool = tuple(
                 ToolCallObservation(
                     tool_name=name,
-                    calls=slot[0],
-                    failures=slot[1],
-                    total_duration_us=slot[2],
-                    max_duration_us=slot[3],
-                    result_chars=slot[4],
+                    calls=slot.calls,
+                    failures=slot.failures,
+                    total_duration_us=slot.total_duration_us,
+                    max_duration_us=slot.max_duration_us,
+                    result_chars=slot.chars,
                 )
                 for name, slot in sorted(self._tools.items())
             )
