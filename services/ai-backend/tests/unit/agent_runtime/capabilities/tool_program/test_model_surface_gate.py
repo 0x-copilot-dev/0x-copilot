@@ -37,6 +37,7 @@ from agent_runtime.hyperparameters.contracts import (
     ToolProgramHyperparameters,
 )
 from agent_runtime.hyperparameters.loader import HyperparameterLoader
+from agent_runtime.observability.context_tool_ledger import ToolSchemaLedger
 from runtime_worker.capability_tool_wiring import CapabilityToolWiring
 
 
@@ -107,6 +108,19 @@ class ToolProgramModelSurfaceMixin:
 
         return json.dumps([convert_to_openai_tool(tool) for tool in tools])
 
+    @staticmethod
+    def ledger_tokens(tools: tuple[object, ...]) -> int:
+        """Total the surface through the Context Occupancy Ledger's own counter.
+
+        The same measurement that produced the 600-token figure in
+        ``tools/harness-bench/FINDINGS.md``, so the saving is stated in the
+        units it was reported in rather than in a proxy of bytes.
+        """
+
+        return sum(
+            footprint.estimated_tokens for footprint in ToolSchemaLedger.measure(tools)
+        )
+
 
 class TestToolProgramSchemaIsAbsentWhenGatedOff(ToolProgramModelSurfaceMixin):
     def test_disabled_run_composes_no_program_tool(
@@ -166,25 +180,25 @@ class TestToolProgramSchemaReturnsWhenEnabled(ToolProgramModelSurfaceMixin):
 
         assert self.DESCRIPTION_FRAGMENT in TOOL_DESCRIPTION
 
-    def test_enabling_costs_measurably_more_prompt_than_disabling(
+    def test_the_gate_is_worth_the_measured_six_hundred_tokens(
         self, runtime_context_admin: AgentRuntimeContext
     ) -> None:
-        """State the saving as a number, in the direction the ledger measures.
+        """State the saving as a number, in the units the ledger reports.
 
-        The absolute figure is model-tokenizer dependent, so the assertion is on
-        the byte delta of the provider tool block: turning the gate on adds this
-        tool's whole schema and nothing else changes.
+        ``tools/harness-bench/FINDINGS.md`` §3 scored this tool at 600 of the
+        9,759 tokens of tool block on the packaged app; the same counter run
+        offline here gives 603. The band is deliberately loose enough to survive
+        a wording tweak and far too tight to survive the tool coming back by
+        accident — a regression that re-registered it would land ~600 over, and
+        one that trimmed the description to nothing would land under.
         """
 
-        off = self.provider_tool_block(
+        off = self.ledger_tokens(
             self.model_surface(runtime_context_admin, enabled=False)
         )
-        on = self.provider_tool_block(
-            self.model_surface(runtime_context_admin, enabled=True)
-        )
+        on = self.ledger_tokens(self.model_surface(runtime_context_admin, enabled=True))
 
-        assert len(on) > len(off)
-        assert len(on) - len(off) > 500
+        assert 550 <= on - off <= 650
 
 
 class TestShippedDocumentKeepsItOff(ToolProgramModelSurfaceMixin):
