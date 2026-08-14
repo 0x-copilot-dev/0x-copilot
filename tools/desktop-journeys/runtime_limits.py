@@ -16,6 +16,14 @@ someone lays it.
 
     python3 tools/desktop-journeys/runtime_limits.py
 
+PRECONDITION, and it is not the usual one: every phase here asserts about the
+harness program, so the STAGE must be built from a tree that contains it. On a
+tree that predates it the report inverts into nonsense — RL-1 passes vacuously,
+because a `recursion_limit_exceeded` that no source string can emit is trivially
+absent from the log, and RL-2 reports the env allowlist as the blocker when the
+real one is that the knob does not exist. Re-stage from the tree under test
+(README §1b) before believing any line of this file's output.
+
 Boot class `source · fresh · live BYOK`, which is the SAME class as
 `composer_and_budgets.py`. Per README "Adding a claim", these phases belong
 folded into that file rather than living here once RL-2..RL-4 stop being
@@ -44,6 +52,7 @@ password field — never printed, logged, or written to an artifact.
 
 from __future__ import annotations
 
+import inspect
 from pathlib import Path
 
 from _lib import (
@@ -274,9 +283,7 @@ def rl4_a_steer_cannot_leave_the_app(s: DriverSession) -> None:
         "steer sent during an active run cannot leave the desktop client",
     )
     blocked_unless(
-        "body" in DriverSession.transport.__doc__.lower()
-        if DriverSession.transport.__doc__
-        else False,
+        "body" in inspect.signature(DriverSession.transport).parameters,
         "the facade now proxies /steer, but DriverSession.transport still sends "
         "no request body — extend it (and the app's transport.request IPC) "
         "before asserting that a steer reaches the model",
