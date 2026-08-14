@@ -225,6 +225,40 @@ class TestAskAQuestionApprovalResume:
 
         assert resume == {"decisions": [{"type": "reject"}]}
 
+    def test_every_other_lane_DROPS_the_scope_even_when_one_was_sent(self) -> None:
+        """The fact the client's once/always control is scoped to.
+
+        Two lanes advertise ``grant_options: [..., "allow_always"]``, and they
+        mean different things by it. The FILESYSTEM lane
+        (``runtime_worker/stream_events.py:227-234``) means "attach this folder"
+        -- a durable workspace grant, wider than the path the card named, which
+        the OS-dialog + ``WorkspaceGrantPort`` flow settles. Nothing on the
+        ``/decision`` path performs it, and this test is why: the resume builder
+        forwards ``decision_scope`` on the ``ask_a_question`` shape ALONE, so a
+        scope sent with any other kind is silently dropped on the floor.
+
+        The chat surface therefore renders its run-scoped "always" only where
+        that forwarding happens (``allowsRunScopedGrant``). If a future change
+        makes another lane honour the scope, this test fails first -- which is
+        the signal to widen the client predicate, rather than discovering a live
+        control that has quietly been doing nothing.
+        """
+
+        for approval_kind in ("filesystem_access", "mcp_tool", "mcp_auth"):
+            command = RuntimeApprovalResolvedCommand(
+                approval_id=f"appr_{approval_kind}",
+                run_id=_Values.RUN_ID,
+                org_id=_Values.ORG_ID,
+                decision=ApprovalDecision.APPROVED,
+                decision_scope="always",
+            )
+
+            resume = RuntimeApprovalHandler._resume_payload(
+                command, metadata={"approval_kind": approval_kind}
+            )
+
+            assert "decision_scope" not in resume, approval_kind
+
     async def test_handle_resumes_run_without_appending_user_message_on_answer(
         self,
     ) -> None:

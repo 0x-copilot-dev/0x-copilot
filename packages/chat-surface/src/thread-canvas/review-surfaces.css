@@ -1069,6 +1069,45 @@
   justify-self: start;
 }
 
+/* ── the run-scoped approve (`grant_options: allow_always`) ──────────────────
+ *
+ * Lives in the body, never the header, and is a GHOST beside a primary Approve
+ * that is one click away above it. The wider decision must never be the louder
+ * one: a run-scoped allow rule is the convenient answer, and drawing it as the
+ * recommended answer is how people stop reading the cards.
+ *
+ * `justify-self: start` for the same reason the approve buttons take it — the
+ * body is a grid, and a stretched button reads as the row's primary action.
+ */
+.tc-write-gate__scope {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+  justify-self: start;
+  min-width: 0;
+}
+
+/* The verb is long on purpose ("Approve, and don't ask again this run") because
+   the reach is the thing being consented to. So it must be allowed to wrap
+   rather than set the body's min-content width — which, in a grid, is how the
+   header ends up stretched past a frame that is `overflow: hidden` and the
+   decision controls get clipped out of reach. */
+.tc-write-gate__scope-btn {
+  height: auto;
+  max-width: 100%;
+  text-align: left;
+  white-space: normal;
+}
+
+/* The sentence the wire word gets wrong. `allow_always` reads as "forever";
+   the rule this writes expires with the run, and the difference is the whole
+   consent. Quiet register, same as the provenance line. */
+.tc-write-gate__scope-note {
+  color: var(--color-text-subtle);
+  font-size: var(--font-size-xs);
+  letter-spacing: var(--tracking-caption);
+}
+
 /* ── the shaped evidence: the batch, and the draft ───────────────────────────
  *
  * Both live BELOW the header, for the same reason the params frame does: the
@@ -1202,4 +1241,66 @@
   font-size: var(--font-size-mono-10);
   letter-spacing: var(--tracking-caption);
   margin: 0;
+}
+
+/* ===================================================================
+ * The context-compaction boundary (`compression_note`).
+ *
+ * A rule with a sentence in it, not a card. Everything else in this
+ * transcript that has a frame is something the reader can act on; this
+ * is a statement ABOUT the transcript, so it is drawn as the boundary
+ * it describes rather than as another object sitting on one.
+ *
+ * The two rules take the leftover width (basis 0) and the text is the
+ * item with a floor, so the sentence is never what gives way in a
+ * narrow column — a divider whose only content ellipsises is a rule
+ * the reader cannot account for. Wrapping happens instead, which costs
+ * a line and keeps the words.
+ * =================================================================== */
+.tc-compaction {
+  align-items: center;
+  display: flex;
+  gap: var(--space-sm);
+  min-width: 0;
+  padding: var(--space-sm) 0;
+  width: 100%;
+}
+
+.tc-compaction__rule {
+  background: var(--color-border-subtle);
+  /* `flex: 1` ⇒ basis 0 ⇒ both sides take an equal share of the leftover,
+     whatever the label's width — which is what makes the sentence read as
+     centred rather than nudged toward one end. */
+  flex: 1;
+  height: 1px;
+  min-width: 0;
+}
+
+/* Quiet by construction: subtle text, caption tracking, sans — the same
+   register the provenance line above uses. Loud enough to be read when someone
+   is asking "why did it forget that", quiet enough to be scrolled past. */
+.tc-compaction__label {
+  color: var(--color-text-subtle);
+  flex: 0 1 auto;
+  font-family: var(--font-sans);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-regular);
+  letter-spacing: var(--tracking-caption);
+  /* Never `nowrap`: see the block comment above. A tool name is an arbitrary
+     string and lands in the middle of this sentence. */
+  overflow-wrap: anywhere;
+  text-align: center;
+}
+
+/* `12.4k → 380`. Mono + tabular figures so the two numbers are comparable at a
+   glance, which is the only reason to print them beside a title that already
+   says how much was saved. */
+.tc-compaction__counts {
+  color: var(--color-text-subtle);
+  flex: none;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-mono-10);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: var(--tracking-caption);
+  white-space: nowrap;
 }

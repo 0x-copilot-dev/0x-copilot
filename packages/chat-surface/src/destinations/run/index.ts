@@ -51,10 +51,15 @@ export {
 } from "./useRunMode";
 
 // === PR-3.10 — approval projection (in-chat card + rail queue) ===
+// `WRITE_GATE_APPROVAL_PREFIX` is the SSOT for the parked-write id shape. It is
+// hoisted because two consumers depend on agreeing about it exactly: the
+// projection (whether an `always` on this card is a scope the `/decision` POST
+// carries) and `TcChat` (which card to draw).
 export {
   projectApprovals,
   overlayApprovalDecisions,
   toApprovalsQueue,
+  WRITE_GATE_APPROVAL_PREFIX,
   type RunApproval,
   type RunApprovalDecision,
   type RunApprovalKind,
@@ -106,6 +111,15 @@ export {
 
 // === WC-P6a — citation projection (in-chat chip resolution, AD-11) ===
 export { projectCitations, type CitationProjection } from "./projectCitations";
+
+// === Context-compaction dividers (`compression_note`) ===
+// The pure selector only. The DIVIDER itself is `TcCompactionDivider` in
+// `thread-canvas/`, mounted through `TcChat`'s `compactionNotices` prop — the
+// same shape every other transcript family takes.
+export {
+  projectCompactionNotices,
+  type CompactionNoticeEntry,
+} from "./compactionProjection";
 
 // === Phase 3 (PR-3.11) run empty state ===
 // `RunMultiSelect` used to ship alongside this: the multi-run selector rail.

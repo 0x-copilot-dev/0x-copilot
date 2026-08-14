@@ -2682,6 +2682,24 @@ export interface ApprovalDecisionRequest {
   // then persists it as the per-connector override (PRD-C1) before recording
   // the decision. The facade passes it through unchanged.
   write_policy?: "ask_first" | "allow_always" | null;
+  // How far THIS approval reaches — the `allow_always` half of the request
+  // payload's `grant_options`. Absent (and `"once"`) resolves this call only,
+  // which is what approve has always meant; `"always"` additionally writes a
+  // RUN-SCOPED allow rule over the subjects the card already named, so the rest
+  // of the run stops re-asking the same question. Permitted only when
+  // `decision === "approved"` (the request validator 422s otherwise) — a
+  // decline that could write an allow rule is the one thing this field must not
+  // be able to say — and `approve_with_edits` is excluded too, because the
+  // edited call is not the call the card described.
+  //
+  // Distinct from `write_policy` above, which is a DURABLE per-connector
+  // override authored on an `mcp_auth` connect gate: different lane, different
+  // lifetime, different card. And distinct from the FILESYSTEM lane's
+  // `allow_always` (`runtime_worker/stream_events.py:227-234`), which attaches a
+  // folder and is settled by the host's workspace-grant flow — that one never
+  // rides this field, and the ai-backend resume builder forwards
+  // `decision_scope` on the `ask_a_question` lane alone.
+  decision_scope?: "once" | "always" | null;
 }
 
 export interface ApprovalDecisionResponse {
@@ -3988,7 +4006,23 @@ export interface TodoListSnapshot {
 export interface CompressionNotePayload {
   before_tokens: number;
   after_tokens: number;
+  /**
+   * `before_tokens - after_tokens`, derived by the PRODUCER
+   * (`RuntimeEventProducer.append_compression_note`) rather than accepted from
+   * a caller, so the saving a client prints can never disagree with the two
+   * counts it prints beside it. Declared optional only for envelopes written
+   * before it was emitted; the transcript divider falls back to the difference.
+   */
+  tokens_saved?: number;
   strategy: string;
+  /** Mirrors `Values.CompactionTrigger` (`token_threshold`, …). */
+  trigger?: string;
+  /**
+   * The tool whose result was compacted, when the call was identified. The
+   * server's `display_title` already names it — this is the machine-readable
+   * half of the same fact.
+   */
+  tool_name?: string;
   summary?: string | null;
   payload_refs?: Record<string, unknown>;
 }

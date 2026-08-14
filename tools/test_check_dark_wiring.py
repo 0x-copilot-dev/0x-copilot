@@ -33,6 +33,7 @@ import check_dark_wiring as gate  # noqa: E402
 from check_dark_wiring import (  # noqa: E402
     BASELINE_PATH,
     BASELINE_SEPARATOR,
+    REPO_ROOT,
     Baseline,
     Finding,
     collect_findings,
@@ -61,11 +62,9 @@ AUDITED_DARK = (
         "backend-only",
         id="import-archive",
     ),
-    pytest.param(
-        "runtime_worker.stream_events:_Fields.grant_options",
-        "test-only",
-        id="grant-options-strip-list",
-    ),
+    # `runtime_worker.stream_events:_Fields.grant_options` used to sit here.
+    # It has been WIRED — see `test_grant_options_is_wired_now`, which replaces
+    # this case with its mirror image so the evidence is not simply deleted.
     pytest.param(
         "runtime_api.schemas.approvals:ApprovalRequestRecord.expires_at",
         "test-only",
@@ -541,6 +540,73 @@ class TestAgainstTheRealTree:
             "until it stopped catching the defect it exists for."
         )
         assert found[key] == detector
+
+    @pytest.mark.parametrize(
+        "key",
+        [
+            "runtime_worker.stream_events:_Fields.grant_options",
+            "agent_runtime.surfaces_v2.gate:_PayloadKey.grant_options",
+        ],
+    )
+    def test_grant_options_is_wired_now(self, findings, key) -> None:
+        """The mirror image of an `AUDITED_DARK` case, kept as evidence.
+
+        `grant_options` was the audit's headline example of a wire key that
+        LOOKS wired and is not: emitted on every filesystem approval and every
+        write gate, declared in ``packages/api-types``, and mentioned in app
+        code exactly once — in a STRIP LIST, i.e. the client's instruction to
+        throw it away.
+
+        It is read now. ``packages/chat-surface`` projects
+        ``payload.grant_options`` onto the approval
+        (``approvalProjection.buildGrantOptions``) and decides from it whether
+        the ask card may offer a run-scoped ``always``. Deleting that read — or
+        softening it back to a bare string in a list — puts both keys back in
+        the findings and fails here, which is the whole point of turning the
+        audit's hand-confirmed list into a test rather than a note.
+
+        Both lanes are asserted because they emit the same word for two
+        different acts, and only the write-gate one reaches a control; a fix
+        that wired one lane and left the other as a string would otherwise pass.
+        """
+
+        reported = {finding.key: finding.detector for finding in findings}
+        assert key not in reported, (
+            f"{key} is dark again — the app tree no longer READS it off the "
+            "payload (a bare string in a strip list or a type member does not "
+            "count). See packages/chat-surface/src/destinations/run/"
+            "approvalProjection.ts."
+        )
+
+    def test_grant_options_read_is_code_and_not_a_comment(self) -> None:
+        """The case above, tightened past what the scanner itself can see.
+
+        ``collect_ts_usage`` matches ``_TS_DOT_READ`` against RAW FILE TEXT, so
+        a doc comment saying ``payload.grant_options`` satisfies it exactly as a
+        real expression does. That is tolerable for a ratchet — it errs toward
+        silence — but it is not good enough for the one key this program was
+        opened to un-darken: deleting the projection's read while leaving its
+        JSDoc in place would keep the gate green over a key nothing consumes.
+
+        So this asserts the EXPRESSION, in the statement that binds it.
+        """
+
+        projection = (
+            REPO_ROOT
+            / "packages"
+            / "chat-surface"
+            / "src"
+            / "destinations"
+            / "run"
+            / "approvalProjection.ts"
+        )
+        source = projection.read_text(encoding="utf-8")
+        assert "const raw = event.payload.grant_options;" in source, (
+            "approvalProjection no longer binds `event.payload.grant_options`. "
+            "If the read moved, move this assertion with it — do not delete it: "
+            "a JSDoc mention alone keeps check_dark_wiring green over a key the "
+            "client has stopped consuming."
+        )
 
     def test_baseline_is_in_sync(self) -> None:
         assert main([]) == 0

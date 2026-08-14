@@ -98,6 +98,15 @@ import {
 import { CitationsProvider } from "../../citations/CitationsContext";
 import type { MarkdownTextProps } from "../../messages/MarkdownText";
 import { projectCitations } from "./projectCitations";
+// The context-compaction boundary. Another pure selector over the SAME
+// `session.events` (FR-3.3) — the runtime emits `compression_note` beside the
+// `tool_result` it bounded out of model context, and until now nothing drew it,
+// so "the agent forgot something it had already read" was observable only as a
+// consequence.
+import {
+  projectCompactionNotices,
+  type CompactionNoticeEntry,
+} from "./compactionProjection";
 // PRD-09c: the host-owned edit-on-surface overlay. Mounted OVER the pure adapter
 // via ThreadCanvas.editSlot → TcSurfaceMount; its submit reuses resolveApproval.
 import { EditOverlay } from "../../surfaces/edit/EditOverlay";
@@ -265,6 +274,8 @@ const EMPTY_DECISIONS: ReadonlyMap<string, RunApprovalDecision> = new Map();
 const EMPTY_CLOSED_URIS: ReadonlySet<string> = new Set();
 /** Stable identity so the flag-off / scrubbed path never churns the transcript. */
 const EMPTY_INLINE_ARTIFACTS: readonly InlineArtifactEntry[] = [];
+/** Same reason: the scrubbed path must not churn the transcript. */
+const EMPTY_COMPACTION_NOTICES: readonly CompactionNoticeEntry[] = [];
 const EMPTY_EXPLICIT_ARTIFACT_TABS: readonly ExplicitArtifactTab[] = [];
 // Generative Surfaces v2 mount-pass empties (flag-off = referentially stable so
 // the memos/props never churn when the cockpit is byte-identical to today).
@@ -2116,6 +2127,13 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
       approvalId: string,
       decision: RunApprovalDecision,
       edits?: SurfaceEdits,
+      // How far this approval reaches. Absent is `once`, which is what approve
+      // has always meant and what the server defaults to — the field is sent
+      // ONLY when the user pressed the control that widens it, because the
+      // request validator rejects a scope on anything but a plain approve and
+      // an unconditional `decision_scope` would start saying something the
+      // reviewer never said on every decline.
+      scope?: "once" | "always",
     ): void => {
       // ONE DECISION PER APPROVAL, ENFORCED BEFORE THE POST.
       //
@@ -2152,10 +2170,17 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
       // The wire decision carries the reviewer's edits when present; the server
       // (ai-backend 09b) re-derives final = proposal ⊕ edits and never trusts a
       // client-sent merged artifact. Plain approve/reject is unchanged.
+      //
+      // `decision_scope` rides only a PLAIN approve. `approve_with_edits` is
+      // excluded server-side for a reason the client must not paper over: the
+      // edited call is not the call the card described, so a rule derived from
+      // the card's subjects would grant something the reviewer never saw.
       const body =
         edits !== undefined
           ? { decision: "approve_with_edits", edits }
-          : { decision };
+          : scope !== undefined && decision === "approved"
+            ? { decision, decision_scope: scope }
+            : { decision };
       void transport
         .request<unknown>({
           method: "POST",
@@ -2171,6 +2196,23 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
 
   const handleApprove = useCallback(
     (approvalId: string): void => resolveApproval(approvalId, "approved"),
+    [resolveApproval],
+  );
+  // The `allow_always` half of `grant_options`: approve THIS call and write a
+  // run-scoped allow rule over the subjects it already carried, so the rest of
+  // the run stops re-asking the same question. It goes through the same
+  // `resolveApproval` — same one-decision-per-approval guard, same optimistic
+  // overlay, same POST — because it IS an approve; only its reach differs, and
+  // a second code path for that is a second chance to double-dispatch a write.
+  //
+  // The card only offers this where the wire honours it (`allowsRunScopedGrant`
+  // — the write-gate lane, whose `ask_a_question` resume shape is the only one
+  // that forwards `decision_scope`). The filesystem lane's `allow_always` means
+  // ATTACH A FOLDER, which this POST does not carry and `WorkspaceGrantCard`
+  // already owns.
+  const handleApproveAlways = useCallback(
+    (approvalId: string): void =>
+      resolveApproval(approvalId, "approved", undefined, "always"),
     [resolveApproval],
   );
   const handleReject = useCallback(
@@ -3943,6 +3985,19 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
     accentByArtifactId,
   ]);
 
+  // The compaction boundaries, on the same rules as the artifacts above: one
+  // pure selector over `session.events`, and empty while scrubbed because a
+  // compaction that happened after the scrub point had not happened yet.
+  //
+  // Deliberately NOT gated on `surfacesV2`. Compaction is ordinary runtime
+  // behaviour that every run is subject to, flag or no flag — gating the only
+  // account of it on a Generative-Surfaces flag would leave the majority of runs
+  // silently forgetting things, which is the exact defect this renders.
+  const compactionNotices = useMemo(() => {
+    if (isScrubbed) return EMPTY_COMPACTION_NOTICES;
+    return projectCompactionNotices(session.events);
+  }, [isScrubbed, session.events]);
+
   // "Review →" on a parked write. The payload lives on the Studio canvas
   // (`run-v2-gate-region` → `TcWriteGateCard`), which is the only surface
   // holding the real `ledgerId` this decision will be recorded under — so
@@ -4198,6 +4253,10 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
         // `ArtifactSurface` Studio mounts, and "Open in Studio" stays as a
         // choice rather than the only way to look.
         inlineArtifacts={inlineArtifacts}
+        // The compaction boundary, at the seq the runtime bounded a tool result
+        // out of model context. A quiet rule, not a card — the transcript now
+        // says WHY the agent stopped holding something it had already read.
+        compactionNotices={compactionNotices}
         artifactTransport={transport}
         {...(artifactDownloadPort === undefined
           ? {}
@@ -4245,6 +4304,10 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
         // PR-3.10: the in-chat ask card — the SAME card in Studio and Focus.
         approvals={chatApprovals}
         onApprove={handleApprove}
+        // The `allow_always` half of the server's `grant_options`. The card
+        // decides whether to draw the control (only where `decision_scope`
+        // reaches a consumer); the host only has to be willing to post it.
+        onApproveAlways={handleApproveAlways}
         onReject={handleReject}
         onAnswer={handleAnswer}
         // WC-P5a (AD-6/AD-7): the MCP-OAuth launcher. TcChat renders the Connect
