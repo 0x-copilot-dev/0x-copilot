@@ -60,6 +60,7 @@ import {
   AgentFleetList,
   AgentsTab,
   ApprovalsTab,
+  HostWritesTab,
   LedgerSourcesTab,
   PendingCardList,
   PendingWorkV2List,
@@ -85,14 +86,27 @@ import {
   type CompactSourceItem,
 } from "../../workspace/CompactSourceList";
 import { COLLAPSED_RAIL_WIDTH } from "../../thread-canvas";
+import type { HostWriteGroup, HostWriteRevertSummary } from "./hostWrites";
+import type { HostWriteRevertState } from "./useHostWrites";
 import type { PendingCard } from "./pendingCardsProjection";
 import type { PendingWorkCardV2 } from "./pendingWorkV2Projection";
 import type { LedgerSourcesProjection } from "./projectLedgerSources";
 import type { RunMode } from "./useRunMode";
 
-/** The four rail tabs, in v3 order — Chat · Agents · Approvals · Sources
- *  (copilot-v3.css). Chat is the default. */
-export type RunRailTabId = "chat" | "agents" | "approvals" | "sources";
+/** The rail tabs, in v3 order — Chat · Agents · Approvals · Sources
+ *  (copilot-v3.css). Chat is the default.
+ *
+ *  `changes` is appended rather than slotted in: the four above are the frozen
+ *  v3 order and the mockup has no fifth column, so the new tab takes the end.
+ *  It is also the only CONDITIONAL tab — see `hostWrites` — so an order that
+ *  put it in the middle would make the other four shift position depending on
+ *  whether a run happened to touch the disk. */
+export type RunRailTabId =
+  | "chat"
+  | "agents"
+  | "approvals"
+  | "sources"
+  | "changes";
 
 const EMPTY_SOURCES: SourceEntryMap = new Map();
 const EMPTY_SUBAGENTS: SubagentSnapshotMap = new Map();
@@ -198,6 +212,29 @@ export interface RunWorkspaceRailProps {
   };
 
   /**
+   * The run's host-write journal, and the undo for one tool call's worth of it
+   * (`GET`/`POST /v1/agent/runs/{run_id}/host-writes[/revert]`, bound by
+   * `useHostWrites`).
+   *
+   * PRESENCE IS THE TAB'S RENDER CONDITION, which is why this is one optional
+   * object rather than a spread of optional fields. Two states must not draw a
+   * Changes tab: a deployment that captures no writes at all (every non-desktop
+   * image — the routes answer 503 by design), and a run that touched no files.
+   * Neither has anything to say, and the Sources tab is this package's own
+   * cautionary tale about a rail tab that is permanently empty. The host
+   * therefore constructs this only when there IS something to report; absent ⇒
+   * the rail is byte-identical to the four-tab v3 rail.
+   */
+  readonly hostWrites?: {
+    readonly groups: readonly HostWriteGroup[];
+    readonly error: string | null;
+    readonly states: Readonly<Record<string, HostWriteRevertState>>;
+    readonly reports: Readonly<Record<string, HostWriteRevertSummary>>;
+    readonly failures: Readonly<Record<string, string>>;
+    readonly onUndo: (group: HostWriteGroup) => void;
+  };
+
+  /**
    * Generative Surfaces v2 (PRD-E2 / FR-F3): a monotonically-increasing nonce the
    * host bumps to command the rail onto the Approvals tab (the `PendingCounterChip`
    * "N waiting" chip lives in the cockpit header, outside this rail, so it drives
@@ -292,6 +329,7 @@ export function RunWorkspaceRail(props: RunWorkspaceRailProps): ReactElement {
     onReject,
     onJumpToApproval,
     scrubbed = false,
+    hostWrites,
     pendingV2,
     pendingWorkV21,
     focusApprovalsSignal,
@@ -397,8 +435,14 @@ export function RunWorkspaceRail(props: RunWorkspaceRailProps): ReactElement {
   // its tab. In Focus the Chat is the LEFT column (always visible) and the
   // Agents/Approvals/Sources SideTabs drive the right Run-details panel — the
   // tab is never forced to Chat anymore (WS-F).
+  //
+  // `changes` takes the same rule for the same reason: it is conditional, so a
+  // run rebind that leaves the new run with nothing on disk would otherwise
+  // strand the panel with no tab above it.
+  const changesHidden = hostWrites === undefined;
   const effectiveTab: RunRailTabId = isStudio
-    ? scrubbed && activeTab === "approvals"
+    ? (scrubbed && activeTab === "approvals") ||
+      (changesHidden && activeTab === "changes")
       ? "chat"
       : activeTab
     : "chat";
@@ -416,8 +460,14 @@ export function RunWorkspaceRail(props: RunWorkspaceRailProps): ReactElement {
   // badge reflects everything in the one queue (absent ⇒ +0, byte-identical).
   const pendingV2Count = pendingV2?.cards.length ?? 0;
   const pendingApprovals = approvalsQueue.pending.length;
+  // Distinct FILES, not journal records — the same number the undo restores,
+  // because a revert collapses per path server-side. See `groupHostWrites`.
+  const changedFiles =
+    hostWrites?.groups.reduce((total, group) => total + group.pathCount, 0) ??
+    0;
 
-  // v3 order (copilot-v3.css): Chat · Agents · Approvals · Sources.
+  // v3 order (copilot-v3.css): Chat · Agents · Approvals · Sources, then the
+  // conditional Changes tab.
   const tabItems: WorkspaceTabsItem<RunRailTabId>[] = [
     { id: "chat", label: "Chat" },
     {
@@ -436,6 +486,15 @@ export function RunWorkspaceRail(props: RunWorkspaceRailProps): ReactElement {
           },
         ]),
     { id: "sources", label: "Sources" },
+    ...(changesHidden
+      ? []
+      : [
+          {
+            id: "changes" as const,
+            label: "Changes",
+            badge: changedFilesBadge(changedFiles),
+          },
+        ]),
   ];
 
   // WS-F: the Focus Run-details panel shows one of Agents/Approvals/Sources
@@ -450,6 +509,9 @@ export function RunWorkspaceRail(props: RunWorkspaceRailProps): ReactElement {
         : "agents"
       : activeTab;
   if (scrubbed && focusPanelTab === "approvals") {
+    focusPanelTab = "agents";
+  }
+  if (changesHidden && focusPanelTab === "changes") {
     focusPanelTab = "agents";
   }
   const focusTabItems: WorkspaceTabsItem<FocusPanelTab>[] = [
@@ -468,6 +530,15 @@ export function RunWorkspaceRail(props: RunWorkspaceRailProps): ReactElement {
           },
         ]),
     { id: "sources", label: "Sources" },
+    ...(changesHidden
+      ? []
+      : [
+          {
+            id: "changes" as const,
+            label: "Changes",
+            badge: changedFilesBadge(changedFiles),
+          },
+        ]),
   ];
 
   // Panel bodies — the hoisted WorkspacePane bodies, computed once and reused
@@ -558,12 +629,28 @@ export function RunWorkspaceRail(props: RunWorkspaceRailProps): ReactElement {
       onReject={onReject}
     />
   );
+  // What this run WROTE, as the counterpart to Sources (what it read). Null
+  // when the host has nothing to report — the tab is absent in that state, so
+  // the body is never constructed either.
+  const changesBody: ReactNode =
+    hostWrites === undefined ? null : (
+      <HostWritesTab
+        groups={hostWrites.groups}
+        error={hostWrites.error}
+        states={hostWrites.states}
+        reports={hostWrites.reports}
+        failures={hostWrites.failures}
+        onUndo={hostWrites.onUndo}
+      />
+    );
   const focusPanelBody: ReactNode =
     focusPanelTab === "agents"
       ? agentsBody
       : focusPanelTab === "approvals"
         ? approvalsBody
-        : sourcesBody;
+        : focusPanelTab === "changes"
+          ? changesBody
+          : sourcesBody;
 
   return (
     <div
@@ -657,6 +744,17 @@ export function RunWorkspaceRail(props: RunWorkspaceRailProps): ReactElement {
         </div>
       ) : null}
 
+      {isStudio && !studioFolded && effectiveTab === "changes" ? (
+        <div
+          data-testid="run-rail-panel-changes"
+          role="tabpanel"
+          aria-label="Changes"
+          style={panelStyle(true)}
+        >
+          {changesBody}
+        </div>
+      ) : null}
+
       {/* Folded Studio rail — the icon strip. A trailing sibling (like the Focus
           block below) so the Chat panel keeps its stable child position and
           `chatSlot` is never remounted by folding. Picking an icon selects that
@@ -667,6 +765,8 @@ export function RunWorkspaceRail(props: RunWorkspaceRailProps): ReactElement {
             runningAgents,
             agentsCount,
             pendingApprovals,
+            changedFiles,
+            changesHidden,
             scrubbed,
             onExpand: () => setStudioCollapsed(false),
             onPick: (tab) => {
@@ -685,6 +785,8 @@ export function RunWorkspaceRail(props: RunWorkspaceRailProps): ReactElement {
         ? collapsed
           ? renderFocusStrip({
               pendingApprovals,
+              changedFiles,
+              changesHidden,
               scrubbed,
               onExpand: () => setCollapsed(false),
               onPick: (tab) => {
@@ -710,7 +812,7 @@ export function RunWorkspaceRail(props: RunWorkspaceRailProps): ReactElement {
 // ============================================================
 
 /** The Focus Run-details tabs — Chat is the left column, never a tab here. */
-type FocusPanelTab = "agents" | "approvals" | "sources";
+type FocusPanelTab = "agents" | "approvals" | "sources" | "changes";
 
 interface FocusPanelArgs {
   readonly tabItems: readonly WorkspaceTabsItem<FocusPanelTab>[];
@@ -771,6 +873,8 @@ function renderFocusPanel(args: FocusPanelArgs): ReactElement {
 
 interface FocusStripArgs {
   readonly pendingApprovals: number;
+  readonly changedFiles: number;
+  readonly changesHidden: boolean;
   readonly scrubbed: boolean;
   readonly onExpand: () => void;
   readonly onPick: (tab: FocusPanelTab) => void;
@@ -778,7 +882,14 @@ interface FocusStripArgs {
 
 /** Collapsed (46px) Run-details icon rail (`.sd-strip` in copilot-v3.css). */
 function renderFocusStrip(args: FocusStripArgs): ReactElement {
-  const { pendingApprovals, scrubbed, onExpand, onPick } = args;
+  const {
+    pendingApprovals,
+    changedFiles,
+    changesHidden,
+    scrubbed,
+    onExpand,
+    onPick,
+  } = args;
   return (
     <aside
       data-testid="tc-focus-strip"
@@ -834,6 +945,26 @@ function renderFocusStrip(args: FocusStripArgs): ReactElement {
       >
         <SourcesIcon />
       </button>
+      {changesHidden ? null : (
+        <button
+          type="button"
+          data-testid="tc-focus-strip-changes"
+          aria-label="Changes"
+          onClick={() => onPick("changes")}
+          style={focusStripButtonStyle}
+        >
+          <ChangesIcon />
+          {changedFiles > 0 ? (
+            <span
+              data-testid="tc-focus-strip-changes-badge"
+              aria-label={`${changedFiles} files changed on this computer`}
+              style={focusStripBadgeStyle}
+            >
+              {changedFiles}
+            </span>
+          ) : null}
+        </button>
+      )}
     </aside>
   );
 }
@@ -842,6 +973,7 @@ const FOCUS_TAB_LABELS: Record<FocusPanelTab, string> = {
   agents: "Agents",
   approvals: "Approvals",
   sources: "Sources",
+  changes: "Changes",
 };
 
 // ============================================================
@@ -854,6 +986,8 @@ interface StudioStripArgs {
   readonly runningAgents: number;
   readonly agentsCount: number;
   readonly pendingApprovals: number;
+  readonly changedFiles: number;
+  readonly changesHidden: boolean;
   readonly scrubbed: boolean;
   readonly onExpand: () => void;
   readonly onPick: (tab: RunRailTabId) => void;
@@ -871,6 +1005,8 @@ function renderStudioStrip(args: StudioStripArgs): ReactElement {
     runningAgents,
     agentsCount,
     pendingApprovals,
+    changedFiles,
+    changesHidden,
     scrubbed,
     onExpand,
     onPick,
@@ -962,6 +1098,28 @@ function renderStudioStrip(args: StudioStripArgs): ReactElement {
       >
         <SourcesIcon />
       </button>
+      {changesHidden ? null : (
+        <button
+          type="button"
+          data-testid="run-rail-strip-changes"
+          aria-label="Changes"
+          title="Changes"
+          data-active={activeTab === "changes" ? "true" : "false"}
+          onClick={() => onPick("changes")}
+          style={railStripButtonStyle(activeTab === "changes")}
+        >
+          <ChangesIcon />
+          {changedFiles > 0 ? (
+            <span
+              data-testid="run-rail-strip-changes-badge"
+              aria-label={`${changedFiles} files changed on this computer`}
+              style={railStripBadgeStyle(false)}
+            >
+              {changedFiles}
+            </span>
+          ) : null}
+        </button>
+      )}
     </aside>
   );
 }
@@ -1045,6 +1203,17 @@ function SourcesIcon(): ReactElement {
   );
 }
 
+/** A file with a pencil — what the run wrote, as against what it read. */
+function ChangesIcon(): ReactElement {
+  return (
+    <svg {...iconProps()}>
+      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h5" />
+      <polyline points="14 2 14 8 20 8" />
+      <path d="M18.5 13.5 21 16l-5 5h-2.5v-2.5z" />
+    </svg>
+  );
+}
+
 // ============================================================
 // Count badges (FR-3.12)
 // ============================================================
@@ -1080,6 +1249,28 @@ function agentsBadge(running: number, total: number): ReactNode {
     return <span data-testid="run-rail-agents-badge">{total}</span>;
   }
   return undefined;
+}
+
+/**
+ * Changes badge: how many FILES on this computer the run altered.
+ *
+ * Deliberately NOT the accent tone the Approvals badge carries. Accent here
+ * means "this is waiting on you"; a changed file is a statement of fact about
+ * something that already happened, and painting it as a summons would make the
+ * rail cry for attention every time the agent saved a note.
+ */
+function changedFilesBadge(files: number): ReactNode {
+  if (files <= 0) {
+    return undefined;
+  }
+  return (
+    <span
+      data-testid="run-rail-changes-badge"
+      aria-label={`${files} files changed on this computer`}
+    >
+      {files}
+    </span>
+  );
 }
 
 /** Approvals badge: the pending count, rendered in the accent token. */

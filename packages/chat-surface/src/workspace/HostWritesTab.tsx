@@ -61,13 +61,7 @@ import type { HostWriteRevertState } from "../destinations/run/useHostWrites";
 
 export interface HostWritesTabProps {
   readonly groups: readonly HostWriteGroup[];
-  readonly loading?: boolean;
   readonly error?: string | null;
-  /**
-   * This deployment captures no agent writes (the routes answered 503). A
-   * capability statement, not a fault — see `useHostWrites`.
-   */
-  readonly unavailable?: boolean;
   readonly states?: Readonly<Record<string, HostWriteRevertState>>;
   readonly reports?: Readonly<Record<string, HostWriteRevertSummary>>;
   readonly failures?: Readonly<Record<string, string>>;
@@ -84,31 +78,19 @@ const NO_FAILURES: Readonly<Record<string, string>> = {};
 
 export function HostWritesTab({
   groups,
-  loading = false,
   error = null,
-  unavailable = false,
   states = NO_STATES,
   reports = NO_REPORTS,
   failures = NO_FAILURES,
   onUndo,
 }: HostWritesTabProps): ReactElement {
-  if (unavailable) {
-    return (
-      <Notice testId="host-writes-tab-unavailable">
-        This deployment doesn&apos;t capture agent writes, so there is nothing
-        to undo here.
-      </Notice>
-    );
-  }
   if (error !== null) {
     return <Notice testId="host-writes-tab-error">{error}</Notice>;
   }
   if (groups.length === 0) {
     return (
       <Notice testId="host-writes-tab-empty">
-        {loading
-          ? "Reading what this run changed…"
-          : "This run hasn't changed any files on this computer."}
+        This run hasn&apos;t changed any files on this computer.
       </Notice>
     );
   }

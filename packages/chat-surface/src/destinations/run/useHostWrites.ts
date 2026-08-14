@@ -63,8 +63,15 @@ export interface UseHostWritesOptions {
 export interface HostWritesController {
   /** One entry per tool call, oldest first. Empty when the run wrote nothing. */
   readonly groups: readonly HostWriteGroup[];
-  readonly loading: boolean;
-  /** A real failure to read the journal. Null while unavailable — see below. */
+  /**
+   * A real failure to read the journal. Null while unavailable — see below.
+   *
+   * There is deliberately no `loading` twin. The rail shows the Changes tab
+   * only once there is something to say, so an in-flight read is the same
+   * on-screen state as a run that wrote nothing: no tab. A `loading` flag with
+   * no consumer would be a field the gate below could quietly start branching
+   * on, which is how a spinner ends up outliving the fetch it describes.
+   */
   readonly error: string | null;
   /**
    * This deployment does not capture agent writes (the routes answered 503).
@@ -97,7 +104,6 @@ export function useHostWrites(
   const transport = useTransport();
 
   const [entries, setEntries] = useState<HostWriteUndoListing["entries"]>([]);
-  const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [unavailable, setUnavailable] = useState(false);
   const [states, setStates] =
@@ -125,7 +131,6 @@ export function useHostWrites(
       return;
     }
     let cancelled = false;
-    setLoading(true);
     void transport
       .request<HostWriteUndoListing>({
         method: "GET",
@@ -150,9 +155,6 @@ export function useHostWrites(
         }
         setUnavailable(false);
         setError("Couldn't read what this run changed on disk.");
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
       });
     return () => {
       cancelled = true;
@@ -207,16 +209,7 @@ export function useHostWrites(
     [transport],
   );
 
-  return {
-    groups,
-    loading,
-    error,
-    unavailable,
-    states,
-    reports,
-    failures,
-    revert,
-  };
+  return { groups, error, unavailable, states, reports, failures, revert };
 }
 
 function dropKey<T>(

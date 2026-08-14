@@ -66,6 +66,28 @@ export {
   type ApprovalProjection,
 } from "./approvalProjection";
 
+// === host-write undo — the Changes tab's projection + binder ===
+// The `/host-writes` + `/host-writes/revert` pair, which were backend-complete
+// and called by nothing. The projection is pure and exported so a second host
+// can group the listing the same way rather than inventing its own unit; the
+// binder is the one place that touches the Transport port.
+export {
+  groupHostWrites,
+  summariseRevert,
+  hostWriteFileName,
+  hostWriteKindLabel,
+  UNBOUND_HOST_WRITE_KEY,
+  type HostWriteGroup,
+  type HostWriteOutcomeRow,
+  type HostWriteRevertSummary,
+} from "./hostWrites";
+export {
+  useHostWrites,
+  type HostWriteRevertState,
+  type HostWritesController,
+  type UseHostWritesOptions,
+} from "./useHostWrites";
+
 // === WC-P5a — MCP-OAuth launcher port TYPE (AD-6) ===
 export type { McpAuthBeginOptions, McpAuthPort } from "./mcpAuthPort";
 export {

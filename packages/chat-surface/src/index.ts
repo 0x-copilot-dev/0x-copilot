@@ -1088,6 +1088,8 @@ export {
   type DraftTabProps,
   ApprovalsTab,
   type ApprovalsTabProps,
+  HostWritesTab,
+  type HostWritesTabProps,
   SkillsTab,
   type SkillsTabProps,
   pluralize,
@@ -1579,6 +1581,30 @@ export {
   type RunRailTabId,
 } from "./destinations/run";
 // === end Phase 3 (PR-3.6) ===
+
+// === host-write undo — the rail's conditional Changes tab ===
+// `GET`/`POST /v1/agent/runs/{run_id}/host-writes[/revert]` were backend-
+// complete and reachable by no caller. `useHostWrites` is the only thing here
+// that touches the Transport port; `groupHostWrites` / `summariseRevert` are
+// pure and hoisted so a host that binds the routes itself groups the listing by
+// the SAME key the revert route accepts — a tool call — rather than inventing a
+// unit the server cannot address. `RunDestination` does the wiring; a host
+// mounting it needs nothing more.
+export {
+  groupHostWrites,
+  summariseRevert,
+  hostWriteFileName,
+  hostWriteKindLabel,
+  UNBOUND_HOST_WRITE_KEY,
+  useHostWrites,
+  type HostWriteGroup,
+  type HostWriteOutcomeRow,
+  type HostWriteRevertSummary,
+  type HostWriteRevertState,
+  type HostWritesController,
+  type UseHostWritesOptions,
+} from "./destinations/run";
+// === end host-write undo ===
 
 // === Phase 3 (PR-3.8) subagents ===
 // `projectSubagents` is a PURE selector over the single canonical run event
