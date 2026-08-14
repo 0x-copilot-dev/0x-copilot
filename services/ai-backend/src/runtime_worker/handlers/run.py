@@ -2063,8 +2063,26 @@ class RuntimeRunHandler:
             run=run,
         )
 
+    def _artifact_family_model_visible(self, *, lane_enabled: bool) -> bool:
+        """Compose the capability gate with the tool-block exposure knob.
+
+        ``lane_enabled`` answers "is this capability composed for this run";
+        the document answers "is it worth 3,326 resident tokens". Both must
+        hold for the model to see the family, and neither can withhold it
+        silently — an unset knob is ``always`` and a malformed one fails at
+        boot. Nothing here touches the lane itself: with the knob ``off`` the
+        repository, the ledger, the approval resume path and the inline
+        artifact-content-part publisher all behave exactly as before.
+        """
+
+        return self.settings.hyperparameters.tool_surface.admits_artifact_family(
+            lane_enabled=lane_enabled
+        )
+
     def _publish_artifact_tool(self, run: RunRecord) -> PublishArtifactTool | None:
-        if not self._artifact_publication_enabled(run):
+        if not self._artifact_family_model_visible(
+            lane_enabled=self._artifact_publication_enabled(run)
+        ):
             return None
         return PublishArtifactTool(
             gateway=OperationGateway(descriptors=DEFAULT_OPERATION_DESCRIPTORS)
@@ -2075,7 +2093,9 @@ class RuntimeRunHandler:
         # artifacts may also change them. Splitting the gates would leave a run
         # able to mint artifacts but not correct them, which is how duplicates
         # accumulate.
-        if not self._artifact_publication_enabled(run):
+        if not self._artifact_family_model_visible(
+            lane_enabled=self._artifact_publication_enabled(run)
+        ):
             return None
         return ReviseArtifactTool(
             gateway=OperationGateway(descriptors=DEFAULT_OPERATION_DESCRIPTORS),
@@ -2111,9 +2131,18 @@ class RuntimeRunHandler:
         ``RuntimeStageLedger``), the durable queue (for an allow-always
         auto-apply), and the C1 policy resolver. The stager never touches an MCP
         client — only the shared effect-dispatch path dispatches.
+
+        It shares the artifact family's exposure knob because it shares their
+        cost profile (1,223 resident tokens of schema for a bulk-write proposal
+        builder most runs never reach for). Withholding it removes only the
+        model-visible proposal builder: already-staged row-set effects still
+        execute through ``runtime_worker.builtin_effect_executor``, which
+        resolves them by effect kind and never by tool availability.
         """
 
-        if not self.settings.execution.surfaces_v2 or run is None:
+        if not self._artifact_family_model_visible(
+            lane_enabled=bool(self.settings.execution.surfaces_v2 and run is not None)
+        ):
             return None
         from agent_runtime.api.stage_commit_queue import (  # noqa: PLC0415
             RuntimeStageCommitQueue,
