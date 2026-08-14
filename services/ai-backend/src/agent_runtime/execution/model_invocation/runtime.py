@@ -1524,27 +1524,58 @@ class ModelInvocationMiddleware(AgentMiddleware):
             else GraphScope.ROOT
         )
 
-    @staticmethod
-    def _occupancy_assembly_plan() -> PromptAssemblyPlan | None:
-        """Return the F2 plan for this call, when one was assembled.
+    @classmethod
+    def _occupancy_assembly_plan(cls) -> PromptAssemblyPlan | None:
+        """Return the plan that decomposes this call's system block (§3.2).
 
-        The plan is what lets the system block be attributed per fragment rather
-        than as one anonymous blob (§3.2), and it is reachable here because
-        ``RuntimeToolControlMiddleware`` binds its F2 handoff around the handler
-        this middleware runs inside. The read is strictly non-mutating: it
-        touches ``result.plan`` and nothing else, and in particular never calls
-        ``consume_rejection``, so the handoff's one-shot cache-fallback permit is
-        untouched and F2's retry semantics are exactly what they were.
+        Two sources, in strict preference order, because the system prompt is
+        assembled **twice** on two different rollout postures and only the first
+        of them used to be readable here:
 
-        ``None`` whenever F2 is off, assembly was skipped, or the handoff is not
-        bound — all of which mean the same thing to the measurement: the system
-        block will be attributed by the third-party adapter and otherwise
-        recorded as undeclared.
+        1. The **per-call** F2 plan, published on the handoff
+           ``RuntimeToolControlMiddleware`` binds around the handler this
+           middleware runs inside. It describes the exact request being sent,
+           including the per-turn fragments a re-assembly adds, so it wins
+           whenever it exists. The read is strictly non-mutating: it touches
+           ``result.plan`` and nothing else, and in particular never calls
+           ``consume_rejection``, so the handoff's one-shot cache-fallback
+           permit is untouched and F2's retry semantics are exactly what they
+           were.
+        2. The **build-time** plan the factory assembled to produce the graph's
+           ``system_prompt``. ``PromptRuntimeBinding.prepare`` returns
+           ``plan=None`` whenever F2's mode is ``OFF``, which is the shipped
+           default, so on an ordinary deployment source 1 is always empty. The
+           bytes it would have described are still there — they are the prompt
+           the graph was built with — and the typed decomposition of them is
+           still there too, held by the binding's fragment provider. This is the
+           whole reason the ledger reported one anonymous 4,853-token
+           ``UNDECLARED`` span covering 58% of a real run's measured input: not
+           a contributor that failed to declare itself, but a declaration that
+           had landed and was never wired to the seam that reads declarations.
+
+        Preferring the per-call plan matters on the paths where the two differ.
+        Under ``ENFORCE`` the request carries the re-assembled prompt, and the
+        build-time plan would describe a prefix of it at best; taking source 1
+        first keeps the measurement matched to the request rather than to the
+        graph.
+
+        Falling back cannot misattribute. ``SystemBlockAttributor`` verifies
+        every located fragment against its ``content_digest`` before labelling a
+        byte range, so a plan that no longer describes the system message —
+        a subagent with its own prompt, a decorated or re-rendered block —
+        attributes nothing and the bytes stay exactly as unexplained as they
+        were. The failure mode of a stale fallback is "no better than before",
+        never "confidently wrong".
+
+        ``None`` when neither source can answer, which means to the measurement
+        what it always meant: the system block is attributed by the third-party
+        adapter and otherwise recorded as unexplained.
         """
 
         try:
             handoff = PromptCacheFallbackContext.current()
-            return None if handoff is None else handoff.result.plan
+            plan = None if handoff is None else handoff.result.plan
+            return plan if plan is not None else cls._build_time_assembly_plan()
         except Exception:  # noqa: BLE001 — measurement never fails a run (§6.4)
             _OCCUPANCY_LOGGER.debug(
                 "Could not read the F2 assembly plan for occupancy measurement; "
@@ -1552,6 +1583,28 @@ class ModelInvocationMiddleware(AgentMiddleware):
                 exc_info=True,
             )
             return None
+
+    @staticmethod
+    def _build_time_assembly_plan() -> PromptAssemblyPlan | None:
+        """Return the run-scoped plan the graph's system prompt was rendered from.
+
+        Read off the prompt runtime binding rather than off a slot of its own.
+        The binding is installed once per harness build, is inherited by every
+        local child task through the same ContextVar, and already owns the
+        fragment provider that holds the plan — so there is exactly one
+        run-lifetime object to bind, unbind and reason about instead of two that
+        could disagree about which build a measurement belongs to.
+
+        Note what is *not* gated on here: F2's mode. The binding exists whenever
+        run control is bound, and its ``mode`` decides whether the prompt is
+        re-assembled per call, not whether one was assembled at build time. A
+        mode check here would re-introduce the exact coupling that made the
+        ledger inert — an observability read inheriting a feature's rollout
+        posture for no reason of its own.
+        """
+
+        binding = RunControlContext.prompt_runtime()
+        return None if binding is None else binding.build_time_plan()
 
     def _capture_occupancy(
         self,
