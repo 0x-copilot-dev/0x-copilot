@@ -535,6 +535,21 @@ class FileSubagentDefinitionStore:
         JsonlIo.rewrite_json(target, model.model_dump(mode="json"))
         return target
 
+    def delete_definition(self, name: str) -> bool:
+        """Remove one declared agent; ``True`` when a file was actually removed.
+
+        The boolean is what lets the write route answer 404 rather than 204 for
+        a name that was never declared — a delete that reports success for a
+        typo is how a user ends up believing an agent is gone while the
+        supervisor still lists it.
+        """
+
+        target = self.root / (FileSkillsStore._safe_name(name) + self._SUFFIX)
+        if not target.is_file():
+            return False
+        target.unlink()
+        return True
+
     def read_raw_definitions(self) -> tuple[dict, ...]:
         """Return every persisted definition as a raw dict, ordered by file name.
 
@@ -613,6 +628,20 @@ class FileAgentStateWiring:
         if self._layout is None:
             return None
         return FileSubagentDefinitionProvider(self._layout)
+
+    def subagent_definition_store(self) -> FileSubagentDefinitionStore | None:
+        """Return the read/write subagent-def store, or ``None`` off the store.
+
+        The provider above is read-only by design — it is the port the
+        supervisor's catalog consumes. This is the writable half, and it exists
+        so the declare/undeclare HTTP route reaches ``subagent_defs/`` through
+        the same gate every other file-store capability does rather than
+        re-deriving the layout from the environment on its own.
+        """
+
+        if self._layout is None:
+            return None
+        return FileSubagentDefinitionStore(self._layout)
 
 
 __all__ = (

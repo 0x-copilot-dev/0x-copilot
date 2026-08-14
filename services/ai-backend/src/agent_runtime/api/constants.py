@@ -247,6 +247,12 @@ class Keys:
         RESTORE_CONVERSATION = "restore_conversation"
         # PRD-H.4 — pin/unpin a conversation (first-class ``pinned`` column).
         PIN_CONVERSATION = "pin_conversation"
+        # Agent-as-configuration: the read/declare/undeclare entry point for
+        # ``subagent_defs/*.json``, which the file store could always read and
+        # write and which nothing could reach.
+        LIST_DECLARED_SUBAGENTS = "list_declared_subagents"
+        DECLARE_SUBAGENT = "declare_subagent"
+        UNDECLARE_SUBAGENT = "undeclare_subagent"
         # Workspace data lifecycle endpoints (export queue + audited delete-all).
         REQUEST_WORKSPACE_EXPORT = "request_workspace_export"
         DELETE_WORKSPACE_DATA = "delete_workspace_data"

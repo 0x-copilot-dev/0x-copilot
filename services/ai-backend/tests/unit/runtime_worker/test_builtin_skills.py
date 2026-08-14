@@ -73,7 +73,11 @@ def test_default_factory_registers_web_search_discipline_skill() -> None:
     # — so the model can decide to fetch the body.
     assert "search" in description
     assert "stop" in description or "diminishing" in description
-    # Allowed tools scope the skill to web_search; no filesystem write/edit.
-    assert "web_search" in skill.manifest.allowed_tools
-    assert "write_file" not in skill.manifest.allowed_tools
-    assert "edit" not in skill.manifest.allowed_tools
+    # Declares NO allowed_tools, and that is the assertion. Since
+    # `capabilities/skills/tool_gate.py` the field is a capability ceiling
+    # enforced at the tool surface, not a note about which tool the guidance
+    # concerns. This Skill causes nothing — it is advice about phrasing a
+    # query — so a `[web_search]` declaration would read as "having read this,
+    # searching is the only thing you may do for the rest of the run" and
+    # would break the ordinary "search, then write it up" turn.
+    assert not skill.manifest.allowed_tools

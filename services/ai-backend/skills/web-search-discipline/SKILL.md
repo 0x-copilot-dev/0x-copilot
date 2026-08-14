@@ -1,11 +1,21 @@
 ---
 name: web-search-discipline
 description: Plan and tighten web_search calls — write high-yield queries, recognize diminishing returns, and stop when the next search will not add information. Load when planning a search batch or when consecutive searches stop helping.
-allowed_tools:
-  - web_search
 ---
 
 # Web search discipline
+
+<!--
+Deliberately declares no `allowed_tools`. That field is a capability ceiling
+enforced at the tool surface (`capabilities/skills/tool_gate.py`), not a note
+about which tool the guidance concerns — and this Skill causes nothing. It is
+advice about how to phrase a query. It used to declare `[web_search]`, written
+when the field was advisory; read as a ceiling that says "once you have read
+this, searching is the only thing you may do for the rest of the run", which no
+author of a query-planning note meant and which would break the ordinary
+"search, then write it up" turn. Declare `allowed_tools` when a Skill scopes
+what the agent may DO; leave it off when the Skill only shapes how it does it.
+-->
 
 The per-tool budget caps `web_search` at 5 invocations per task. Treat that cap as a planning constraint, not a retry budget — most questions finish in 1–3 well-formed queries.
 
