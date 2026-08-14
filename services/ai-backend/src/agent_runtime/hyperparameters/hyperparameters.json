@@ -75,6 +75,7 @@
     "min_window_chars": 200
   },
   "tool_program": {
+    "enabled": false,
     "max_steps": 16,
     "max_concurrency": 4,
     "wall_clock_seconds": 120.0,

@@ -125,7 +125,15 @@ class CheckedInDocumentMixin:
         # fan-out *inside* one program only — the run's tool budget still
         # charges every step, so a wide program spends its allowance faster
         # rather than escaping it.
+        #
+        # ``enabled`` is false in the shipped document and that is a measured
+        # choice, not a placeholder: the tool's schema is 600 of the 9,759
+        # tokens of tool block resident on every model call
+        # (``tools/harness-bench/FINDINGS.md`` §3) and nothing in the measured
+        # set ever invoked it. Flipping this row is the review moment for
+        # accepting that rent back.
         "tool_program": {
+            "enabled": False,
             "max_steps": 16,
             "max_concurrency": 4,
             "wall_clock_seconds": 120.0,
