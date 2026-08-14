@@ -1229,9 +1229,10 @@
 
 .tc-compaction__rule {
   background: var(--color-border-subtle);
-  /* Basis 0 so both sides are equal whatever the label's width, which is what
-     makes the sentence read as centred rather than nudged. */
-  flex: 1 1 0;
+  /* `flex: 1` ⇒ basis 0 ⇒ both sides take an equal share of the leftover,
+     whatever the label's width — which is what makes the sentence read as
+     centred rather than nudged toward one end. */
+  flex: 1;
   height: 1px;
   min-width: 0;
 }

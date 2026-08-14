@@ -3988,7 +3988,23 @@ export interface TodoListSnapshot {
 export interface CompressionNotePayload {
   before_tokens: number;
   after_tokens: number;
+  /**
+   * `before_tokens - after_tokens`, derived by the PRODUCER
+   * (`RuntimeEventProducer.append_compression_note`) rather than accepted from
+   * a caller, so the saving a client prints can never disagree with the two
+   * counts it prints beside it. Declared optional only for envelopes written
+   * before it was emitted; the transcript divider falls back to the difference.
+   */
+  tokens_saved?: number;
   strategy: string;
+  /** Mirrors `Values.CompactionTrigger` (`token_threshold`, …). */
+  trigger?: string;
+  /**
+   * The tool whose result was compacted, when the call was identified. The
+   * server's `display_title` already names it — this is the machine-readable
+   * half of the same fact.
+   */
+  tool_name?: string;
   summary?: string | null;
   payload_refs?: Record<string, unknown>;
 }
