@@ -24,7 +24,12 @@ from __future__ import annotations
 import json
 import time
 
-from _lib import DriverSession, JourneyPlan, byok_provider
+from _lib import (
+    DriverSession,
+    JourneyPlan,
+    byok_provider,
+    wait_for_conversation_id,
+)
 
 
 STATE: dict[str, object] = {}
@@ -517,7 +522,11 @@ TB_TOOL_CARDS = """(()=>JSON.stringify(
     .map((n)=>({
       testId:n.getAttribute('data-testid'),
       status:n.getAttribute('data-tool-status'),
-      text:(n.innerText||'').slice(0,240),
+      // `textContent`, not `innerText`: a tool card is a collapsed <details>,
+      // and innerText answers for what is RENDERED — it came back empty for
+      // every card on the run that first caught this, which silently zeroed
+      // the web_search tally below as well.
+      text:(n.textContent||'').slice(0,240),
     }))
 ))()"""
 
@@ -592,11 +601,9 @@ def tb_run_prompt_and_check(s: DriverSession, limit: int) -> None:
     time.sleep(3)
     cards = json.loads(s.evaluate(TB_TOOL_CARDS) or "[]")
     searches = [c for c in cards if "web_search" in c["text"]]
-    errored = [c for c in cards if c["status"] == "error"]
     s.shot("tool-budget-setting")
 
     log(f"      web_search cards rendered: {len(searches)}")
-    assert not errored, f"errored tool cards: {errored!r}"
 
     # A card is rendered for every *attempted* call, refused ones included, so
     # the card count cannot tell enforcement from execution. The runtime log is
@@ -606,8 +613,11 @@ def tb_run_prompt_and_check(s: DriverSession, limit: int) -> None:
     log_text = (s._user_data_dir / "logs" / "ai-backend.log").read_text(
         encoding="utf-8", errors="replace"
     )
-    refusals = log_text.count("tool_budget_rejected")
+    # `tool_budget_rejected` is a prefix of `tool_budget_rejected_fatal`, so the
+    # raw count includes escalations; subtract them to get the refusals that
+    # were surfaced to the model as tool results.
     fatal = log_text.count("tool_budget_rejected_fatal")
+    refusals = log_text.count("tool_budget_rejected") - fatal
     load_failures = log_text.count("workspace_tool_call_cap_load_failed")
 
     log(f"      budget refusals: {refusals}, fatal escalations: {fatal}")
@@ -618,7 +628,36 @@ def tb_run_prompt_and_check(s: DriverSession, limit: int) -> None:
         "did not reach the runtime"
     )
     assert fatal == 0, "a refusal escalated to a run-fatal error"
-    log(f"PASS  run finalized and the configured limit of {limit} was enforced")
+
+    # What the refusals must LOOK like. The budget did its job, so a card that
+    # says "Failed" is the product lying about a working control — it teaches
+    # users that an enforced limit is a broken run, and it puts a policy
+    # decision into the failure taxonomy that `unavailable` exists to keep it
+    # out of (the same distinction CB-5 pins for a declined capability).
+    #
+    # This is the assertion that first caught the defect. It read `not errored`
+    # then, which is the absence of the very signal this phase produces: the
+    # refusals WERE the errored cards. It now names the state they should be in.
+    declined = [c for c in cards if c["status"] == "unavailable"]
+    errored = [c for c in cards if c["status"] == "error"]
+    assert not errored, (
+        f"a tool call refused by the budget was rendered as a failed step: {errored!r}"
+    )
+    # `>=`, not `==`: the task policy can decline a duplicate dispatch too, and
+    # that refusal is correctly `unavailable` without a budget log line.
+    assert len(declined) >= refusals, (
+        f"the runtime refused {refusals} call(s) but only {len(declined)} card(s) "
+        f"rendered as declined; cards={cards!r}"
+    )
+    # A card with no words is no better than a wrong one — the refusal sentence
+    # is what tells the user the limit held and nothing broke.
+    silent = [c for c in declined if not c["text"].strip()]
+    assert not silent, f"declined cards carried no explanation: {silent!r}"
+
+    log(
+        f"PASS  run finalized, the configured limit of {limit} was enforced, "
+        f"and {len(declined)} refusal(s) rendered as declined rather than failed"
+    )
 
 
 # ── setup ────────────────────────────────────────────────────────────────────
@@ -869,12 +908,181 @@ def cb7_settings_tool_limit_governs_the_runtime(s: DriverSession) -> None:
     and require the run to finalize AND to have executed no more than the cap.
     A limit the UI stores but the runtime ignores passes the first two steps and
     is still broken.
+
+    A limit the runtime enforces and the UI reports as a fault is broken too,
+    which is the second thing this pins: the refusals must render as declined,
+    not failed. See `tb_run_prompt_and_check`.
     """
 
     assert s.wait_for(SETTINGS_BUTTON, 60), "app rail never mounted"
     tb_set_limit(s, LIMIT)
     tb_assert_persisted(s, LIMIT)
     tb_run_prompt_and_check(s, LIMIT)
+
+
+# --------------------------------------------------------------------------
+# CB-8 — the composer's context meter.
+#
+# READ-ONLY, and last: it sends nothing and changes nothing, so it consumes
+# whatever run the phases above left bound rather than paying for another.
+#
+# The class of failure it exists to catch is specific. The meter is fed by two
+# READ endpoints, and the unit tests behind it run on fixtures — so every one of
+# them passes whether or not the packaged stack ever writes an occupancy row.
+# `context_occupancy` is in the event vocabulary but has NO emitter (it is
+# absent from `runtime_worker/streaming_executor.py` where `usage_recorded` is
+# emitted), which is exactly how a meter ships correct, tested, green and
+# permanently blank. This phase asks the running app the same question the
+# composer asks, then checks the pixel agrees with the answer.
+# --------------------------------------------------------------------------
+
+CONTEXT_PILL = "[data-testid=context-pill]"
+CONTEXT_POPOVER = "[data-testid=context-breakdown]"
+
+
+def cb8_context_meter_reflects_the_ledger(s: DriverSession) -> None:
+    """The meter renders what the occupancy ledger actually recorded."""
+
+    # CB-7 ended in Settings. Shared boot: a stale route makes every selector
+    # below miss, and the failure reads as "the meter is gone".
+    s.open_destination("Run")
+    assert s.wait_for("[data-testid=tc-chat]", 30), (
+        "the cockpit never re-opened a bound run"
+    )
+
+    # The route is `#/convo/<id>`, and `wait_for_conversation_id` is the helper
+    # that knows it — including the openNewRun race its docstring describes.
+    # Hand-rolling the regex here got it wrong ("conversations/") and turned a
+    # working meter into a phase that failed on its own premise.
+    conversation_id = wait_for_conversation_id(s, timeout_s=20)
+
+    # What the server says. This is the premise — without it the pill is
+    # CORRECT to render nothing, and asserting its presence would be the bug.
+    occupancy = s.transport(
+        "GET", f"/v1/agent/conversations/{conversation_id}/context/occupancy"
+    )
+    snapshot = (occupancy or {}).get("snapshot")
+    if not snapshot:
+        raise AssertionError(
+            "the occupancy ledger recorded NOTHING for a conversation that has "
+            "just run tools. The composer meter is fed by this endpoint, so it "
+            "will be blank in the packaged app no matter how green the unit "
+            f"tests are. Response was {occupancy!r}"
+        )
+
+    segments = snapshot.get("segments") or []
+    assert segments, (
+        "a snapshot exists but decomposes into no segments — the meter would "
+        "draw an empty bar under a real token count"
+    )
+    assert snapshot.get("graph_scope") == "root", (
+        "the conversation endpoint must answer with the ROOT window; a "
+        f"subagent's window has a different denominator. Got {snapshot!r}"
+    )
+
+    # The pill itself.
+    assert s.wait_for(CONTEXT_PILL, 20), (
+        "the occupancy ledger has a root snapshot but the composer renders no "
+        "context meter — the read reached the server and not the pixel"
+    )
+    s.shot("cb8-context-pill")
+
+    pill_text = (
+        s.evaluate(
+            f"(() => (document.querySelector('{CONTEXT_PILL}')||{{}}).textContent || '')()"
+        )
+        or ""
+    ).strip()
+
+    window_tokens = snapshot.get("context_window_tokens")
+    if window_tokens:
+        # `headroom_pct` is the server's, rendered verbatim, and the unit is
+        # part of the reading: a bare percent next to a filling gauge does not
+        # say which direction it runs.
+        assert "free" in pill_text, (
+            f"the meter must name its unit; rendered {pill_text!r}"
+        )
+        assert "%" in pill_text, (
+            f"a known window must show the server's headroom percent; got {pill_text!r}"
+        )
+    else:
+        # Model absent from pricing: absolute tokens, and NO invented percent.
+        assert "%" not in pill_text, (
+            "the window size is unknown, so any percent here is against a "
+            f"denominator that does not exist; rendered {pill_text!r}"
+        )
+
+    # The breakdown — the part that makes a number actionable.
+    s.click(CONTEXT_PILL)
+    assert s.wait_for(CONTEXT_POPOVER, 10), "the meter did not open its breakdown"
+    # `.ui-pop` fades in over 0.14s. Shooting the instant `wait_for` returns
+    # catches it mid-animation and the evidence reads as a contrast bug.
+    time.sleep(0.4)
+    s.shot("cb8-context-breakdown")
+
+    body = (
+        s.evaluate(
+            f"(() => (document.querySelector('{CONTEXT_POPOVER}')||{{}}).textContent || '')()"
+        )
+        or ""
+    ).strip()
+
+    # Grouped by LIFECYCLE, not by class. Every real request has resident bytes
+    # (the system prompt at minimum), so this group is always expected.
+    assert "Resident" in body, (
+        "the breakdown is not grouped by lifecycle — 'resident' is the group "
+        "that names bytes recurring on EVERY call, which is the whole finding. "
+        f"Rendered: {body!r}"
+    )
+    assert "every call" in body, (
+        f"the resident group lost its multiplier note; rendered {body!r}"
+    )
+
+    rows = (
+        s.evaluate(
+            """
+        (() => [...document.querySelectorAll('[data-testid^=context-row-]')]
+          .map(r => r.textContent.trim()))()
+        """
+        )
+        or []
+    )
+    assert rows, "the breakdown opened with no segment rows at all"
+    assert any(ch.isdigit() for ch in " ".join(rows)), (
+        f"no segment row carried a token figure; rows were {rows!r}"
+    )
+
+    # `undeclared_tokens` is EXPECTED 0 — anything above it is a first-party
+    # contract defect, not drift. Surfacing it here means the journey reports
+    # our own bug rather than passing over it.
+    # `undeclared_tokens` is EXPECTED 0, and above it is a first-party contract
+    # defect in the occupancy DECLARATIONS — a backend bug, not a UI one. This
+    # phase owns the meter, so it asserts what the meter owes: that the defect
+    # is surfaced rather than swallowed. Failing here instead would hold the
+    # meter's verdict hostage to another team's fix, and a permanently red
+    # phase is one people learn to skip past.
+    undeclared = snapshot.get("undeclared_tokens") or 0
+    if undeclared:
+        log(
+            f"      ⚠ BACKEND DEFECT: {undeclared} undeclared tokens "
+            f"({undeclared * 100 // max(1, snapshot.get('estimated_input_tokens') or 1)}% "
+            "of measured input) match no declaration — expected 0"
+        )
+        assert s.present("[data-testid=context-undeclared]"), (
+            f"the ledger measured {undeclared} undeclared tokens and the "
+            "breakdown said nothing about it — the meter is swallowing a "
+            "first-party contract defect it is supposed to surface"
+        )
+    else:
+        assert not s.present("[data-testid=context-undeclared]"), (
+            "no undeclared bytes were measured, but the breakdown is showing "
+            "the defect notice anyway"
+        )
+
+    log(
+        f"context meter: {pill_text!r} over {len(segments)} segments, "
+        f"{len(rows)} rows drawn"
+    )
 
 
 def main() -> int:
@@ -918,6 +1126,11 @@ def main() -> int:
                 "CB-7",
                 "the Settings tool-call limit persists and governs the runtime",
                 cb7_settings_tool_limit_governs_the_runtime,
+            ),
+            (
+                "CB-8",
+                "the composer's context meter reflects the occupancy ledger",
+                cb8_context_meter_reflects_the_ledger,
             ),
         ],
     )

@@ -1,41 +1,47 @@
-"""B8 — wiring tests for :class:`ToolBudgetGuard` + :class:`ToolBudgetGuardedTool`.
+"""B8 — wiring tests for :class:`ToolBudgetGuard` at the seam that enforces it.
 
-The middleware itself is exercised in
-``test_tool_budget_middleware.py``; this file pins the wiring layer:
+The budget *decision* layer is exercised in ``test_tool_budget_middleware.py``;
+this file pins the wiring layer — the guard as it behaves when a real tool call
+crosses :class:`~agent_runtime.capabilities.middleware.runtime_tool_control.RuntimeControlMiddleware`,
+which is the only budget gate on any shipped path:
 
-- :class:`ToolBudgetGuardedTool` admits and delegates to the inner tool
-  when the guard is unbound (passthrough).
-- It rejects with the safe public message when the active guard's
-  middleware says reject.
+- The guard passes a call through untouched when nothing is bound.
+- It admits, charges the ledger, and annotates the model-visible result.
+- It surfaces a hard-cap refusal as a typed ``ToolMessage`` rather than raising,
+  and escalates to a run-fatal error only past the surfaced-rejection allowance.
 - It admits + emits a ``BUDGET_WARNING`` event under soft enforcement.
-- :class:`ToolBudgetGuardedRegistry` wraps every BaseTool in the
-  inner registry's output with the guard.
+- A declared ``content_and_artifact`` pair keeps the artifact out of the
+  model-visible half.
 - The persistence-port snapshot loader feeds the runtime correctly.
+
+These drove ``ToolBudgetGuardedTool`` until it was deleted for being installed
+nowhere; the guard behaviour they cover is unchanged, only the seam differs.
 """
 
 from __future__ import annotations
 
 
+from collections.abc import Callable
+from typing import Any, cast
+
 import pytest
+from langchain.agents.middleware.types import ToolCallRequest
 from langchain_core.messages import ToolMessage
 from langchain_core.tools import BaseTool
 
-from agent_runtime.capabilities.mcp.middleware.compose import ToolSchemaIdentity
+from agent_runtime.capabilities.middleware.runtime_tool_control import (
+    RuntimeControlMiddleware,
+)
 from agent_runtime.capabilities.tool_budget_guard import (
     ToolBudgetGuard,
-    ToolBudgetGuardedRegistry,
-    ToolBudgetGuardedTool,
-    guard_model_tools,
     _Limits,
 )
-from agent_runtime.capabilities.tool_error_policy_tool import ToolErrorPolicyTool
 from agent_runtime.capabilities.tool_budget_middleware import ToolBudgetMiddleware
 from agent_runtime.capabilities.task_policy import (
     RequestFingerprint,
     TaskFamily,
     TaskPolicyProfile,
     ToolOperationOutcome,
-    ToolPolicyRejected,
     ToolUseController,
     ToolUseDisposition,
     ToolUseFeedback,
@@ -48,11 +54,8 @@ from agent_runtime.control_plane.feature_modes import FeatureMode
 from agent_runtime.execution.contracts import StreamEventSource
 from agent_runtime.context.memory import TokenBudgetPolicy
 from agent_runtime.context.tool_result_admission import ToolResultAdmissionAdapter
-from agent_runtime.execution.tool_errors import (
-    BudgetExceeded,
-    RunFatalToolError,
-    ToolBudgetRejected,
-)
+from agent_runtime.execution.tool_errors import BudgetExceeded
+from agent_runtime.execution.tool_refusals import ToolRefusal, ToolRefusals
 from agent_runtime.persistence.records import (
     ToolBudgetEnforcement,
     ToolBudgetRecord,
@@ -216,37 +219,119 @@ def _make_run() -> object:
 # --- guarded-tool semantics --------------------------------------------------
 
 
-class TestToolBudgetGuardedTool(_FakeProducerMixin):
-    def test_passthrough_when_no_guard_bound_sync(self) -> None:
-        inner = _RecordingTool()
-        wrapped = ToolBudgetGuardedTool(
-            name=inner.name,
-            description=inner.description,
-            inner=inner,
+class _SeamDispatchMixin:
+    """Drive a tool the way the shipped runtime does — through the middleware.
+
+    ``RuntimeControlMiddleware`` is the only budget gate on any shipped path,
+    so it is the only place these guard behaviours can honestly be pinned. The
+    handler hands the whole tool call to LangChain (``inner.ainvoke(tool_call)``)
+    rather than calling ``_arun`` directly, because that is what ``ToolNode``
+    does and it is what builds the ``ToolMessage`` — including splitting a
+    declared ``content_and_artifact`` pair before the seam ever sees it.
+    """
+
+    @staticmethod
+    def _request(
+        tool: BaseTool | None,
+        *,
+        name: str = "echo",
+        call_id: str = "call-1",
+        args: dict[str, object] | None = None,
+    ) -> ToolCallRequest:
+        return ToolCallRequest(
+            tool_call={
+                "name": name,
+                "args": {"input": "hi"} if args is None else args,
+                "id": call_id,
+                "type": "tool_call",
+            },
+            tool=tool,
+            state={},
+            runtime=cast(Any, object()),
         )
-        result = wrapped._run("hello")
-        assert result == "echo-ok"
-        # Inner tool was actually invoked; the guard didn't gate it.
+
+    @classmethod
+    async def _adispatch(
+        cls,
+        inner: BaseTool,
+        *,
+        name: str = "echo",
+        call_id: str = "call-1",
+        args: dict[str, object] | None = None,
+    ) -> ToolMessage:
+        """Return the ``ToolMessage`` the seam publishes for one call."""
+
+        request = cls._request(inner, name=name, call_id=call_id, args=args)
+
+        async def handler(inner_request: ToolCallRequest) -> ToolMessage:
+            return cast(ToolMessage, await inner.ainvoke(dict(inner_request.tool_call)))
+
+        return cast(
+            ToolMessage,
+            await RuntimeControlMiddleware().awrap_tool_call(request, handler),
+        )
+
+    @classmethod
+    def _dispatch(
+        cls,
+        inner: BaseTool,
+        *,
+        name: str = "echo",
+        call_id: str = "call-1",
+        args: dict[str, object] | None = None,
+    ) -> ToolMessage:
+        """Synchronous twin of :meth:`_adispatch`."""
+
+        request = cls._request(inner, name=name, call_id=call_id, args=args)
+
+        def handler(inner_request: ToolCallRequest) -> ToolMessage:
+            return cast(ToolMessage, inner.invoke(dict(inner_request.tool_call)))
+
+        return cast(
+            ToolMessage,
+            RuntimeControlMiddleware().wrap_tool_call(request, handler),
+        )
+
+    @staticmethod
+    def _refusal(message: ToolMessage) -> ToolRefusal:
+        """Assert ``message`` is a surfaced refusal and return its typed marker."""
+
+        assert message.status == "error"
+        refusal = ToolRefusals.read(message)
+        assert refusal is not None, "a refusal must carry its typed marker"
+        return refusal
+
+
+class TestToolBudgetGuardAtTheSeam(_FakeProducerMixin, _SeamDispatchMixin):
+    """Guard behaviour observed where it actually runs.
+
+    Every one of these used to drive ``ToolBudgetGuardedTool``. The wrapper is
+    gone; the guard is not, and neither is any behaviour below. The one thing
+    that genuinely changed is how a refusal arrives: the wrapper raised out of
+    the tool, which the error policy turned into a ``status="success"`` return
+    published as ``completed``. The seam authors the message itself, so a
+    refused call is an ``error`` carrying a typed marker.
+    """
+
+    async def test_passthrough_when_no_guard_bound(self) -> None:
+        inner = _RecordingTool()
+
+        message = await self._adispatch(inner)
+
+        assert message.content == "echo-ok"
+        # Inner tool was actually invoked; the seam didn't gate it.
         assert len(inner.calls) == 1
 
-    async def test_passthrough_when_no_guard_bound_async(self) -> None:
+    def test_passthrough_when_no_guard_bound_sync(self) -> None:
         inner = _RecordingTool()
-        wrapped = ToolBudgetGuardedTool(
-            name=inner.name,
-            description=inner.description,
-            inner=inner,
-        )
-        result = await wrapped._arun("hello")
-        assert result == "echo-ok"
+
+        message = self._dispatch(inner)
+
+        assert message.content == "echo-ok"
         assert len(inner.calls) == 1
 
     async def test_admits_under_cap_and_records_into_ledger(self) -> None:
         inner = _RecordingTool()
-        wrapped = ToolBudgetGuardedTool(
-            name=inner.name,
-            description=inner.description,
-            inner=inner,
-        )
         ledger = ToolCallLedger(run_id="run-1")
         guard = ToolBudgetGuard(
             middleware=ToolBudgetMiddleware(
@@ -256,11 +341,11 @@ class TestToolBudgetGuardedTool(_FakeProducerMixin):
         )
         token = ToolBudgetGuard.bind_for_run(guard)
         try:
-            result = await wrapped._arun("hi")
+            message = await self._adispatch(inner)
         finally:
             ToolBudgetGuard.unbind(token)
         # The tool's own output leads; a low-headroom cap (3) also annotates it.
-        assert result.startswith("echo-ok")
+        assert message.content.startswith("echo-ok")
         # One admitted call landed on the ledger.
         assert ledger.charged_calls("echo") == 1
 
@@ -268,11 +353,6 @@ class TestToolBudgetGuardedTool(_FakeProducerMixin):
         self,
     ) -> None:
         inner = _RecordingTool()
-        wrapped = ToolBudgetGuardedTool(
-            name=inner.name,
-            description=inner.description,
-            inner=inner,
-        )
         ledger = ToolCallLedger(run_id="run-task-policy")
         controller = ToolUseController(
             profile=TaskPolicyProfile(
@@ -292,12 +372,15 @@ class TestToolBudgetGuardedTool(_FakeProducerMixin):
         )
         token = ToolBudgetGuard.bind_for_run(guard)
         try:
-            assert (await wrapped._arun("same request")).startswith("echo-ok")
-            with pytest.raises(ToolPolicyRejected):
-                await wrapped._arun("same request")
+            first = await self._adispatch(inner, args={"input": "same request"})
+            assert first.content.startswith("echo-ok")
+            # ``ToolPolicyRejected`` is a ``ToolBudgetRejected``, so the seam
+            # surfaces it as a refusal rather than raising it into the graph.
+            repeat = await self._adispatch(inner, args={"input": "same request"})
         finally:
             ToolBudgetGuard.unbind(token)
 
+        self._refusal(repeat)
         assert len(inner.calls) == 1
         assert ledger.charged_calls("echo") == 1
 
@@ -305,11 +388,6 @@ class TestToolBudgetGuardedTool(_FakeProducerMixin):
         self,
     ) -> None:
         inner = _RecordingTool()
-        wrapped = ToolBudgetGuardedTool(
-            name=inner.name,
-            description=inner.description,
-            inner=inner,
-        )
         profile = TaskPolicyProfile(
             profile_id="research",
             revision="v1",
@@ -325,22 +403,19 @@ class TestToolBudgetGuardedTool(_FakeProducerMixin):
         )
         token = ToolBudgetGuard.bind_for_run(guard)
         try:
-            assert await wrapped._arun("same request") == "echo-ok"
-            assert await wrapped._arun("same request") == "echo-ok"
+            first = await self._adispatch(inner, args={"input": "same request"})
+            second = await self._adispatch(inner, args={"input": "same request"})
         finally:
             ToolBudgetGuard.unbind(token)
 
+        assert first.content == "echo-ok"
+        assert second.content == "echo-ok"
         assert len(inner.calls) == 2
 
     async def test_resume_overlay_preserves_prior_capability_budget_spend(
         self,
     ) -> None:
         inner = _RecordingTool()
-        wrapped = ToolBudgetGuardedTool(
-            name=inner.name,
-            description=inner.description,
-            inner=inner,
-        )
         progress = TaskPolicyProgressProjection(
             profile_id="research",
             profile_revision="v1",
@@ -362,11 +437,11 @@ class TestToolBudgetGuardedTool(_FakeProducerMixin):
         )
         token = ToolBudgetGuard.bind_for_run(guard)
         try:
-            with pytest.raises(ToolBudgetRejected):
-                await wrapped._arun("after approval")
+            message = await self._adispatch(inner, args={"input": "after approval"})
         finally:
             ToolBudgetGuard.unbind(token)
 
+        self._refusal(message)
         assert inner.calls == []
 
     def test_model_turn_limit_enforces_only_in_enforce_mode(self) -> None:
@@ -400,11 +475,6 @@ class TestToolBudgetGuardedTool(_FakeProducerMixin):
                 return await super()._arun(*args, **kwargs)
 
         inner = _ObservedTool()
-        wrapped = ToolBudgetGuardedTool(
-            name=inner.name,
-            description=inner.description,
-            inner=inner,
-        )
         guard = ToolBudgetGuard(
             middleware=ToolBudgetMiddleware(()),
             ledger=ToolCallLedger(run_id="run-async-controller"),
@@ -413,7 +483,7 @@ class TestToolBudgetGuardedTool(_FakeProducerMixin):
         )
         token = ToolBudgetGuard.bind_for_run(guard)
         try:
-            assert await wrapped._arun("request") == "echo-ok"
+            assert (await self._adispatch(inner)).content == "echo-ok"
         finally:
             ToolBudgetGuard.unbind(token)
 
@@ -433,14 +503,9 @@ class TestToolBudgetGuardedTool(_FakeProducerMixin):
             task_policy_controller=_AsyncDurableController([], outcomes),
             task_request_fingerprint=RequestFingerprint(key=b"f" * 32),
         )
-        wrapped = ToolBudgetGuardedTool(
-            name="echo",
-            description="echo",
-            inner=_RecordingTool(),
-        )
         token = ToolBudgetGuard.bind_for_run(guard)
         try:
-            await wrapped._arun("request")
+            await self._adispatch(_RecordingTool())
         finally:
             ToolBudgetGuard.unbind(token)
 
@@ -471,58 +536,46 @@ class TestToolBudgetGuardedTool(_FakeProducerMixin):
         )
 
     async def test_hard_reject_is_surfaced_not_fatal(self) -> None:
-        """HARD-cap rejection raises the NON-fatal ``ToolBudgetRejected``.
+        """A HARD-cap refusal is a tool result, not a run-ending error.
 
         Refusing the call is what bounds the spend — the inner tool never
-        runs either way. Raising a run-fatal error on top of that would
-        additionally discard every tool result the run had already
-        gathered, which is why the cap is surfaced to the model instead:
-        the policy turns it into a ``ToolMessage`` and the model
-        finalizes with what it has.
+        runs either way. Failing the run on top of that would additionally
+        discard every tool result already gathered, which is why the cap is
+        surfaced to the model instead: it finalizes with what it has.
         """
 
         inner = _RecordingTool()
-        wrapped = ToolBudgetGuardedTool(
-            name=inner.name,
-            description=inner.description,
-            inner=inner,
-        )
         guard = self._capped_guard(run_id="run-2")
         token = ToolBudgetGuard.bind_for_run(guard)
         try:
-            with pytest.raises(ToolBudgetRejected) as caught:
-                await wrapped._arun("hi")
+            message = await self._adispatch(inner)
         finally:
             ToolBudgetGuard.unbind(token)
-        # Non-fatal: the run handler must not treat this as terminal.
-        assert not isinstance(caught.value, RunFatalToolError)
-        assert "echo" in caught.value.safe_summary
-        assert "budget" in caught.value.safe_summary.lower()
+
+        refusal = self._refusal(message)
+        assert refusal.code == "tool_budget_exceeded"
+        assert "echo" in str(message.content)
+        assert "budget" in str(message.content).lower()
         assert inner.calls == []  # inner tool short-circuited — spend is bounded.
 
     async def test_rejection_escalates_to_fatal_after_grace_exhausted(self) -> None:
         """A model that answers every refusal with another call still terminates.
 
-        The allowance exists so a looping model cannot spin forever on
-        free refusals; the first calls past the cap are surfaced, and
-        only the ones beyond the allowance fail the run.
+        The allowance exists so a looping model cannot spin forever on free
+        refusals; the first calls past the cap are surfaced, and only the ones
+        beyond the allowance fail the run.
         """
 
         inner = _RecordingTool()
-        wrapped = ToolBudgetGuardedTool(
-            name=inner.name,
-            description=inner.description,
-            inner=inner,
-        )
         guard = self._capped_guard(run_id="run-2b", max_surfaced_rejections=3)
         token = ToolBudgetGuard.bind_for_run(guard)
         try:
             for _ in range(3):
-                with pytest.raises(ToolBudgetRejected):
-                    await wrapped._arun("hi")
-            # Fourth refusal is past the allowance → run-fatal.
+                self._refusal(await self._adispatch(inner))
+            # Fourth refusal is past the allowance → run-fatal, and a fatal
+            # error is raised into the graph rather than surfaced.
             with pytest.raises(BudgetExceeded):
-                await wrapped._arun("hi")
+                await self._adispatch(inner)
         finally:
             ToolBudgetGuard.unbind(token)
         assert inner.calls == []  # never executed, at any point.
@@ -531,18 +584,14 @@ class TestToolBudgetGuardedTool(_FakeProducerMixin):
         """The sync dispatch path shares the async path's non-fatal behavior."""
 
         inner = _RecordingTool()
-        wrapped = ToolBudgetGuardedTool(
-            name=inner.name,
-            description=inner.description,
-            inner=inner,
-        )
         guard = self._capped_guard(run_id="run-2c")
         token = ToolBudgetGuard.bind_for_run(guard)
         try:
-            with pytest.raises(ToolBudgetRejected):
-                wrapped._run("hi")
+            message = self._dispatch(inner)
         finally:
             ToolBudgetGuard.unbind(token)
+
+        self._refusal(message)
         assert inner.calls == []
 
     def test_default_allowance_leaves_room_for_a_parallel_fan_out(self) -> None:
@@ -558,10 +607,6 @@ class TestToolBudgetGuardedTool(_FakeProducerMixin):
     async def test_result_stays_clean_while_there_is_headroom(self) -> None:
         """No note until the tail is in sight — every result would be noise."""
 
-        inner = _RecordingTool()
-        wrapped = ToolBudgetGuardedTool(
-            name=inner.name, description=inner.description, inner=inner
-        )
         guard = ToolBudgetGuard(
             middleware=ToolBudgetMiddleware(
                 [_budget(org_id=None, tool_name="echo", max_calls_per_run=10)]
@@ -570,10 +615,31 @@ class TestToolBudgetGuardedTool(_FakeProducerMixin):
         )
         token = ToolBudgetGuard.bind_for_run(guard)
         try:
-            result = await wrapped._arun("hi")
+            message = await self._adispatch(_RecordingTool())
         finally:
             ToolBudgetGuard.unbind(token)
-        assert result == "echo-ok"
+        assert message.content == "echo-ok"
+
+    @staticmethod
+    def _offloading_guard(
+        *,
+        run_id: str,
+        writer: Callable[[str], str],
+    ) -> ToolBudgetGuard:
+        return ToolBudgetGuard(
+            middleware=ToolBudgetMiddleware(
+                [_budget(org_id=None, tool_name="echo", max_calls_per_run=10)]
+            ),
+            ledger=ToolCallLedger(run_id=run_id),
+            tool_result_admission=ToolResultAdmissionAdapter(
+                writer,
+                policy=TokenBudgetPolicy(
+                    max_input_tokens=4_000,
+                    recent_context_ratio=0.25,
+                    summary_threshold_ratio=0.85,
+                ),
+            ),
+        )
 
     async def test_bound_admission_offloads_before_async_result_reaches_model(
         self,
@@ -583,38 +649,23 @@ class TestToolBudgetGuardedTool(_FakeProducerMixin):
         writes: list[str] = []
         reference = "/large_tool_results/async-result"
         inner = _ResultTool(result=raw)
-        wrapped = ToolBudgetGuardedTool(
-            name=inner.name,
-            description=inner.description,
-            inner=inner,
-        )
-        guard = ToolBudgetGuard(
-            middleware=ToolBudgetMiddleware(
-                [_budget(org_id=None, tool_name="echo", max_calls_per_run=10)]
-            ),
-            ledger=ToolCallLedger(run_id="run-admission-async"),
-            tool_result_admission=ToolResultAdmissionAdapter(
-                lambda content: writes.append(content) or reference,
-                policy=TokenBudgetPolicy(
-                    max_input_tokens=4_000,
-                    recent_context_ratio=0.25,
-                    summary_threshold_ratio=0.85,
-                ),
-            ),
+        guard = self._offloading_guard(
+            run_id="run-admission-async",
+            writer=lambda content: writes.append(content) or reference,
         )
 
         token = ToolBudgetGuard.bind_for_run(guard)
         try:
-            result = await wrapped._arun("hi")
+            message = await self._adispatch(inner)
         finally:
             ToolBudgetGuard.unbind(token)
 
         assert inner.call_count == 1
         assert writes == [raw]
-        assert isinstance(result, str)
-        assert reference in result
-        assert unique_tail not in result
-        assert len(result) <= 4_096
+        content = str(message.content)
+        assert reference in content
+        assert unique_tail not in content
+        assert len(content) <= 4_096
 
     def test_bound_admission_offloads_before_sync_result_reaches_model(self) -> None:
         unique_tail = "UNIQUE_SYNC_RAW_TAIL"
@@ -622,69 +673,41 @@ class TestToolBudgetGuardedTool(_FakeProducerMixin):
         writes: list[str] = []
         reference = "/large_tool_results/sync-result"
         inner = _ResultTool(result=raw)
-        wrapped = ToolBudgetGuardedTool(
-            name=inner.name,
-            description=inner.description,
-            inner=inner,
-        )
-        guard = ToolBudgetGuard(
-            middleware=ToolBudgetMiddleware(
-                [_budget(org_id=None, tool_name="echo", max_calls_per_run=10)]
-            ),
-            ledger=ToolCallLedger(run_id="run-admission-sync"),
-            tool_result_admission=ToolResultAdmissionAdapter(
-                lambda content: writes.append(content) or reference,
-                policy=TokenBudgetPolicy(
-                    max_input_tokens=4_000,
-                    recent_context_ratio=0.25,
-                    summary_threshold_ratio=0.85,
-                ),
-            ),
+        guard = self._offloading_guard(
+            run_id="run-admission-sync",
+            writer=lambda content: writes.append(content) or reference,
         )
 
         token = ToolBudgetGuard.bind_for_run(guard)
         try:
-            result = wrapped._run("hi")
+            message = self._dispatch(inner)
         finally:
             ToolBudgetGuard.unbind(token)
 
         assert inner.call_count == 1
         assert writes == [raw]
-        assert isinstance(result, str)
-        assert reference in result
-        assert unique_tail not in result
-        assert len(result) <= 4_096
+        content = str(message.content)
+        assert reference in content
+        assert unique_tail not in content
+        assert len(content) <= 4_096
 
     async def test_bound_admission_preserves_small_string_exactly(self) -> None:
         writes: list[str] = []
         inner = _ResultTool(result="small exact result")
-        wrapped = ToolBudgetGuardedTool(
-            name=inner.name,
-            description=inner.description,
-            inner=inner,
-        )
-        guard = ToolBudgetGuard(
-            middleware=ToolBudgetMiddleware(
-                [_budget(org_id=None, tool_name="echo", max_calls_per_run=10)]
-            ),
-            ledger=ToolCallLedger(run_id="run-admission-inline"),
-            tool_result_admission=ToolResultAdmissionAdapter(
-                lambda content: writes.append(content) or "/large_tool_results/unused",
-                policy=TokenBudgetPolicy(
-                    max_input_tokens=4_000,
-                    recent_context_ratio=0.25,
-                    summary_threshold_ratio=0.85,
-                ),
+        guard = self._offloading_guard(
+            run_id="run-admission-inline",
+            writer=lambda content: (
+                writes.append(content) or "/large_tool_results/unused"
             ),
         )
 
         token = ToolBudgetGuard.bind_for_run(guard)
         try:
-            result = await wrapped._arun("hi")
+            message = await self._adispatch(inner)
         finally:
             ToolBudgetGuard.unbind(token)
 
-        assert result == "small exact result"
+        assert message.content == "small exact result"
         assert writes == []
 
     async def test_bound_admission_failure_never_falls_back_to_raw_result(
@@ -692,34 +715,19 @@ class TestToolBudgetGuardedTool(_FakeProducerMixin):
     ) -> None:
         raw = "oversized-sensitive-result-" * 1_000
         inner = _ResultTool(result=raw)
-        wrapped = ToolBudgetGuardedTool(
-            name=inner.name,
-            description=inner.description,
-            inner=inner,
-        )
 
         def fail_offload(_content: str) -> str:
             raise OSError("offload unavailable")
 
-        guard = ToolBudgetGuard(
-            middleware=ToolBudgetMiddleware(
-                [_budget(org_id=None, tool_name="echo", max_calls_per_run=10)]
-            ),
-            ledger=ToolCallLedger(run_id="run-admission-failure"),
-            tool_result_admission=ToolResultAdmissionAdapter(
-                fail_offload,
-                policy=TokenBudgetPolicy(
-                    max_input_tokens=4_000,
-                    recent_context_ratio=0.25,
-                    summary_threshold_ratio=0.85,
-                ),
-            ),
+        guard = self._offloading_guard(
+            run_id="run-admission-failure",
+            writer=fail_offload,
         )
 
         token = ToolBudgetGuard.bind_for_run(guard)
         try:
             with pytest.raises(OSError, match="offload unavailable"):
-                await wrapped._arun("hi")
+                await self._adispatch(inner)
         finally:
             ToolBudgetGuard.unbind(token)
 
@@ -734,9 +742,6 @@ class TestToolBudgetGuardedTool(_FakeProducerMixin):
         """
 
         inner = _RecordingTool()
-        wrapped = ToolBudgetGuardedTool(
-            name=inner.name, description=inner.description, inner=inner
-        )
         guard = ToolBudgetGuard(
             middleware=ToolBudgetMiddleware(
                 [_budget(org_id=None, tool_name="echo", max_calls_per_run=4)]
@@ -745,7 +750,10 @@ class TestToolBudgetGuardedTool(_FakeProducerMixin):
         )
         token = ToolBudgetGuard.bind_for_run(guard)
         try:
-            results = [await wrapped._arun("hi") for _ in range(4)]
+            results = [
+                str((await self._adispatch(inner, call_id=f"call-{index}")).content)
+                for index in range(4)
+            ]
         finally:
             ToolBudgetGuard.unbind(token)
 
@@ -762,10 +770,6 @@ class TestToolBudgetGuardedTool(_FakeProducerMixin):
     async def test_note_says_the_count_is_per_turn(self) -> None:
         """A run IS a turn — the model must not carry an exhausted budget over."""
 
-        inner = _RecordingTool()
-        wrapped = ToolBudgetGuardedTool(
-            name=inner.name, description=inner.description, inner=inner
-        )
         guard = ToolBudgetGuard(
             middleware=ToolBudgetMiddleware(
                 [_budget(org_id=None, tool_name="echo", max_calls_per_run=1)]
@@ -774,18 +778,14 @@ class TestToolBudgetGuardedTool(_FakeProducerMixin):
         )
         token = ToolBudgetGuard.bind_for_run(guard)
         try:
-            result = await wrapped._arun("hi")
+            message = await self._adispatch(_RecordingTool())
         finally:
             ToolBudgetGuard.unbind(token)
-        assert "this turn" in result
+        assert "this turn" in str(message.content)
 
     async def test_ungoverned_tool_gets_no_note(self) -> None:
         """With no budget there is no honest number to report."""
 
-        inner = _RecordingTool()
-        wrapped = ToolBudgetGuardedTool(
-            name=inner.name, description=inner.description, inner=inner
-        )
         guard = ToolBudgetGuard(
             middleware=ToolBudgetMiddleware(
                 [_budget(org_id=None, tool_name="some_other_tool")]
@@ -794,10 +794,10 @@ class TestToolBudgetGuardedTool(_FakeProducerMixin):
         )
         token = ToolBudgetGuard.bind_for_run(guard)
         try:
-            result = await wrapped._arun("hi")
+            message = await self._adispatch(_RecordingTool())
         finally:
             ToolBudgetGuard.unbind(token)
-        assert result == "echo-ok"
+        assert message.content == "echo-ok"
 
     async def test_rejection_names_the_requested_tool_not_the_wildcard(self) -> None:
         """A wildcard budget must still name the tool the model actually called.
@@ -807,11 +807,6 @@ class TestToolBudgetGuardedTool(_FakeProducerMixin):
         """
 
         inner = _RecordingTool()
-        wrapped = ToolBudgetGuardedTool(
-            name=inner.name,
-            description=inner.description,
-            inner=inner,
-        )
         ledger = ToolCallLedger(run_id="run-2d")
         ledger.started("prior-0", tool_name="echo", budget_scoped=True)
         guard = ToolBudgetGuard(
@@ -822,20 +817,16 @@ class TestToolBudgetGuardedTool(_FakeProducerMixin):
         )
         token = ToolBudgetGuard.bind_for_run(guard)
         try:
-            with pytest.raises(ToolBudgetRejected) as caught:
-                await wrapped._arun("hi")
+            message = await self._adispatch(inner)
         finally:
             ToolBudgetGuard.unbind(token)
-        assert "'echo'" in caught.value.safe_summary
-        assert "'*'" not in caught.value.safe_summary
+
+        refusal = self._refusal(message)
+        assert "'echo'" in refusal.safe_message
+        assert "'*'" not in refusal.safe_message
 
     async def test_soft_warn_emits_budget_warning_and_admits(self) -> None:
         inner = _RecordingTool()
-        wrapped = ToolBudgetGuardedTool(
-            name=inner.name,
-            description=inner.description,
-            inner=inner,
-        )
         producer = self._FakeProducer()
         ledger = ToolCallLedger(run_id="run-3")
         for index in range(2):
@@ -857,10 +848,10 @@ class TestToolBudgetGuardedTool(_FakeProducerMixin):
         )
         token = ToolBudgetGuard.bind_for_run(guard)
         try:
-            result = await wrapped._arun("hi")
+            message = await self._adispatch(inner)
         finally:
             ToolBudgetGuard.unbind(token)
-        assert result.startswith("echo-ok")
+        assert str(message.content).startswith("echo-ok")
         # Inner tool ran (soft = admit) AND the warning was emitted.
         assert len(inner.calls) == 1
         assert len(producer.events) == 1
@@ -873,55 +864,8 @@ class TestToolBudgetGuardedTool(_FakeProducerMixin):
         assert payload["enforcement"] == "soft"
 
 
-# --- registry wrapper --------------------------------------------------------
-
-
-class _StaticRegistry:
-    """Tool registry stub returning a fixed list."""
-
-    def __init__(self, tools: tuple[object, ...]) -> None:
-        self._tools = tools
-
-    def list_available_tools(self, _context: object) -> tuple[object, ...]:
-        return self._tools
-
-
-class TestToolBudgetGuardedRegistry:
-    def test_wraps_basetool_instances(self) -> None:
-        inner = _RecordingTool()
-        registry = ToolBudgetGuardedRegistry(inner=_StaticRegistry((inner,)))
-        rendered = registry.list_available_tools(context=None)
-        assert len(rendered) == 1
-        wrapped = rendered[0]
-        assert isinstance(wrapped, ToolBudgetGuardedTool)
-        # Same name + description so the model surface is unchanged.
-        assert wrapped.name == inner.name
-        assert wrapped.description == inner.description
-
-    def test_passes_through_non_basetool_objects(self) -> None:
-        # Some adapters return internal descriptor objects rather than
-        # full LangChain BaseTool instances. Those must not be wrapped
-        # (the guard only knows how to gate BaseTool dispatch).
-        sentinel = object()
-        registry = ToolBudgetGuardedRegistry(inner=_StaticRegistry((sentinel,)))
-        rendered = registry.list_available_tools(context=None)
-        assert rendered == (sentinel,)
-
-    def test_double_wrap_is_idempotent(self) -> None:
-        inner = _RecordingTool()
-        already_wrapped = ToolBudgetGuardedTool(
-            name=inner.name,
-            description=inner.description,
-            inner=inner,
-        )
-        registry = ToolBudgetGuardedRegistry(inner=_StaticRegistry((already_wrapped,)))
-        rendered = registry.list_available_tools(context=None)
-        # The wrapper recognises its own kind and short-circuits.
-        assert rendered[0] is already_wrapped
-
-
-class ContentAndArtifactBudgetMixin:
-    """Builders for the dispatch-surface + note-shape regression."""
+class ContentAndArtifactBudgetMixin(_SeamDispatchMixin):
+    """Builders for the declared-pair regression at the seam."""
 
     CONTENT: list[dict[str, str]] = [{"title": "T", "link": "https://example.test/a"}]
     ARTIFACT: list[dict[str, str]] = [{"raw": "payload", "secret": "artifact-only"}]
@@ -929,9 +873,6 @@ class ContentAndArtifactBudgetMixin:
 
     def _inner(self) -> _ContentAndArtifactTool:
         return _ContentAndArtifactTool(content=self.CONTENT, artifact=self.ARTIFACT)
-
-    def _guarded(self, inner: BaseTool) -> ToolBudgetGuardedTool:
-        return guard_model_tools([inner])[0]  # type: ignore[return-value]
 
     def _bind_notifying_guard(self) -> object:
         # A cap of 3 leaves little headroom, so ``usage_note`` renders a
@@ -944,99 +885,53 @@ class ContentAndArtifactBudgetMixin:
         )
         return ToolBudgetGuard.bind_for_run(guard)
 
-    def _tool_call(self) -> dict[str, object]:
-        return {
-            "name": "echo",
-            "args": {},
-            "id": self.TOOL_CALL_ID,
-            "type": "tool_call",
-        }
 
+class TestContentAndArtifactDispatchAtTheSeam(ContentAndArtifactBudgetMixin):
+    """A declared ``content_and_artifact`` pair keeps its halves apart.
 
-class TestGuardedContentAndArtifactDispatch(ContentAndArtifactBudgetMixin):
-    def test_wrap_propagates_every_identity_field(self) -> None:
-        inner = self._inner()
+    The wrapper had to split the pair itself, because it sat *inside* the tool
+    and saw the raw return. The seam sits outside LangChain's own unpacking, so
+    by the time it annotates, ``content`` and ``artifact`` are already separate
+    fields — and only ``content`` is ever touched. Same invariant, one fewer
+    place to get it wrong.
+    """
 
-        wrapped = self._guarded(inner)
-
-        for field in (
-            *ToolSchemaIdentity.MODEL_SURFACE,
-            *ToolSchemaIdentity.DISPATCH_SURFACE,
-        ):
-            assert getattr(wrapped, field) == getattr(inner, field), field
-
-    def test_wrap_carries_the_inner_response_format(self) -> None:
-        assert self._guarded(self._inner()).response_format == "content_and_artifact"
-
-    async def test_budget_note_keeps_the_declared_pair_a_pair(self) -> None:
-        wrapped = self._guarded(self._inner())
+    async def test_the_artifact_never_reaches_the_model_visible_half(self) -> None:
         token = self._bind_notifying_guard()
         try:
-            result = await wrapped._arun()
-        finally:
-            ToolBudgetGuard.unbind(token)
-
-        assert isinstance(result, tuple)
-        assert len(result) == 2
-        # The note landed on the model-visible half only.
-        assert result[0][: len(self.CONTENT)] == self.CONTENT
-        assert any(isinstance(entry, str) for entry in result[0])
-        assert result[1] == self.ARTIFACT
-
-    async def test_artifact_reaches_the_tool_message_through_the_guard(self) -> None:
-        wrapped = self._guarded(self._inner())
-        token = self._bind_notifying_guard()
-        try:
-            message = await wrapped.ainvoke(self._tool_call())
+            message = await self._adispatch(
+                self._inner(), call_id=self.TOOL_CALL_ID, args={}
+            )
         finally:
             ToolBudgetGuard.unbind(token)
 
         assert isinstance(message, ToolMessage)
         assert message.artifact == self.ARTIFACT
-        assert "artifact-only" not in message.content
+        assert "artifact-only" not in str(message.content)
 
-    async def test_plain_content_tool_keeps_the_undivided_annotation_path(self) -> None:
-        wrapped = self._guarded(_RecordingTool())
+    async def test_the_budget_note_lands_on_the_content_half_only(self) -> None:
         token = self._bind_notifying_guard()
         try:
-            result = await wrapped._arun("hi")
+            message = await self._adispatch(
+                self._inner(), call_id=self.TOOL_CALL_ID, args={}
+            )
         finally:
             ToolBudgetGuard.unbind(token)
 
-        assert isinstance(result, str)
-        assert result.startswith("echo-ok")
+        # Annotated, not replaced: the tool's own content still leads.
+        assert "example.test" in str(message.content)
+        # The artifact is passed through byte-identically — never annotated.
+        assert message.artifact == self.ARTIFACT
 
+    async def test_plain_content_tool_keeps_the_undivided_annotation_path(self) -> None:
+        token = self._bind_notifying_guard()
+        try:
+            message = await self._adispatch(_RecordingTool())
+        finally:
+            ToolBudgetGuard.unbind(token)
 
-def test_full_model_surface_wrapper_is_idempotent_for_injected_tools() -> None:
-    """Factory-injected tools must receive the same guard as registry tools."""
-
-    original = _RecordingTool()
-    once = guard_model_tools([original])
-    twice = guard_model_tools(list(once))
-
-    assert isinstance(once[0], ToolBudgetGuardedTool)
-    assert twice == once
-
-
-def test_full_model_surface_preserves_error_policy_outside_nested_guard() -> None:
-    """Registry composition stays ErrorPolicy(Budget(tool)), without a second gate."""
-
-    original = _RecordingTool()
-    guarded = ToolBudgetGuardedTool(
-        name=original.name,
-        description=original.description,
-        inner=original,
-    )
-    policy_wrapped = ToolErrorPolicyTool(
-        name=original.name,
-        description=original.description,
-        inner=guarded,
-    )
-
-    rendered = guard_model_tools([policy_wrapped])
-
-    assert rendered == (policy_wrapped,)
-    assert rendered[0].inner is guarded
+        assert message.artifact is None
+        assert str(message.content).startswith("echo-ok")
 
 
 # --- persistence port snapshot ---------------------------------------------

@@ -1,9 +1,10 @@
 """Wrapper tools must hand LangChain's ``RunnableConfig`` to the tool they wrap.
 
-Regression cover for a silent, total break of the built-in tool surface: every
-model tool is wrapped by ``ToolBudgetGuardedTool`` (``guard_model_tools`` is
-applied unconditionally in ``execution.factory``), and the wrappers used to
-delegate with a bare ``*args, **kwargs`` signature.
+Regression cover for a silent, total break of the built-in tool surface: model
+tools are wrapped by the registry chain
+(``ToolErrorPolicyRegistry(CitationCapturingRegistry(...))``) and by the MCP
+middleware wrappers, and every one of them used to delegate with a bare
+``*args, **kwargs`` signature.
 
 LangChain injects the config into ``_run`` / ``_arun`` only when the method
 declares a parameter annotated exactly ``RunnableConfig``
@@ -31,7 +32,6 @@ from pydantic import BaseModel
 from agent_runtime.capabilities.citation_capturing_tool import CitationCapturingTool
 from agent_runtime.capabilities.delegating_tool import DelegatingTool
 from agent_runtime.capabilities.retrying_tool import RetryingTool
-from agent_runtime.capabilities.tool_budget_guard import ToolBudgetGuardedTool
 from agent_runtime.capabilities.tool_error_policy_tool import ToolErrorPolicyTool
 
 
@@ -76,7 +76,6 @@ class WrappedToolMixin:
         return _KwargsOnlyTool()
 
     WRAPPERS = (
-        ToolBudgetGuardedTool,
         RetryingTool,
         ToolErrorPolicyTool,
         CitationCapturingTool,

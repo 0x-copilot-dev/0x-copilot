@@ -51,20 +51,20 @@ isolated, individually reported as `passed` / `failed` / `blocked` / `skipped`,
 and the next one runs whatever the last one did. Read the phase table the run
 prints; the exit code is only its aggregate.
 
-| Journey                     | What it covers                                                        |
-| --------------------------- | --------------------------------------------------------------------- |
-| `first_run.py`              | the keyless gate (FR-0, what CI runs), BYOK, preselect, first message |
-| `transcript_rendering.py`   | rich cards, Focus, thinking, interleaving, timeline, citations        |
-| `composer_and_budgets.py`   | the Tools pill, todo checklist, tool-call limits, run health          |
-| `shell_and_projects.py`     | the fixed window frame, and filing a chat into a project              |
-| `workspace_consent.py`      | the folder bar, the ungranted ask, approvals (DEFAULT lane)           |
-| `workspace_bypass.py`       | the execution-mode pill and what a grant buys (default + enforce)     |
-| `artifacts_and_surfaces.py` | Studio artifacts, the canvas, identity colour, the inference floor    |
-| `mcp_connected.py`          | everything needing a REAL connected MCP server (reuse profile)        |
-| `installed_payload.py`      | the shipped npm artifact and the G3-G10 release matrix                |
-| `virtuals_provider.py`      | Virtuals as a native provider — **needs no key** (see below)          |
-| `virtuals_thinking.py`      | a gateway model's reasoning survives to the transcript (Kimi K3)      |
-| `focus_panel_default.py`    | Focus opens with the Run-details column folded, and still opens       |
+| Journey                     | What it covers                                                              |
+| --------------------------- | --------------------------------------------------------------------------- |
+| `first_run.py`              | the keyless gate (FR-0, what CI runs), BYOK, preselect, first message       |
+| `transcript_rendering.py`   | rich cards, Focus, thinking, interleaving, timeline, citations              |
+| `composer_and_budgets.py`   | the Tools pill, todo checklist, tool-call limits, run health, context meter |
+| `shell_and_projects.py`     | the fixed window frame, and filing a chat into a project                    |
+| `workspace_consent.py`      | the folder bar, the ungranted ask, approvals (DEFAULT lane)                 |
+| `workspace_bypass.py`       | the execution-mode pill and what a grant buys (default + enforce)           |
+| `artifacts_and_surfaces.py` | Studio artifacts, the canvas, identity colour, the inference floor          |
+| `mcp_connected.py`          | everything needing a REAL connected MCP server (reuse profile)              |
+| `installed_payload.py`      | the shipped npm artifact and the G3-G10 release matrix                      |
+| `virtuals_provider.py`      | Virtuals as a native provider — **needs no key** (see below)                |
+| `virtuals_thinking.py`      | a gateway model's reasoning survives to the transcript (Kimi K3)            |
+| `focus_panel_default.py`    | Focus opens with the Run-details column folded, and still opens             |
 
 Two `installed-payload` journeys are still standalone and unfolded:
 `generative-workflows/g1_markdown_lifecycle.py` and `g2_csv_lifecycle.py`. See

@@ -64,6 +64,12 @@ from agent_runtime.capabilities.operations.internal_adapter import (
     InternalOperationAdapter,
 )
 from agent_runtime.capabilities.operations.probes import OperationShadowProbe
+from agent_runtime.observability.context_origin import (
+    ContextLifecycle,
+    ContextOrigin,
+    ContextSegmentClass,
+    declare_context_origin,
+)
 from agent_runtime.delegation.subagents.operation_identity import (
     SUBAGENT_DELEGATION_OPERATION_ID_KEY,
     SUBAGENT_PARENT_OPERATION_ID_KEY,
@@ -410,13 +416,31 @@ def build_atlas_task_tool(
             return str(result)
         return _return_command_with_state_update(result, runtime.tool_call_id)
 
-    return StructuredTool.from_function(
-        name=TASK_TOOL_NAME,
-        func=task,
-        coroutine=atask,
-        description=description,
-        infer_schema=False,
-        args_schema=TaskToolSchema,
+    # Declared here because this is where the text is authored. ``task`` does
+    # not travel through ``factory._model_visible_tools`` — it is handed to the
+    # subagent middleware and installed by ``create_deep_agent`` — so no append
+    # site stamps it and the PRD-02 AST gate, which sweeps that one function,
+    # cannot see it either. It reached the provider undeclared on every model
+    # call of every run that can delegate, and it is easy to mistake for the
+    # library's own ``task``: same name, same slot.
+    return declare_context_origin(
+        StructuredTool.from_function(
+            name=TASK_TOOL_NAME,
+            func=task,
+            coroutine=atask,
+            description=description,
+            infer_schema=False,
+            args_schema=TaskToolSchema,
+        ),
+        ContextOrigin(
+            # A literal rather than ``__name__`` so the PRD-02 inventory gate can
+            # read it statically; that gate is the only review this declaration
+            # ever gets.
+            owner="agent_runtime.delegation.subagents.atlas_task_tool",
+            name="task",
+            segment_class=ContextSegmentClass.TOOLS,
+            lifecycle=ContextLifecycle.RESIDENT,
+        ),
     )
 
 

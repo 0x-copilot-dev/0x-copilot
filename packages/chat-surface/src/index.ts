@@ -2270,3 +2270,30 @@ export {
   type ConnectorWriteBackResult,
 } from "./surfaces";
 // === end Editable surface Phase 2 ===
+
+// === Context meter (composer) ===
+// The composer's "how full is the window, and who filled it" control, plus the
+// pure mapping that builds its view model from the two read APIs
+// (`/context` for `headroom_pct`, `/context/occupancy` for the decomposition).
+//
+// The MAPPING is exported, not just the component, because it is the shared
+// half of two host binders that cannot import each other. Web and desktop each
+// own their fetch; both must fold the result through `buildContextPillView` or
+// the same conversation reads differently depending on which host opened it —
+// the exact failure the model catalog shipped.
+//
+// NOT a stream projection: `context_occupancy` is in the event vocabulary but
+// has no emitter (absent from `runtime_worker/streaming_executor.py`), so a
+// selector over `session.events` would be permanently empty. See the file
+// header in `contextPillView.ts`.
+export { ContextPill, type ContextPillProps } from "./composer/ContextPill";
+export {
+  buildContextPillView,
+  type BuildContextPillViewInput,
+  type ContextBarSlice,
+  type ContextLifecycleGroup,
+  type ContextPillView,
+  type ContextPressure,
+  type ContextSegmentRow,
+} from "./composer/contextPillView";
+// === end Context meter (composer) ===

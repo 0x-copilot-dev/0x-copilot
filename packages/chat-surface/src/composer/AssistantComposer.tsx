@@ -30,6 +30,8 @@ import {
 } from "./useWorkspaceFolderGrants";
 import { WorkspaceFolderBar } from "./WorkspaceFolderBar";
 import type { ThinkingDepth } from "./depth";
+import { ContextPill } from "./ContextPill";
+import type { ContextPillView } from "./contextPillView";
 import { ModelPill } from "./ModelPill";
 import type { ProviderKeysPort } from "../settings/data/providerKeys";
 import type { KeyFormConnected } from "../onboarding/KeyForm";
@@ -186,6 +188,19 @@ export interface AssistantComposerProps {
    * above the overflow-hidden composer frame.
    */
   toolsTrigger?: ReactNode;
+  /**
+   * Context meter for the right cluster — "how full is the window, and who
+   * filled it". Built by `buildContextPillView` from the two read APIs; the
+   * host owns the fetch, this package owns the drawing.
+   *
+   * `null`/omitted renders NOTHING, which is the honest state for a
+   * conversation nobody has measured yet: no skeleton, no spinner, no zeroed
+   * meter. A zeroed meter is a claim.
+   */
+  context?: ContextPillView | null;
+  /** Open the full context report (`by_call` / `by_subagent` / the per-turn
+   *  occupancy series). Host-owned navigation; omitted renders no link. */
+  onOpenContextReport?: () => void;
   /** PR 8.0.1 — display name of the active model, surfaced in the
    *  composer footer hint row. */
   activeModelLabel?: string;
@@ -345,6 +360,8 @@ export const AssistantComposer = forwardRef<
     // been migrated) but the composer no longer surfaces it — the model
     // name lives in <ModelPill> only (Phase 9 dedup).
     activeModelLabel: _activeModelLabel,
+    context,
+    onOpenContextReport,
     models,
     selectedModel,
     onModelChange,
@@ -706,6 +723,18 @@ export const AssistantComposer = forwardRef<
               >
                 {dictation.message}
               </span>
+            ) : null}
+            {/* Context meter, LEFT of the model pill — the model sets the
+                denominator, so reading rightward gives "60% free · of Opus 5's
+                window". It is also the one control here that answers a
+                question asked immediately before pressing send.
+                Absent (not disabled, not zeroed) until something is measured. */}
+            {context != null ? (
+              <ContextPill
+                view={context}
+                disabled={controlsDisabled}
+                onOpenReport={onOpenContextReport}
+              />
             ) : null}
             {models && selectedModel !== undefined && onModelChange ? (
               <ModelPill

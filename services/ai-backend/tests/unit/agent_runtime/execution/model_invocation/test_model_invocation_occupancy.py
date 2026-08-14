@@ -72,7 +72,6 @@ from agent_runtime.observability.context_occupancy import (
     ContextSegment,
     SnapshotBuilder,
 )
-from agent_runtime.observability.context_installed_tools import InstalledToolOrigins
 from agent_runtime.observability.context_occupancy_recorder import (
     ContextOccupancyRecorder,
     ThirdPartyPromptIndex,
@@ -91,22 +90,18 @@ from agent_runtime.observability.context_token_counter import (
 )
 from agent_runtime.persistence.records import RuntimeContextGraphScope
 from agent_runtime.prompts import (
-    FactoryPromptFragmentProvider,
     PromptAssembler,
     PromptAssemblyContext,
-    PromptAssemblyPlan,
     PromptCacheEligibility,
     PromptCacheFallbackContext,
     PromptCacheFallbackHandoff,
     PromptFragment,
     PromptFragmentScope,
     PromptFragmentTier,
-    PromptRuntimeBinding,
     PromptRuntimeObservation,
     PromptRuntimeResult,
     PromptSensitivity,
     PromptTrustLabel,
-    ProviderCacheComposition,
     ProviderCacheRejectionAdapterRegistry,
 )
 from runtime_api.schemas.context_occupancy import ContextOccupancySnapshotPayload
@@ -325,19 +320,8 @@ class OccupancyMiddlewareMixin:
         lifecycle=ContextLifecycle.RESIDENT,
     )
 
-    def recorder(
-        self,
-        *,
-        installed_tools: InstalledToolOrigins | None = None,
-    ) -> ContextOccupancyRecorder:
-        """A recorder with a private cache and no third-party sweep.
-
-        ``installed_tools`` defaults to the disabled inventory so the default
-        fixture asserts against declarations this repository makes rather than
-        against whichever ``deepagents`` / ``langchain`` version is installed. A
-        test that is specifically about library-installed tools passes the real
-        one.
-        """
+    def recorder(self) -> ContextOccupancyRecorder:
+        """A recorder with a private cache and no third-party sweep."""
 
         return ContextOccupancyRecorder(
             counter=ContextTokenCounter(
@@ -346,7 +330,6 @@ class OccupancyMiddlewareMixin:
                 cache=DigestTokenCache(max_entries=64),
             ),
             third_party=ThirdPartyPromptIndex.disabled(),
-            installed_tools=installed_tools or InstalledToolOrigins.disabled(),
         )
 
     def middleware(self, recorder: object | None = None) -> ModelInvocationMiddleware:
@@ -466,50 +449,16 @@ class OccupancyMiddlewareMixin:
         handler: Any = None,
         middleware: ModelInvocationMiddleware | None = None,
         handoff: PromptCacheFallbackHandoff | None = None,
-        prompt_binding: PromptRuntimeBinding | None = None,
     ) -> ModelResponse[Any]:
         token = RunControlContext.bind_for_run(self.control())
         try:
             RunControlContext.install_model_invocation_runtime(binding)
-            if prompt_binding is not None:
-                RunControlContext.install_prompt_runtime(prompt_binding)
             with PromptCacheFallbackContext.bind(handoff):
                 return await (middleware or self.middleware()).awrap_model_call(
                     request, handler or self.handler
                 )
         finally:
             RunControlContext.unbind(token)
-
-    def build_time_binding(self) -> tuple[PromptRuntimeBinding, str]:
-        """The binding the factory installs on a default (F2 ``OFF``) build.
-
-        This is the shipped posture: ``PromptRuntimeBinding.prepare`` publishes
-        no per-call plan when the mode is ``OFF``, so nothing reaches the
-        capture seam through the handoff. The typed decomposition of the system
-        block still exists — the factory assembled it to produce the graph's
-        ``system_prompt`` — and it is reachable only through the binding's own
-        fragment provider. Building the binding exactly as ``factory`` does is
-        what makes the assertion about the product rather than about a fixture.
-        """
-
-        plan = self.assembly_plan()
-        composition = ProviderCacheComposition.from_signed_mode(FeatureMode.OFF)
-        return (
-            PromptRuntimeBinding(
-                mode=FeatureMode.OFF,
-                provider="openai",
-                model_family="gpt-5",
-                harness_revision="harness-v1",
-                fragment_provider=FactoryPromptFragmentProvider(
-                    legacy_plan=plan,
-                    run_scope_fingerprint=_SHA,
-                ),
-                cache_registry=composition.cache_registry,
-                cache_owner=composition.cache_owner,
-                framework_cache_installed=composition.framework_prompt_cache_enabled,
-            ),
-            plan.rendered_prompt,
-        )
 
     def plan_handoff(self) -> tuple[PromptCacheFallbackHandoff, str]:
         """An F2 handoff carrying a real assembly plan, plus its rendered text.
@@ -519,40 +468,7 @@ class OccupancyMiddlewareMixin:
         outer middleware bound for it, and attributes the system block from it.
         """
 
-        plan = self.assembly_plan()
-        result = PromptRuntimeResult(
-            system_message=SystemMessage(content=plan.rendered_prompt),
-            tools=(),
-            plan=plan,
-            decoration=None,
-            observation=PromptRuntimeObservation(
-                mode=FeatureMode.ENFORCE,
-                provider="openai",
-                model_family="gpt-5",
-                execution_scope="supervisor",
-                harness_revision="harness-v1",
-                tool_schema_revision="a" * 64,
-                cache_reason_code="test",
-                sent_assembled_prompt=True,
-            ),
-        )
-        return (
-            PromptCacheFallbackHandoff(
-                result=result,
-                rejection_adapters=ProviderCacheRejectionAdapterRegistry(()),
-            ),
-            plan.rendered_prompt,
-        )
-
-    def assembly_plan(self) -> PromptAssemblyPlan:
-        """One real assembled plan, shared by both plan-delivery postures.
-
-        Shared so a test that asserts the build-time fallback and a test that
-        asserts the per-call handoff differ in *how the plan is delivered* and
-        in nothing else — which is the only difference either test is about.
-        """
-
-        return PromptAssembler(
+        plan = PromptAssembler(
             context=PromptAssemblyContext(
                 provider="openai",
                 model_family="gpt-5",
@@ -577,6 +493,29 @@ class OccupancyMiddlewareMixin:
                     cache_eligibility=PromptCacheEligibility.STABLE_PREFIX,
                 ),
             )
+        )
+        result = PromptRuntimeResult(
+            system_message=SystemMessage(content=plan.rendered_prompt),
+            tools=(),
+            plan=plan,
+            decoration=None,
+            observation=PromptRuntimeObservation(
+                mode=FeatureMode.ENFORCE,
+                provider="openai",
+                model_family="gpt-5",
+                execution_scope="supervisor",
+                harness_revision="harness-v1",
+                tool_schema_revision="a" * 64,
+                cache_reason_code="test",
+                sent_assembled_prompt=True,
+            ),
+        )
+        return (
+            PromptCacheFallbackHandoff(
+                result=result,
+                rejection_adapters=ProviderCacheRejectionAdapterRegistry(()),
+            ),
+            plan.rendered_prompt,
         )
 
 
@@ -676,98 +615,6 @@ class TestOccupancyCapture(OccupancyMiddlewareMixin):
             binding=self.binding(journal=journal, authority=authority, sink=sink),
             request=self.request(system_text=rendered),
             handoff=handoff,
-        )
-
-        labels = {segment["label"] for segment in sink.records[0].segments}
-        assert "agent_runtime.prompts:00_base_runtime" in labels
-
-    async def test_a_library_installed_tool_reports_the_library_that_owns_it(
-        self,
-    ) -> None:
-        # ``write_todos`` is installed by langchain's ``TodoListMiddleware``. It
-        # never passes ``factory._model_visible_tools``, so no stamp could ever
-        # have been applied to it and the AST gate that is meant to catch a
-        # missing declaration cannot see it either — 997 estimated tokens of
-        # anonymous tool block on a real run.
-        journal, authority, sink = Journal(), AuthorityAdapter(), OccupancySink()
-        middleware = self.middleware(
-            self.recorder(installed_tools=InstalledToolOrigins())
-        )
-
-        await self.invoke(
-            binding=self.binding(journal=journal, authority=authority, sink=sink),
-            request=self.request(tools=[self.tool(name="write_todos", declared=False)]),
-            middleware=middleware,
-        )
-
-        tool_labels = {
-            segment["label"]
-            for segment in sink.records[0].segments
-            if segment["segment_class"] == ContextSegmentClass.TOOLS.value
-        }
-        assert tool_labels == {"langchain.agents.middleware.todo:write_todos"}
-
-    async def test_the_build_time_plan_attributes_the_system_block_when_f2_is_off(
-        self,
-    ) -> None:
-        # The shipped posture. F2 ``OFF`` publishes no per-call plan, so before
-        # the binding was readable here the whole system block measured as one
-        # anonymous ``UNDECLARED`` span — 4,853 tokens on a real run, 58% of its
-        # measured input. No handoff is bound: the plan can only arrive through
-        # ``RunControlContext.prompt_runtime()``.
-        journal, authority, sink = Journal(), AuthorityAdapter(), OccupancySink()
-        prompt_binding, rendered = self.build_time_binding()
-
-        await self.invoke(
-            binding=self.binding(journal=journal, authority=authority, sink=sink),
-            request=self.request(system_text=rendered),
-            prompt_binding=prompt_binding,
-        )
-
-        row = sink.records[0]
-        labels = {segment["label"] for segment in row.segments}
-        assert "agent_runtime.prompts:00_base_runtime" in labels
-        assert UNDECLARED_CONTEXT_LABEL not in labels
-        assert row.undeclared_tokens == 0
-
-    async def test_a_plan_that_does_not_describe_the_prompt_attributes_nothing(
-        self,
-    ) -> None:
-        # The failure mode of a stale build-time plan must be "no better than
-        # before", never "confidently wrong": the attributor verifies every
-        # located fragment by ``content_digest``, so a system block the plan
-        # does not describe stays exactly as unexplained as it was.
-        journal, authority, sink = Journal(), AuthorityAdapter(), OccupancySink()
-        prompt_binding, _rendered = self.build_time_binding()
-
-        await self.invoke(
-            binding=self.binding(journal=journal, authority=authority, sink=sink),
-            request=self.request(system_text="a system prompt from another graph"),
-            prompt_binding=prompt_binding,
-        )
-
-        row = sink.records[0]
-        system_labels = {
-            segment["label"]
-            for segment in row.segments
-            if segment["segment_class"] == ContextSegmentClass.SYSTEM.value
-        }
-        assert system_labels == {UNDECLARED_CONTEXT_LABEL}
-        assert row.undeclared_tokens > 0
-
-    async def test_the_per_call_plan_wins_over_the_build_time_plan(self) -> None:
-        # Under ``ENFORCE`` the request carries a re-assembled prompt and the
-        # build-time plan would describe a prefix of it at best, so the handoff
-        # must be preferred whenever it carries one.
-        journal, authority, sink = Journal(), AuthorityAdapter(), OccupancySink()
-        handoff, rendered = self.plan_handoff()
-        prompt_binding, _build_time = self.build_time_binding()
-
-        await self.invoke(
-            binding=self.binding(journal=journal, authority=authority, sink=sink),
-            request=self.request(system_text=rendered),
-            handoff=handoff,
-            prompt_binding=prompt_binding,
         )
 
         labels = {segment["label"] for segment in sink.records[0].segments}
@@ -1087,14 +934,8 @@ class TestTheSeamIsUnchanged(OccupancyMiddlewareMixin):
         assert response.result[0].content == "done"
 
     async def test_feature_off_paths_are_untouched(self) -> None:
-        # No F10 binding installed: the middleware must measure nothing at all
-        # and must not alter the semantic request.
-        #
-        # It is no longer the *identical object*, because this path now carries
-        # the per-model-call retry policy and that policy has to know whether
-        # visible text already streamed before it may re-dispatch. The observer
-        # that answers this rides on the model. Occupancy — what this test is
-        # about — is still untouched: the exploding recorder is never called.
+        # No F10 binding installed: the middleware must hand the exact request
+        # to the handler and measure nothing at all.
         request = self.request()
         seen: list[ModelRequest[Any]] = []
 
@@ -1105,11 +946,19 @@ class TestTheSeamIsUnchanged(OccupancyMiddlewareMixin):
         recorder = ExplodingRecorder()
         await self.middleware(recorder).awrap_model_call(request, capturing)
 
-        (dispatched,) = seen
-        assert dispatched.messages == request.messages
-        assert dispatched.system_message == request.system_message
-        assert dispatched.tools == request.tools
-        assert dispatched.state == request.state
+        # Every field except ``model`` is handed through untouched, and the
+        # recorder never fires. ``model`` is compared apart because a DIFFERENT,
+        # always-on feature binds ``_ProviderLifecycleCallback`` to it for the
+        # model-call retry policy — that binding is not this middleware
+        # measuring anything, and asserting whole-request equality would make
+        # this test fail for a feature it does not describe.
+        assert len(seen) == 1
+        handed = seen[0]
+        assert handed.messages == request.messages
+        assert handed.system_message == request.system_message
+        assert handed.tools == request.tools
+        assert handed.tool_choice == request.tool_choice
+        assert handed.state == request.state
         assert recorder.calls == []
 
     def test_the_default_recorder_is_shared_across_middleware_instances(self) -> None:

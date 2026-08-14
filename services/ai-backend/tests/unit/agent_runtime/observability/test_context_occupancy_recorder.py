@@ -92,6 +92,14 @@ _FAKE_LIBRARY_MODULE: Final[str] = "fake_third_party_prompt_library"
 _FAKE_LIBRARY_CONSTANT: Final[str] = "SANDBOX_SYSTEM_PROMPT"
 _FAKE_LIBRARY_TEXT: Final[str] = "Library-owned sandbox guidance the model reads."
 
+_BUILD_TIME_LABEL: Final[str] = RuntimeContextOrigins.BUILD_TIME_SYSTEM_PROMPT.label
+"""What an unassembled system block is labelled with.
+
+Read off the origin rather than restated, so a rename of the declaration moves
+these assertions with it instead of leaving them asserting a string that no
+longer exists.
+"""
+
 
 class LengthCounter:
     """A ``TokenCounterPort`` whose count is a deterministic function of the text.
@@ -501,10 +509,39 @@ class TestSystemBlockAttribution(RecorderFixtureMixin):
         )
         assert snapshot.undeclared_tokens > 0
 
-    def test_without_a_plan_the_whole_system_block_is_undeclared(self) -> None:
-        # Honest degradation: with no typed plan there is genuinely nothing to
-        # attribute the system prompt to, and saying so is better than guessing.
+    def test_without_a_plan_the_system_block_is_the_build_time_prompt(self) -> None:
+        # With no typed plan there was no per-fragment assembly to fail: the
+        # block is the ``system_prompt`` the factory handed to the builder, and
+        # naming that is more accurate than calling it undeclared. This is the
+        # desktop's permanent state — every packaged run records
+        # ``assembly_record_id: None`` — so the old UNDECLARED answer reported a
+        # 4,798-token contract defect on every model call of a healthy system,
+        # and the composer's context meter showed users the number.
         snapshot = self.capture(self.request(system_text=self.POLICY_TEXT))
+
+        system = self.of_class(snapshot, ContextSegmentClass.SYSTEM)
+        assert [segment.label for segment in system] == [
+            "agent_runtime.execution.factory:system_prompt"
+        ]
+        assert [segment.detail for segment in system] == ["system[unassembled]"]
+        assert system[0].lifecycle is ContextLifecycle.RESIDENT
+        assert snapshot.undeclared_tokens == 0
+
+    def test_a_plan_that_matches_nothing_still_reports_undeclared(self) -> None:
+        # The distinction the coarse fallback must not erase. A plan existed and
+        # its fragments are absent from the prompt that was sent, so the two
+        # disagree — an attribution defect, and exactly what the field is for.
+        # Keying the fallback on "a plan matched nothing" instead of "there is
+        # no plan" would have silently swallowed this case.
+        plan = self.plan(
+            self.fragment(
+                fragment_id="00_base_runtime",
+                source_owner="agent_runtime.prompts",
+                content="Text that is nowhere in the system block.",
+            )
+        )
+
+        snapshot = self.capture(self.request(system_text=self.POLICY_TEXT), plan=plan)
 
         system = self.of_class(snapshot, ContextSegmentClass.SYSTEM)
         assert [segment.label for segment in system] == [UNDECLARED_CONTEXT_LABEL]
@@ -666,7 +703,12 @@ class TestThirdPartyAttribution(RecorderFixtureMixin):
         assert sum(segment.byte_count for segment in system) == len(
             system_text.encode("utf-8")
         )
-        assert sum(1 for segment in system if segment.is_undeclared) == 2
+        # Head and tail stay two spans, separate from the library constant. With
+        # no plan they carry the build-time prompt's label rather than
+        # UNDECLARED, but the split itself is what this asserts: the library's
+        # bytes keep the library's owner and are not swallowed into ours.
+        assert sum(1 for segment in system if segment.label == _BUILD_TIME_LABEL) == 2
+        assert any(segment.third_party for segment in system)
 
     def test_a_broken_sweep_declares_nothing_rather_than_raising(self) -> None:
         index = self.index(ExplodingThirdPartyOrigins())
@@ -676,7 +718,9 @@ class TestThirdPartyAttribution(RecorderFixtureMixin):
             recorder=self.recorder(third_party=index),
         )
 
-        assert self.labels(snapshot) == (UNDECLARED_CONTEXT_LABEL,)
+        # No library label anywhere: the sweep contributed nothing and the block
+        # falls to the coarse first-party owner instead of raising.
+        assert self.labels(snapshot) == (_BUILD_TIME_LABEL,)
 
     def test_an_unresolvable_constant_is_dropped_from_the_index(self) -> None:
         # The constant is discovered but its module is not importable, which is
@@ -699,7 +743,7 @@ class TestThirdPartyAttribution(RecorderFixtureMixin):
             recorder=self.recorder(third_party=index),
         )
 
-        assert self.labels(snapshot) == (UNDECLARED_CONTEXT_LABEL,)
+        assert self.labels(snapshot) == (_BUILD_TIME_LABEL,)
 
 
 class TestToolBlockMeasurement(RecorderFixtureMixin):

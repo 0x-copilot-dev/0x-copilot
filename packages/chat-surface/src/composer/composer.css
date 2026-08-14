@@ -1671,3 +1671,364 @@
   font-size: var(--font-size-mono-10);
   color: var(--color-text-subtle);
 }
+
+/* ==========================================================================
+ * CONTEXT PILL — the composer's context meter (ContextPill.tsx).
+ *
+ * The trigger is the shared `.ui-cpill` recipe, so only what this pill adds is
+ * declared here: the gauge, the two type roles, and the pressure states. That
+ * keeps it a SIBLING of the model pill rather than a new species in a row that
+ * already speaks one language.
+ *
+ * SHRINK CONTRACT. `flex: none`, deliberately. `.aui-composer-action-wrapper__right`
+ * is `flex: 0 1 auto` so that ONE item can give when the ~300px Run rail runs
+ * out, and that item is the model pill (`.atlas-model-pill__name` ellipsizes —
+ * it was built for it). A meter that shrank would either ellipsize its own
+ * digits, which makes the number a lie, or compete with the pill for the role
+ * and push send onto a second row.
+ * ========================================================================== */
+.atlas-ctx-pill__root {
+  flex: none;
+  min-width: 0;
+  position: relative;
+}
+
+.atlas-ctx-pill {
+  font-variant-numeric: tabular-nums;
+  gap: 5px;
+}
+
+/* Rest state is deliberately colourless: at healthy headroom this is ambient
+ * information, and the row already has a send button competing for the eye. */
+.atlas-ctx-pill__num {
+  color: var(--color-text-muted);
+}
+
+.atlas-ctx-pill__unit {
+  color: var(--color-text-subtle);
+}
+
+.atlas-ctx-pill:hover:not([disabled]) .atlas-ctx-pill__num,
+.atlas-ctx-pill[data-open] .atlas-ctx-pill__num {
+  color: var(--color-text);
+}
+
+/* PRESSURE — the only colour escalation, and the reason the segment ramp is
+ * cool-only: a warm segment would be indistinguishable from an alarm.
+ *
+ * Warm is ink alone. Critical adds the fill + hairline, which is the first
+ * point at which the meter is asking for an action rather than reporting. */
+.atlas-ctx-pill[data-state="warm"] .atlas-ctx-pill__num {
+  color: var(--color-warning);
+}
+
+.atlas-ctx-pill[data-state="warm"] .atlas-ctx-pill__unit {
+  color: color-mix(in srgb, var(--color-warning) 62%, transparent);
+}
+
+.atlas-ctx-pill[data-state="critical"] {
+  background: color-mix(in srgb, var(--color-danger) 11%, transparent);
+  border-color: color-mix(in srgb, var(--color-danger) 26%, transparent);
+}
+
+.atlas-ctx-pill[data-state="critical"] .atlas-ctx-pill__num {
+  color: var(--color-danger);
+}
+
+.atlas-ctx-pill[data-state="critical"] .atlas-ctx-pill__unit {
+  color: color-mix(in srgb, var(--color-danger) 62%, transparent);
+}
+
+/* The 22px meter. Same object as the popover's `.atlas-ctx-bar`, at the size
+ * where only magnitude survives — four classes across 22px at 40% fill is under
+ * 9px of ink, so the composition is drawn once, in the popover, where it can
+ * actually be read. */
+.atlas-ctx-gauge {
+  display: flex;
+  width: 22px;
+  height: 4px;
+  flex: none;
+  border-radius: 2px;
+  overflow: hidden;
+  background: var(--color-border-stronger);
+}
+
+.atlas-ctx-gauge > i {
+  display: block;
+  height: 100%;
+}
+
+/* Unknown window: no denominator, so no share to draw. An EMPTY track, never a
+ * full or a zero one — both would state something the data does not support. */
+.atlas-ctx-gauge[data-known="false"] {
+  opacity: 0.5;
+}
+
+/* ── the breakdown popover ────────────────────────────────────────────────
+ * `.ui-pop` owns the frame; this pins the design's 300px (the `Menu` primitive
+ * writes `min-width: <anchor width>px` INLINE, which no class can beat — the
+ * trigger is far narrower, so that floor never lifts the frame) and styles the
+ * contents. Same width as `.atlas-model-pill__menu`, because they anchor to
+ * adjacent controls in the same row and a mismatch reads as a mistake. */
+.atlas-ctx-pop {
+  width: 300px;
+  min-width: 0;
+  padding: 0;
+}
+
+.atlas-ctx-pop__body {
+  display: flex;
+  flex-direction: column;
+  font-variant-numeric: tabular-nums;
+  padding-bottom: 2px;
+}
+
+.atlas-ctx-pop__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-sm);
+  padding: 11px 12px 9px;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.atlas-ctx-pop__title {
+  font-family: var(--font-mono);
+  font-size: var(--font-size-mono-9-5);
+  letter-spacing: var(--tracking-mono-caps);
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+}
+
+.atlas-ctx-pop__model {
+  font-family: var(--font-mono);
+  font-size: var(--font-size-mono-10);
+  color: var(--color-text-subtle);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.atlas-ctx-pop__summary {
+  padding: 12px 12px 11px;
+}
+
+.atlas-ctx-bar {
+  display: flex;
+  gap: 1px;
+  height: 8px;
+  border-radius: 3px;
+  overflow: hidden;
+  background: var(--color-border-stronger);
+}
+
+.atlas-ctx-bar > i {
+  display: block;
+  height: 100%;
+}
+
+.atlas-ctx-pop__figs {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin: 9px 0 0;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-mono-10);
+  color: var(--color-text-subtle);
+}
+
+.atlas-ctx-pop__figs b {
+  color: var(--color-text);
+  font-weight: var(--font-weight-regular);
+}
+
+.atlas-ctx-pop__sep {
+  color: var(--color-border-stronger);
+}
+
+.atlas-ctx-pop__defect {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  margin: 10px 12px 0;
+  padding: 7px 9px;
+  border: 1px solid color-mix(in srgb, var(--color-danger) 26%, transparent);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--color-danger) 10%, transparent);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-mono-9-5);
+  line-height: var(--line-height-snug);
+  color: var(--color-danger);
+}
+
+.atlas-ctx-pop__defect b {
+  font-weight: var(--font-weight-regular);
+}
+
+/* Lifecycle heading. The rule after it is what makes the groups read as bands
+ * rather than as a flat list with bold rows. */
+.atlas-ctx-grp {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  margin: 0;
+  padding: 12px 12px 5px;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-mono-9-5);
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+  color: var(--color-text-subtle);
+}
+
+.atlas-ctx-grp::after {
+  content: "";
+  order: 2;
+  flex: 1;
+  height: 1px;
+  background: var(--color-border);
+}
+
+/* The multiplier ("every call", "× 24 results") — the half of the heading that
+ * makes the group actionable, so it is set apart from the label but not hidden
+ * behind a disclosure. */
+.atlas-ctx-grp em {
+  order: 1;
+  font-style: normal;
+  text-transform: none;
+  letter-spacing: var(--tracking-caption);
+  color: var(--color-border-stronger);
+}
+
+.atlas-ctx-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 0;
+  padding: 4px 12px;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-mono-10);
+  color: var(--color-text-muted);
+}
+
+.atlas-ctx-row__sw {
+  width: 7px;
+  height: 7px;
+  flex: none;
+  border-radius: 2px;
+}
+
+/* The ONLY shrinkable cell in the row. A segment label is an arbitrary-length
+ * MCP server slug, and the figures are the reason the row exists — so the name
+ * ellipsizes and the numbers never do. Same shape of rule as the write gate's,
+ * and for the same reason: an over-wide row must give somewhere it can afford. */
+.atlas-ctx-row__label {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--color-text);
+}
+
+.atlas-ctx-row__label s {
+  text-decoration: none;
+  color: var(--color-text-subtle);
+}
+
+.atlas-ctx-row__tok {
+  flex: none;
+  width: 46px;
+  text-align: right;
+  color: var(--color-text);
+}
+
+.atlas-ctx-row__pct {
+  flex: none;
+  width: 32px;
+  text-align: right;
+  color: var(--color-text-subtle);
+}
+
+/* The signed provider delta. Its own row rather than absorbed into a total, so
+ * the segments visibly do not have to sum to the headline the provider bills. */
+.atlas-ctx-row--delta .atlas-ctx-row__tok {
+  color: var(--color-text-subtle);
+}
+
+.atlas-ctx-mk {
+  flex: none;
+  padding: 0 3px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: 3px;
+  font-size: var(--font-size-mono-8-5);
+  line-height: 1.5;
+  color: var(--color-text-subtle);
+}
+
+.atlas-ctx-mk--3p {
+  border-color: color-mix(in srgb, var(--color-ctx-system) 40%, transparent);
+  color: var(--color-ctx-system);
+}
+
+.atlas-ctx-mk--cache {
+  border-color: color-mix(in srgb, var(--color-ctx-messages) 35%, transparent);
+  color: var(--color-ctx-messages);
+}
+
+.atlas-ctx-mk--prox {
+  border-color: color-mix(in srgb, var(--color-warning) 40%, transparent);
+  color: var(--color-warning);
+}
+
+.atlas-ctx-pop__foot {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  margin-top: var(--space-sm);
+  padding: 9px 12px 10px;
+  border-top: 1px solid var(--color-border);
+}
+
+.atlas-ctx-pop__note {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-mono-9-5);
+  color: var(--color-text-subtle);
+}
+
+.atlas-ctx-pop__link {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-xs);
+  flex: none;
+  height: 22px;
+  padding: 0 8px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-elevated);
+  color: var(--color-text);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-mono-9-5);
+  cursor: pointer;
+}
+
+.atlas-ctx-pop__link:hover {
+  border-color: var(--color-border-stronger);
+}
+
+/* The fold's remainder row. Quieter than a declaration and italic, because it
+ * is a SUM over several rather than a thing that exists — reading it as one
+ * more declaration is the misreading the fold could otherwise introduce. */
+.atlas-ctx-row[data-remainder] .atlas-ctx-row__label {
+  color: var(--color-text-subtle);
+  font-style: italic;
+}
+
+.atlas-ctx-row[data-remainder] .atlas-ctx-row__tok {
+  color: var(--color-text-muted);
+}

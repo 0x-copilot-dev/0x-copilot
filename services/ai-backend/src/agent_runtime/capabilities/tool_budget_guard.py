@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import inspect
 import json
 import logging
@@ -12,11 +11,6 @@ from threading import Lock
 from typing import TYPE_CHECKING, Any, cast
 from uuid import uuid4
 
-from langchain_core.runnables import RunnableConfig
-from langchain_core.tools import BaseTool
-from pydantic import ConfigDict
-
-from agent_runtime.capabilities.delegating_tool import NO_CONFIG, DelegatingTool
 from agent_runtime.capabilities.tool_budget_middleware import (
     ToolBudgetAdmit,
     ToolBudgetDecision,
@@ -39,10 +33,6 @@ from agent_runtime.control_plane.context import (
     TaskPolicyRuntimeBinding,
 )
 from agent_runtime.control_plane.feature_modes import FeatureMode
-from agent_runtime.capabilities.mcp.middleware.compose import (
-    ToolResultShape,
-    ToolSchemaIdentity,
-)
 from agent_runtime.capabilities.tool_result_notes import ToolResultNote
 from agent_runtime.context.tool_result_admission import (
     ToolResultAdmissionAdapter,
@@ -991,273 +981,6 @@ def estimate_tool_input_tokens(arguments: dict[str, Any]) -> int:
     return _Estimator.estimate((), arguments)
 
 
-class ToolBudgetGuardedTool(DelegatingTool):
-    """LangChain ``BaseTool`` wrapper that gates calls through the active guard.
-
-    The inner tool's whole surface is propagated — see
-    :meth:`ToolBudgetGuardedRegistry._wrap` — so the model sees an identical
-    tool and LangChain unpacks the return value the same way it would have
-    without the wrapper. Only the invocation path differs.
-    """
-
-    model_config = ConfigDict(arbitrary_types_allowed=True)
-
-    inner: BaseTool
-
-    def _run(
-        self, *args: Any, config: RunnableConfig = NO_CONFIG, **kwargs: Any
-    ) -> Any:
-        """Sync gate: check budget, record the call, delegate to the inner tool."""
-        guard = ToolBudgetGuard.active()
-        if guard is None or RuntimeCallContext.current() is not None:
-            # The graph-wide middleware is authoritative when its call context
-            # is present. This wrapper remains a shadow-compatibility adapter
-            # and must not charge or admit the same model-visible call twice.
-            return self.delegate(*args, config=config, **kwargs)
-        policy_intent = guard.admit_task_policy(
-            tool_name=self.name, args=args, kwargs=kwargs
-        )
-        estimated = _Estimator.estimate(args, kwargs)
-        decision, call_id = guard.admit_and_charge(
-            tool_name=self.name, estimated_input_tokens=estimated
-        )
-        if isinstance(decision, ToolBudgetReject):
-            # The inner tool is short-circuited either way — the cap is
-            # enforced here. The guard decides only whether the refusal
-            # is surfaced to the model or ends the run.
-            raise guard.rejection_error(decision)
-        if call_id is None:
-            raise BudgetExceeded("Tool call was not admitted by the budget middleware.")
-        if isinstance(decision, ToolBudgetWarn):
-            # Sync path: schedule warning emission on the running loop; fall back to log.
-            self._schedule_warning(guard=guard, decision=decision)
-        try:
-            result = self.delegate(*args, config=config, **kwargs)
-        except BaseException as exc:
-            guard.record_task_policy_outcome(
-                intent=policy_intent,
-                succeeded=False,
-                error_class=type(exc).__name__,
-            )
-            raise
-        else:
-            guard.record_task_policy_outcome(
-                intent=policy_intent,
-                succeeded=True,
-                result=result,
-            )
-        finally:
-            guard.record_settled(call_id=call_id, observed_input_tokens=estimated)
-        return self._model_visible_result(result, guard=guard, call_id=call_id)
-
-    async def _arun(
-        self, *args: Any, config: RunnableConfig = NO_CONFIG, **kwargs: Any
-    ) -> Any:
-        """Async gate: check budget, record the call, delegate to the inner tool."""
-        guard = ToolBudgetGuard.active()
-        if guard is None or RuntimeCallContext.current() is not None:
-            # See the synchronous path: wrapper enforcement is dormant behind
-            # the canonical middleware seam during shadow compatibility.
-            return await self.adelegate(*args, config=config, **kwargs)
-        policy_intent = await guard.aadmit_task_policy(
-            tool_name=self.name, args=args, kwargs=kwargs
-        )
-        estimated = _Estimator.estimate(args, kwargs)
-        decision, call_id = guard.admit_and_charge(
-            tool_name=self.name, estimated_input_tokens=estimated
-        )
-        if isinstance(decision, ToolBudgetReject):
-            raise guard.rejection_error(decision)
-        if call_id is None or not isinstance(
-            decision, (ToolBudgetAdmit, ToolBudgetWarn)
-        ):
-            # Defensive: treat any unknown decision variant as a hard reject so
-            # future variants can never silently bypass the gate.
-            raise BudgetExceeded("Tool call was not admitted by the budget middleware.")
-        if isinstance(decision, ToolBudgetWarn):
-            await guard.emit_warning(decision=decision)
-        try:
-            result = await self.adelegate(*args, config=config, **kwargs)
-        except BaseException as exc:
-            await guard.arecord_task_policy_outcome(
-                intent=policy_intent,
-                succeeded=False,
-                error_class=type(exc).__name__,
-            )
-            raise
-        else:
-            await guard.arecord_task_policy_outcome(
-                intent=policy_intent,
-                succeeded=True,
-                result=result,
-            )
-        finally:
-            guard.record_settled(call_id=call_id, observed_input_tokens=estimated)
-        # Settled first, so the count the model reads includes this call.
-        return self._model_visible_result(result, guard=guard, call_id=call_id)
-
-    def _run_inner(self, *args: Any, config: RunnableConfig, **kwargs: Any) -> Any:
-        """Forward LangChain runtime config only when a caller supplied it.
-
-        Direct unit-level ``_run`` callers historically omit ``config``.  The
-        public LangChain dispatch path always supplies it for this typed
-        wrapper, and config-aware inner tools require that propagation.
-        """
-
-        if config:
-            return self.inner._run(*args, config=config, **kwargs)
-        return self.inner._run(*args, **kwargs)
-
-    async def _arun_inner(
-        self, *args: Any, config: RunnableConfig, **kwargs: Any
-    ) -> Any:
-        """Async counterpart of :meth:`_run_inner`."""
-
-        if config:
-            return await self.inner._arun(*args, config=config, **kwargs)
-        return await self.inner._arun(*args, **kwargs)
-
-    def _model_visible_result(
-        self,
-        result: object,
-        *,
-        guard: ToolBudgetGuard,
-        call_id: str,
-    ) -> object:
-        """Annotate, then bound, the model-visible part of the value LangChain gets.
-
-        Under a declared ``content_and_artifact`` return only the first half is
-        model-visible; the artifact rides on ``ToolMessage.artifact`` and is
-        never sent to the model, so it is neither annotated nor budget-bounded.
-        Splitting is not optional now that the wrapper propagates
-        ``response_format``: :class:`ToolResultNote` walks a tuple looking for a
-        string to extend and, finding none — ``web_search`` returns
-        ``(list[dict], list[dict])`` — inserts the note as a new first element,
-        and ``BaseTool.arun`` raises ``ValueError`` on any return that is not
-        exactly two values. Twin of
-        :meth:`~agent_runtime.capabilities.citation_capturing_tool.CitationHint.append_within_response_format`,
-        which solves the same split for the citation hint.
-        """
-
-        if self._declares_a_pair(result):
-            content, artifact = result  # type: ignore[misc]
-            return (
-                guard.admit_model_visible_result(
-                    content, tool_name=self.name, call_id=call_id
-                ),
-                artifact,
-            )
-        return guard.admit_model_visible_result(
-            result,
-            tool_name=self.name,
-            call_id=call_id,
-        )
-
-    def _declares_a_pair(self, result: object) -> bool:
-        """Return whether ``result`` is the ``(content, artifact)`` pair this tool promised.
-
-        A tool that declares the format but returns something else is already
-        breaking its own contract; it keeps the undivided path so this wrapper
-        never invents behavior for it.
-        """
-
-        return (
-            self.response_format == ToolResultShape.CONTENT_AND_ARTIFACT
-            and isinstance(result, tuple)
-            and len(result) == 2
-        )
-
-    @staticmethod
-    def _schedule_warning(*, guard: ToolBudgetGuard, decision: ToolBudgetWarn) -> None:
-        """Schedule a budget-warning event on the running loop, or log if none exists."""
-        try:
-            loop = asyncio.get_running_loop()
-        except RuntimeError:
-            _LOGGER.info(
-                "tool_budget_warn_sync",
-                extra={
-                    "metadata": {
-                        "tool_name": decision.budget.tool_name,
-                        "kind": decision.kind,
-                        "current": decision.current,
-                        "limit": decision.limit,
-                    }
-                },
-            )
-            return
-        loop.create_task(guard.emit_warning(decision=decision))
-
-
-class ToolBudgetGuardedRegistry:
-    """Registry decorator that wraps every ``BaseTool`` in a :class:`ToolBudgetGuardedTool`."""
-
-    def __init__(self, *, inner: object) -> None:
-        """Wrap ``inner`` registry; all ``BaseTool`` returns will be budget-guarded."""
-        self._inner = inner
-
-    def list_available_tools(self, context: object) -> tuple[object, ...]:
-        """Return all tools from the inner registry, each wrapped with budget enforcement."""
-        rendered = self._inner.list_available_tools(context)  # type: ignore[attr-defined]
-        return guard_model_tools(rendered)
-
-    @staticmethod
-    def _wrap(tool: object) -> object:
-        """Wrap ``tool`` in a ``ToolBudgetGuardedTool``; return non-BaseTool entries unchanged.
-
-        The propagated field set is
-        :class:`~agent_runtime.capabilities.mcp.middleware.compose.ToolSchemaIdentity`'s
-        — one definition for every wrapper in the runtime instead of a
-        hand-listed subset per wrap site. The subset that used to live here
-        (``name`` / ``description`` / ``args_schema``) dropped the dispatch
-        surface, and ``response_format`` with it: LangChain reads that field off
-        the tool it dispatches, so a guarded ``content_and_artifact`` tool would
-        have its ``(content, artifact)`` pair stringified into the model-visible
-        content with ``ToolMessage.artifact`` left ``None``.
-        """
-        if not isinstance(tool, BaseTool):
-            return tool
-        if ToolBudgetGuardedRegistry._contains_guard(tool):
-            return tool
-        return ToolBudgetGuardedTool(**ToolSchemaIdentity.fields_of(tool), inner=tool)
-
-    @staticmethod
-    def _contains_guard(tool: BaseTool) -> bool:
-        """Return whether a wrapper chain already contains the budget gate.
-
-        Cross-cutting tool decorators compose through an ``inner`` attribute.
-        Registry tools arrive as ``ErrorPolicy(Budget(tool))`` while tools
-        injected later by the factory may arrive undecorated. Looking only at
-        the outermost type therefore double-wrapped registry tools and placed a
-        new budget gate outside their error policy. A hard rejection from that
-        outer gate escaped the graph instead of becoming a model-visible tool
-        result.
-
-        Walk the wrapper chain defensively so the complete-surface pass remains
-        idempotent regardless of which other decorators are already present.
-        """
-
-        current: object = tool
-        seen: set[int] = set()
-        while isinstance(current, BaseTool) and id(current) not in seen:
-            if isinstance(current, ToolBudgetGuardedTool):
-                return True
-            seen.add(id(current))
-            current = getattr(current, "inner", None)
-        return False
-
-
-def guard_model_tools(tools: tuple[object, ...] | list[object]) -> tuple[object, ...]:
-    """Wrap a complete model-visible tool surface exactly once.
-
-    Registries are only one source of tools. The factory appends MCP, skills,
-    prior-result, question, and desktop capability tools afterwards; calling
-    this function after final assembly is therefore the only topology that can
-    truthfully guarantee one hard budget gate per model-visible tool.
-    """
-
-    return tuple(ToolBudgetGuardedRegistry._wrap(tool) for tool in tools)
-
-
 # Optional callable signature for callers that want to build a guard
 # from a budget-loading function (e.g. the run handler).
 ToolBudgetSnapshotLoader = Callable[[str], Awaitable[list[object]]]
@@ -1265,8 +988,5 @@ ToolBudgetSnapshotLoader = Callable[[str], Awaitable[list[object]]]
 
 __all__ = (
     "ToolBudgetGuard",
-    "ToolBudgetGuardedRegistry",
-    "ToolBudgetGuardedTool",
     "estimate_tool_input_tokens",
-    "guard_model_tools",
 )

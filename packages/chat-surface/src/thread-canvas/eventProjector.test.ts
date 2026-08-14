@@ -540,6 +540,37 @@ describe("eventProjector.projectToolCalls", () => {
     );
   });
 
+  // The second producer of `unavailable`, found the same way — journey phase
+  // CB-7 watched a per-run tool cap refuse two `web_search` calls exactly as
+  // configured, and the cards said "Failed". A refusal is decided BEFORE the
+  // tool runs: nothing was attempted, so nothing broke.
+  it("keeps a tool call refused by the budget out of the error status", () => {
+    nextSeq = 0;
+    const entries = projectToolCalls([
+      makeEnvelope("tool_call_started", {
+        payload: { call_id: "toolu_01W7", tool_name: "web_search" },
+      }),
+      makeEnvelope("tool_result", {
+        payload: {
+          call_id: "toolu_01W7",
+          tool_name: "web_search",
+          status: "unavailable",
+          error_code: "tool_budget_exceeded",
+          retryable: false,
+          safe_message:
+            "The tool call budget for 'web_search' is exhausted (4 of 4 " +
+            "calls used). Do not call this tool again; finalize now with " +
+            "what you have.",
+        },
+      }),
+    ]);
+
+    expect(entries).toHaveLength(1);
+    expect(entries[0].status).toBe("unavailable");
+    // Without this the card renders blank, which is what the live run showed.
+    expect(entries[0].errorMessage).toContain("budget");
+  });
+
   it("still reports a genuine tool failure as an error", () => {
     nextSeq = 0;
     const entries = projectToolCalls([

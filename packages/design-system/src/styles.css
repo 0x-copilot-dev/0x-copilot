@@ -387,6 +387,39 @@
   --surface-hue-amber: oklch(0.62 0.11 78);
 }
 
+/* ==========================================================================
+ * CONTEXT SEGMENT CLASSES — the closed `ContextSegmentClass` taxonomy from
+ * `@0x-copilot/api-types`, given one hue each so the composer's context meter
+ * and its breakdown popover encode "which class" in colour.
+ *
+ * ALIASES over the surface-hue ramp above, not new colours. That ramp is
+ * already a perceptually-even categorical set at fixed L/C with a light-ground
+ * step-down, which is exactly what a second categorical encoding needs; the
+ * names here exist so a consumer says what it MEANS (`--color-ctx-tools`)
+ * rather than borrowing a surface's identity hue by its hue name.
+ *
+ * Two constraints decide the picks, and both are load-bearing:
+ *
+ *   1. COOL ONLY. Amber and ember carry context PRESSURE on this component
+ *      (the meter's ink at <40% / <15% headroom). A warm segment would read as
+ *      an alarm when it means nothing but "which class", so the two warm rungs
+ *      are deliberately unused here.
+ *   2. WIDELY SEPARATED. The swatch is 7px and the meter's fill is ~4px tall.
+ *      violet 300° → sky 232° → jade 158° are ~70° apart and stay distinct at
+ *      that size; the adjacent indigo 258° would collide with sky.
+ *
+ * `response_format` takes the neutral rather than a fourth hue: it is normally
+ * absent or negligible, and spending a distinguishable hue on it would cost
+ * the three that carry the finding. `unattributed` is the signed provider
+ * delta — not a class at all, so it reads as an absence of colour. */
+:root {
+  --color-ctx-system: var(--surface-hue-violet);
+  --color-ctx-tools: var(--surface-hue-sky);
+  --color-ctx-messages: var(--surface-hue-jade);
+  --color-ctx-response-format: var(--color-text-subtle);
+  --color-ctx-unattributed: var(--color-border-stronger);
+}
+
 /* Named source classes. A consumer sets ONE attribute — data-surface-hue —
  * and every downstream rule (dot, halo, value bar, numeric header) reads
  * --surface-src. That keeps name → hue resolution in exactly one place, so a

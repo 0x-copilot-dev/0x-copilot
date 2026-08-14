@@ -13,6 +13,7 @@ import {
   parseTransportError,
   type CompleteAttachment,
   type ComposerConnectorsPort,
+  type ContextPillView,
   type ProviderKeysPort,
   type RunStartRequest,
   type StartRunError,
@@ -112,6 +113,14 @@ export interface RunComposerProps {
    * frame. Host-bound (list + write); omitted ⇒ the zone is absent.
    */
   readonly filing?: RunComposerFiling;
+  /**
+   * The context meter's view, built by the cockpit from the two `/context`
+   * reads and handed down the `renderComposer` ctx. `null` when nothing has
+   * been measured — the composer then renders no meter, which is the honest
+   * state. Mirrors the web binder's prop of the same name; the two hosts share
+   * the mapping, not the fetch.
+   */
+  readonly context?: ContextPillView | null;
 }
 
 /**
@@ -149,6 +158,7 @@ export function RunComposer(props: RunComposerProps): ReactElement {
     conversationId = null,
     conversationModel = null,
     filing,
+    context,
   } = props;
 
   // The last run-create failure, surfaced inline above the composer. The
@@ -347,6 +357,9 @@ export function RunComposer(props: RunComposerProps): ReactElement {
       <AssistantComposer
         connectors={{ servers: [...servers], loading: serversLoading }}
         skills={{ skills: [...skills], loading: skillsLoading }}
+        // Context meter — built once by the cockpit, so this binder and the web
+        // one draw the same number for the same conversation.
+        context={context}
         attachmentAdapter={attachmentAdapter}
         dictationPort={desktopDictationPort}
         filePicker={filePicker}

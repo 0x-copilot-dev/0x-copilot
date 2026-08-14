@@ -278,6 +278,8 @@ import { useHostWrites } from "./useHostWrites";
 import { useRunSources } from "./useRunSources";
 import { useRunTranscript } from "./useRunTranscript";
 import { useRunSession } from "./useRunSession";
+import { useConversationContext } from "../../composer/useConversationContext";
+import type { ContextPillView } from "../../composer/contextPillView";
 
 const EMPTY_DECISIONS: ReadonlyMap<string, RunApprovalDecision> = new Map();
 const EMPTY_CLOSED_URIS: ReadonlySet<string> = new Set();
@@ -1224,6 +1226,14 @@ export interface RunDestinationProps {
      * same seam, so both composers seed their pill from the same server truth.
      */
     readonly conversationModel?: string | null;
+    /**
+     * The context meter's view model, or `null` when nothing has been measured
+     * (a fresh conversation, a run predating the ledger). The cockpit reads
+     * both `/context` endpoints through the `Transport` port ONCE and hands the
+     * result to whichever composer the host mounts, so the two hosts cannot
+     * fetch it differently — or, worse, one of them not at all.
+     */
+    readonly context?: ContextPillView | null;
   }) => ReactElement | null;
   /**
    * WC-P5a (AD-6/AD-7): host launcher for the mid-run `mcp_auth` Connect card.
@@ -2162,6 +2172,15 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
   // one latest-snapshot rather than a set to merge: keep the last one until the
   // new run supersedes it.
   const todos = useConversationTodos(conversationId, runTodos);
+
+  // The composer's context meter. Keyed on run STATUS, so it re-reads once per
+  // turn boundary rather than per event: occupancy is measured per model call,
+  // but "can I send this, or do I compact first?" is a question asked between
+  // turns, and that is when a fresh number can still change what the user does.
+  const contextMeter = useConversationContext({
+    conversationId: conversationId === "new" ? null : conversationId,
+    refetchKey: session.runStatus,
+  });
 
   // WC-P6a (AD-11): the run-scoped citation registries, projected off the SAME
   // `session.events` (FR-3.3 — no second subscription/projector). Feeds the
@@ -4367,6 +4386,7 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
               onCancel: handleCancel,
               autoActivateConnectorId: connectedConnectorServerId,
               conversationModel: session.conversationModel,
+              context: contextMeter.view,
             }),
     [
       renderComposer,
@@ -4375,6 +4395,7 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
       handleCancel,
       connectedConnectorServerId,
       session.conversationModel,
+      contextMeter.view,
     ],
   );
 

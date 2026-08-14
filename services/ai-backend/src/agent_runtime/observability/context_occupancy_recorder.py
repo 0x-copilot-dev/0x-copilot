@@ -20,10 +20,14 @@ was sent.
 **Three attribution paths, one vocabulary.** The system block is matched against
 the typed :class:`~agent_runtime.prompts.assembly.PromptAssemblyPlan` by content
 digest, so each fragment's own ``source_owner`` labels its span; whatever the
-plan does not explain is offered to the pinned third-party adapter (§4.3) and,
-failing that, recorded as ``UNDECLARED``. The tool block goes through
+plan does not explain is offered to the pinned third-party adapter (§4.3), and
+what survives that is ``UNDECLARED`` when a plan existed or the build-time
+system prompt when none did. The tool block goes through
 :class:`~agent_runtime.observability.context_tool_ledger.ToolSchemaLedger`, which
-reads the declaration each tool was stamped with at composition. Messages go
+reads the declaration each tool was stamped with at composition and, for the
+middleware tools the library installs behind our back, falls back to
+:class:`~agent_runtime.observability.context_third_party.ThirdPartyToolOrigins`.
+Messages go
 through
 :class:`~agent_runtime.observability.context_message_classifier.ContextMessageClassifier`,
 whose structural rules resolve to the same declared origins. Three very
@@ -47,7 +51,7 @@ the ``UsageMeter`` consumes. This module writes no usage row, extends no
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import hashlib
 import json
 import logging
@@ -55,7 +59,6 @@ from typing import TYPE_CHECKING, Any, Final, Protocol, runtime_checkable
 
 from pydantic import NonNegativeInt, PositiveInt
 
-from agent_runtime.observability.context_installed_tools import InstalledToolOrigins
 from agent_runtime.observability.context_message_classifier import (
     ClassifiedMessagePart,
     ContextMessageClassifier,
@@ -72,7 +75,10 @@ from agent_runtime.observability.context_origin import (
     ContextSegmentClass,
     ContextTextWidth,
 )
-from agent_runtime.observability.context_third_party import ThirdPartyContextOrigins
+from agent_runtime.observability.context_third_party import (
+    ThirdPartyContextOrigins,
+    ThirdPartyToolOrigins,
+)
 from agent_runtime.observability.context_token_counter import (
     ContextTokenCounter,
     TokenCounterSource,
@@ -146,6 +152,41 @@ class RuntimeContextOrigins:
         segment_class=ContextSegmentClass.RESPONSE_FORMAT,
         lifecycle=ContextLifecycle.RESIDENT,
     )
+
+    BUILD_TIME_SYSTEM_PROMPT: Final[ContextOrigin] = ContextOrigin(
+        owner="agent_runtime.execution.factory",
+        name="system_prompt",
+        segment_class=ContextSegmentClass.SYSTEM,
+        lifecycle=ContextLifecycle.RESIDENT,
+    )
+    """The system prompt handed to ``create_deep_agent`` when F2 assembled none.
+
+    Per-fragment attribution needs a :class:`PromptAssemblyPlan`, and there is
+    no plan unless the F2 prompt runtime is bound — which it is not on the
+    desktop, where ``RunControlContext.current()`` yields no control binding.
+    Every occupancy row a packaged run wrote carried ``assembly_record_id:
+    None`` and, consequently, a single 4,798-token ``UNDECLARED`` span covering
+    the whole system block. That is the largest number in the report, it is
+    constant on every call, and it was being announced to users through the
+    composer's context meter as a first-party contract defect.
+
+    It is not one. Without a plan the system block has exactly one first-party
+    contributor — the ``system_prompt`` argument the factory builds and passes
+    to the builder — so naming it is a *more* accurate report than leaving it
+    undeclared, not a papering-over. What is genuinely lost is the per-fragment
+    breakdown, and that loss is carried in the segment's ``detail``
+    (``system[unassembled]``) rather than smuggled into ``undeclared_tokens``,
+    whose contract is about broken declarations and not about which prompt path
+    a deployment runs.
+
+    Applied **only** when no plan exists at all. A residue left over *after* a
+    plan was matched is a real attribution gap — the plan and the prompt
+    disagree — and stays ``UNDECLARED``, which is the case that field is for.
+
+    ``cache_eligibility`` is unset for the same reason it is on the joiner: the
+    field records a declared intent read from ``PromptFragment`` metadata, and
+    an unassembled block carries no such metadata to read.
+    """
 
     ASSEMBLY_JOINER: Final[ContextOrigin] = ContextOrigin(
         owner="agent_runtime.prompts",
@@ -329,6 +370,7 @@ class SystemBlockAttributor:
     )
 
     _UNDECLARED_DETAIL: Final[str] = "system[unattributed]"
+    _UNASSEMBLED_DETAIL: Final[str] = "system[unassembled]"
     _JOINER_DETAIL: Final[str] = "system[joiners]"
 
     def __init__(self, *, third_party: ThirdPartyPromptIndex) -> None:
@@ -344,13 +386,20 @@ class SystemBlockAttributor:
 
         Total: a plan that does not match, a fragment whose owner is not a legal
         declaration, and a third-party sweep that found nothing all reduce the
-        result toward one ``UNDECLARED`` span covering the whole block. That is
-        the honest degradation — the bytes are still reported, they are simply
-        reported as unexplained.
+        result toward one span covering the whole block. That is the honest
+        degradation — the bytes are still reported, they are simply reported at
+        the coarsest granularity the available evidence supports.
+
+        ``plan is None`` and ``plan matched nothing`` are deliberately *not* the
+        same outcome. With no plan there was no per-fragment assembly to fail,
+        so the block is the build-time system prompt and is declared as such.
+        With a plan that matched nothing, the plan and the prompt disagree —
+        a real attribution defect — and the residue stays ``UNDECLARED``.
         """
 
         if not system_text:
             return ()
+        assembled = plan is not None
         try:
             matched = self._plan_spans(system_text, plan=plan)
         except Exception:  # noqa: BLE001 — measurement never fails a run (§6.4)
@@ -360,7 +409,7 @@ class SystemBlockAttributor:
                 exc_info=True,
             )
             matched = ()
-        return self._fill_gaps(system_text, matched=matched)
+        return self._fill_gaps(system_text, matched=matched, assembled=assembled)
 
     def _plan_spans(
         self,
@@ -400,6 +449,7 @@ class SystemBlockAttributor:
         system_text: str,
         *,
         matched: tuple[tuple[int, int, SystemSpan], ...],
+        assembled: bool,
     ) -> tuple[SystemSpan, ...]:
         """Interleave the matched spans with what sits between and after them.
 
@@ -416,11 +466,17 @@ class SystemBlockAttributor:
         cursor = 0
         for start, end, span in matched:
             spans.extend(
-                self._unmatched_spans(system_text[cursor:start], joiners=joiners)
+                self._unmatched_spans(
+                    system_text[cursor:start], joiners=joiners, assembled=assembled
+                )
             )
             spans.append(span)
             cursor = end
-        spans.extend(self._unmatched_spans(system_text[cursor:], joiners=joiners))
+        spans.extend(
+            self._unmatched_spans(
+                system_text[cursor:], joiners=joiners, assembled=assembled
+            )
+        )
         if joiners:
             spans.append(self._joiner_span(joiners))
         return tuple(spans)
@@ -430,6 +486,7 @@ class SystemBlockAttributor:
         text: str,
         *,
         joiners: list[str],
+        assembled: bool,
     ) -> tuple[SystemSpan, ...]:
         """Attribute leftover system bytes, collecting assembly joiners aside.
 
@@ -438,7 +495,13 @@ class SystemBlockAttributor:
         :attr:`RuntimeContextOrigins.ASSEMBLY_JOINER` for why that is a
         declaration rather than an ``UNDECLARED`` row. Anything else is real
         text somebody contributed, and is offered to the third-party adapter
-        before it is admitted as undeclared.
+        before anything else is decided about it.
+
+        The library's own constants are peeled off first either way — a
+        ``deepagents`` prompt inside an unassembled block still belongs to
+        ``deepagents``, and sweeping it into a first-party bucket would trade
+        one misattribution for another. Only the residue of that split is
+        affected by ``assembled``.
         """
 
         if not text:
@@ -446,7 +509,28 @@ class SystemBlockAttributor:
         if not text.strip():
             joiners.append(text)
             return ()
-        return self._third_party.split(text, undeclared_detail=self._UNDECLARED_DETAIL)
+        split = self._third_party.split(text, undeclared_detail=self._UNDECLARED_DETAIL)
+        if assembled:
+            return split
+        return tuple(self._as_build_time_prompt(span) for span in split)
+
+    @classmethod
+    def _as_build_time_prompt(cls, span: SystemSpan) -> SystemSpan:
+        """Declare an unassembled residue against the build-time system prompt.
+
+        Only an undeclared span is rewritten. A span the third-party index
+        already claimed keeps its library owner, because that attribution is
+        evidence-based — the bytes matched a pinned constant — and is strictly
+        better than the coarse first-party bucket.
+        """
+
+        if span.origin is not None:
+            return span
+        return replace(
+            span,
+            origin=RuntimeContextOrigins.BUILD_TIME_SYSTEM_PROMPT,
+            detail=cls._UNASSEMBLED_DETAIL,
+        )
 
     @classmethod
     def _joiner_span(cls, joiners: Sequence[str]) -> SystemSpan:
@@ -740,19 +824,21 @@ class ContextOccupancyRecorder:
         *,
         counter: ContextTokenCounter | None = None,
         third_party: ThirdPartyPromptIndex | None = None,
+        third_party_tools: ThirdPartyToolOrigins | None = None,
         builder: SnapshotBuilder | None = None,
-        installed_tools: InstalledToolOrigins | None = None,
     ) -> None:
         self._counter = counter or ContextTokenCounter()
         self._third_party = third_party or ThirdPartyPromptIndex(
             origins=ThirdPartyContextOrigins()
         )
+        # The tool-block counterpart of ``_third_party``. Separate collaborators
+        # because they resolve different things by different means — one indexes
+        # the dependency's prompt *text*, the other reads a tool's authoring
+        # module — and a test that wants a third-party-free system block still
+        # wants real tool attribution.
+        self._third_party_tools = third_party_tools or ThirdPartyToolOrigins()
         self._builder = builder or SnapshotBuilder()
         self._system = SystemBlockAttributor(third_party=self._third_party)
-        # The tool-block analogue of ``third_party``: declarations for the tools
-        # a middleware installs, which never pass the factory's append list and
-        # so could never have been stamped at a composition site.
-        self._installed_tools = installed_tools or InstalledToolOrigins()
 
     # --- public seam ---------------------------------------------------------
 
@@ -1191,11 +1277,15 @@ class ContextOccupancyRecorder:
         so the numbers come from the real tokenizer chain rather than from the
         char/4 stand-in it defaults to.
 
-        The installed-tool inventory is injected the same way, and for the same
-        reason the third-party prompt index is: a tool a middleware installs has
-        no composition site at which it could declare itself, so without a
-        declaration made on its behalf it measures as ``UNDECLARED`` forever
-        while the conformance gate that is supposed to catch that stays green.
+        ``fallback_origin`` is §4.3 applied to the tool block, and it is what
+        closes the gap that made ``undeclared_tokens`` permanently non-zero.
+        ``materialized.tools`` is the *library's* final tool list, not ours:
+        ``create_deep_agent`` installs the filesystem, todo and subagent
+        middleware tools inside itself, so those nine reach the wire having
+        never passed the one composition site that stamps a declaration. The
+        stamp still wins wherever one exists — this only speaks for tools that
+        have none, and only when their authoring module is outside this
+        repository.
         """
 
         if not materialized.tools:
@@ -1204,7 +1294,7 @@ class ContextOccupancyRecorder:
         footprints = ToolSchemaLedger.measure(
             materialized.tools,
             counter=bridge,
-            origin_fallback=self._installed_tools.origin_for,
+            fallback_origin=self._third_party_tools.origin_for,
         )
         sources = bridge.sources_for(footprints)
         return tuple(

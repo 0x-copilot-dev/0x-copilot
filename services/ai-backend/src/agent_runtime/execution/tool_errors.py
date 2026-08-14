@@ -56,9 +56,10 @@ class SafeToolError(Exception):
 class ToolBudgetRejected(SafeToolError):
     """A tool call was refused by a hard budget cap — the run continues.
 
-    Raised by :class:`ToolBudgetGuardedTool` when admission is rejected
-    under HARD enforcement. The inner tool never executes, so the cap has
-    already done its job: no further spend is incurred on that tool.
+    Raised by :class:`~agent_runtime.capabilities.middleware.runtime_tool_control.RuntimeControlMiddleware`
+    when admission is rejected under HARD enforcement. The tool never
+    executes, so the cap has already done its job: no further spend is
+    incurred on that tool.
 
     The refusal is surfaced to the model as a tool result rather than
     raised through the stream, because the model's correct response is

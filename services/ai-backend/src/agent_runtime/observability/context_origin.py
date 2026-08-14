@@ -198,7 +198,7 @@ class ContextOriginBinding:
     ATTRIBUTE: Final[str] = "__context_origin__"
 
     # The wrapper attribute names this codebase actually uses to hold an inner
-    # tool (``ToolBudgetGuardedTool.inner``, the policy and citation wrappers).
+    # tool (``ToolErrorPolicyTool.inner``, the retry and citation wrappers).
     # Bounded and explicit rather than a generic attribute crawl: an unbounded
     # search over arbitrary objects is how an observability read turns into a
     # surprise property access on a live tool.
@@ -230,6 +230,38 @@ class ContextOriginBinding:
                 type(target).__name__,
             )
         return target
+
+    @classmethod
+    def carry_over(cls, source: object, target: object) -> object:
+        """Copy ``source``'s declaration onto ``target`` when ``target`` has none.
+
+        The escape hatch for a re-wrapper that *rebuilds* a tool instead of
+        wrapping it. :meth:`of` walks the wrapper chain, which covers every
+        adapter that keeps its inner under one of
+        :attr:`WRAPPER_ATTRIBUTES` — but a wrapper built with
+        ``StructuredTool.from_function`` holds its inner in a **closure**, so
+        there is no attribute to walk and the new object is genuinely
+        undeclared.
+
+        That is not a hypothetical shape. ``wrap_tools_with_display`` takes
+        exactly that branch for a tool that is a ``BaseTool`` but not a
+        ``StructuredTool``, which is what ``web_search`` is once
+        ``RetryingTool`` has wrapped it: the factory stamped it correctly, the
+        display decoration returned a fresh tool, and the declaration was gone
+        by the time the tool block was measured. It read as an undeclared
+        first-party contributor — the right alarm for the wrong reason, since
+        the composition site had done its job.
+
+        ``target`` wins when it already carries a declaration: a rebuilt tool
+        that declared itself knows better than the thing it replaced.
+        """
+
+        if cls.of(target) is not None:
+            return target
+        declared = cls.of(source)
+        if declared is None:
+            return target
+        return cls.declare(target, declared)
 
     @classmethod
     def of(cls, target: object) -> ContextOrigin | None:
@@ -280,6 +312,17 @@ def context_origin_of(target: object) -> ContextOrigin | None:
     return ContextOriginBinding.of(target)
 
 
+def carry_context_origin(source: object, target: object) -> object:
+    """Preserve ``source``'s declaration across a rebuild into ``target``.
+
+    Module-level seam over :meth:`ContextOriginBinding.carry_over`, so a
+    re-wrapping site outside the observability lane keeps its declaration
+    handling to one obvious call and does not have to know the binding class.
+    """
+
+    return ContextOriginBinding.carry_over(source, target)
+
+
 __all__ = (
     "UNDECLARED_CONTEXT_LABEL",
     "ContextLifecycle",
@@ -287,6 +330,7 @@ __all__ = (
     "ContextOriginBinding",
     "ContextSegmentClass",
     "ContextTextWidth",
+    "carry_context_origin",
     "context_origin_of",
     "declare_context_origin",
 )
