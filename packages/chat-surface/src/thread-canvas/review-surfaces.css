@@ -1069,6 +1069,85 @@
   justify-self: start;
 }
 
+/* ── the durable arm: "always allow this folder" ─────────────────────────────
+ *
+ * IN THE BODY BY REQUIREMENT, not by preference. Two separate rules put it here
+ * and either alone would be decisive. The header clips at its END, where the
+ * decision controls are, so anything added there must be bounded or shrinkable —
+ * and this control's subject is a host folder name of arbitrary length. And a
+ * durable grant is consented to by reading WHICH FOLDER: the producer withholds
+ * the whole option rather than offer it over a path its own card would truncate
+ * (`_grant_scope`), so a control that could not print the path would undo that.
+ *
+ * Which is why `.tc-write-gate__grant-path` is `--font-mono` on its own line
+ * with no ellipsis and no line clamp — the one string here nothing is allowed to
+ * shorten. It inherits `overflow-wrap: anywhere` from the body rule above, and
+ * that inheritance is load-bearing rather than incidental: a long unbreakable
+ * path would otherwise set the body's min-content width, which sets the grid
+ * TRACK width, which the header stretches to, which clips the header's buttons
+ * out of a frame that is `overflow: hidden`. The body rule is per-container
+ * precisely so a block added later cannot forget it.
+ *
+ * The button is a GHOST. The primary tone belongs to the once arm in the header:
+ * a filled "Always allow" beside a quiet "Approve" would read as the recommended
+ * choice, and the recommended choice is never the one that outlives the run.
+ */
+
+.tc-write-gate__grant {
+  background: var(--color-surface-muted);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  display: grid;
+  gap: var(--space-xs);
+  padding: var(--space-sm);
+}
+
+.tc-write-gate__grant-lead {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-xs);
+  letter-spacing: var(--tracking-caption);
+  margin: 0;
+}
+
+.tc-write-gate__grant-path {
+  color: var(--color-text);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-mono-10);
+  letter-spacing: var(--tracking-caption);
+  margin: 0;
+}
+
+/* Ember, and only here. The failure is the one thing on this block the user has
+   to act on, and it is a host sentence — the OS declined, the broker is down —
+   not something the app can restate. */
+.tc-write-gate__grant-failure {
+  color: var(--color-danger);
+  font-size: var(--font-size-xs);
+  letter-spacing: var(--tracking-caption);
+  margin: 0;
+}
+
+.tc-write-gate__grant-note {
+  color: var(--color-text-subtle);
+  font-size: var(--font-size-mono-10);
+  letter-spacing: var(--tracking-caption);
+  margin: 0;
+}
+
+/* `justify-self: start` so the button keeps its intrinsic width inside the grid
+   instead of stretching the full body — a full-bleed durable action would out-
+   weigh the header's Approve by area alone. */
+.tc-write-gate__grant-actions {
+  display: flex;
+  gap: var(--space-xs);
+  justify-self: start;
+}
+
+.tc-write-gate__grant-btn:focus-visible {
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: 1px;
+}
+
 /* ── the shaped evidence: the batch, and the draft ───────────────────────────
  *
  * Both live BELOW the header, for the same reason the params frame does: the

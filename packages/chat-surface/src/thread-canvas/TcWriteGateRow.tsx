@@ -32,20 +32,68 @@
 // renders through the same card — but renaming it is a separate, mechanical
 // step that has to move the journey with it.
 //
-// The three DECISION controls are the exception: their testids come from props
-// (`approveTestId` / `declineTestId` / `bodyApproveTestId`), because the id a
-// decision is pressed for has to be unambiguous when two asks stack, and six
-// live desktop journeys select those controls by an approval-scoped name.
-// `renderAskCard` supplies them; the defaults here are for a standalone mount.
+// The DECISION controls are the exception: their testids come from props
+// (`approveTestId` / `declineTestId` / `bodyApproveTestId` / `grantAlwaysTestId`),
+// because the id a decision is pressed for has to be unambiguous when two asks
+// stack, and six live desktop journeys select those controls by an
+// approval-scoped name. `renderAskCard` supplies them; the defaults here are for
+// a standalone mount.
+//
+// ONCE vs ALWAYS. Some asks carry a durable second arm — the wire's
+// `grant_options: [allow_once, allow_always]` with a `grant_scope` naming the
+// folder. The header's Approve is the ONCE arm and is unchanged; the always arm
+// is `grantAlways`, and it lives in the BODY because it hands over a capability
+// that outlives the run and can only be consented to by reading which folder.
+// See the prop for why the header could not carry it either way.
+//
+// A WRITE never gets that arm, and this card does not decide that — the producer
+// does, by shipping `["allow_once"]` and no scope. `stream_events.py:227-234`
+// records why: an "always" on a write folder means ATTACH A FOLDER, which a
+// write inside an already-attached folder does not need, and the control the
+// user actually wants after the third card ("stop pausing for this run") is the
+// composer's bypass pill. Do not synthesise the arm here from `read_only`.
 //
 // Kit-only styling; framework-agnostic (no window/document/fetch).
 
-import { useId, useState, type ReactElement } from "react";
+import { useId, useState, type ReactElement, type ReactNode } from "react";
 
-import type { ApprovalPresentation } from "../approvals/presentation";
+import type { WorkspaceGrantCardState } from "../approvals/WorkspaceGrantCard";
+import {
+  grantAccessLabel,
+  type ApprovalPresentation,
+  type WorkspaceGrantRequest,
+} from "../approvals/presentation";
 import type { ActivityParam } from "../approvals/types";
 import { Icon } from "../icons/Icon";
 import { hasWriteGateEvidence, TcWriteGatePayload } from "./TcWriteGatePayload";
+
+/**
+ * The "and don't ask again for this folder" arm of an ask that offers one.
+ *
+ * WHY THIS IS NOT A SECOND APPROVE BUTTON. Both arms settle the same ask, but
+ * they settle it through different machinery and with different lifetimes.
+ * "Once" is the header's Approve: a `/decision` POST, and the permission dies
+ * with the step. "Always" is a durable capability — the host opens an OS
+ * confirm, the broker mints a grant that outlives this run, and only THEN does
+ * the run resume. So this arm carries a state machine the run stream cannot see
+ * (the dialog is not ours) and a failure mode the POST does not have, which is
+ * why it arrives as an object rather than as a bare callback.
+ */
+export interface WriteGateGrantAlways {
+  /**
+   * The folder, as the producer named it. Reuses the folder-ask shape because
+   * it IS one — the same block, validated by the same server-side projector.
+   */
+  readonly request: WorkspaceGrantRequest;
+  /** Where the host's native dialog has got to; `pending` offers the choice. */
+  readonly state: WorkspaceGrantCardState;
+  /** Verbatim host failure text. Shown on `failed`; a generic line without it. */
+  readonly failureMessage: string | null;
+  /** Hand the folder over. Also the retry — both are "ask again". */
+  readonly onGrant: () => void;
+  /** Stop claiming a dialog is up. Local state only; the OS has no abort. */
+  readonly onCancel: () => void;
+}
 
 export interface TcWriteGateRowProps {
   /** Verb-first line: "Create an issue in Parth-test". */
@@ -161,6 +209,36 @@ export interface TcWriteGateRowProps {
    * design withholds until the payload has been read.
    */
   readonly bodyApproveTestId?: string;
+  /**
+   * The durable arm of the decision, when the wire offered one. Absent — which
+   * is nearly always — leaves the ask once-only and this card byte-identical.
+   *
+   * IN THE BODY, NOT THE HEADER, for two independent reasons and either would
+   * be enough. The header is byte-identical collapsed and expanded and clips at
+   * its END where the decision controls are, so its rule is that anything added
+   * must be bounded or shrinkable — and this control's subject is a folder name
+   * of arbitrary length. And a durable grant is consented to by READING WHICH
+   * FOLDER: the producer goes as far as withholding the whole option when the
+   * card's own path would be truncated, on the ground that consent to an
+   * ellipsis is not consent. A header button could not print the path at all.
+   *
+   * So the asymmetry is deliberate and points the safe way: approving ONCE stays
+   * one click, and the option that outlives the run costs a disclosure — the
+   * same shape as the irreversible lane's withheld Approve, for the same reason.
+   */
+  readonly grantAlways?: WriteGateGrantAlways | null;
+  /**
+   * Testid for the durable grant control — a DECISION control, so `renderAskCard`
+   * scopes it to the approval (`tc-chat-approval-grant-always-<approvalId>`) and
+   * the default here is for a standalone mount only.
+   *
+   * Deliberately NOT under `tc-chat-approval-approve-`: five live journeys press
+   * Approve by that prefix, and this button does something strictly larger than
+   * what they mean to press. It must not be reachable by their selector, and the
+   * name is what guarantees that — the same rule that puts the body approve at
+   * `…-body-approve-<id>` rather than `…-approve-body-<id>`.
+   */
+  readonly grantAlwaysTestId?: string;
 }
 
 const EMPTY_PARAMS: readonly ActivityParam[] = [];
@@ -189,6 +267,8 @@ export function TcWriteGateRow({
   approveTestId = "tc-write-gate-approve",
   declineTestId = "tc-write-gate-decline",
   bodyApproveTestId = "tc-write-gate-body-approve",
+  grantAlways = null,
+  grantAlwaysTestId = "tc-write-gate-grant-always",
 }: TcWriteGateRowProps): ReactElement {
   // Local, for the same reason `TcInlineArtifactCard` keeps its own: nothing
   // outside this card acts on whether it is open, and lifting it would
@@ -437,8 +517,132 @@ export function TcWriteGateRow({
               {approveLabel}
             </button>
           ) : null}
+          {renderGrantAlways(grantAlways, grantAlwaysTestId, busy)}
         </div>
       ) : null}
     </article>
   );
+}
+
+/**
+ * The durable arm, drawn only when the wire offered one.
+ *
+ * The PATH is printed in full, on its own wrapping line, exactly as
+ * `WorkspaceGrantCard` prints it and for the same reason: every other string on
+ * an approval is a name, and this one is the subject of the decision. The body
+ * already forces `overflow-wrap: anywhere` on every descendant, so a long path
+ * wraps rather than setting the card's min-content width — which is the failure
+ * mode that clips the header's decision controls out of reach.
+ *
+ * WITHHELD WHEN THE ACCESS IS UNKNOWN, the same rule the folder card follows:
+ * `grantAccessLabel` returns null rather than guess, and a button that hands
+ * over unnamed access is the one lie this whole path exists to prevent. The
+ * producer sets `read_only` on every scope it emits today, so this is a guard
+ * against a future payload rather than a live branch — but it fails the safe
+ * way, and it explains itself instead of rendering a card that looks broken.
+ */
+function renderGrantAlways(
+  grant: WriteGateGrantAlways | null,
+  testId: string,
+  busy: boolean,
+): ReactNode {
+  if (grant === null) {
+    return null;
+  }
+  const { request, state } = grant;
+  const access = grantAccessLabel(request.mode);
+  // Terminal: the folder is handed over and the host is already resuming the
+  // run, so offering the choice again would be offering a decision that has
+  // been made. Revoking lives where the grant list does, never on a transcript
+  // card that scrolls away.
+  const settled = state === "granted";
+  return (
+    <div
+      className="tc-write-gate__grant"
+      data-testid="tc-write-gate-grant"
+      data-state={state}
+    >
+      <p className="tc-write-gate__grant-lead">
+        {grantLead(state, request.folderName)}
+      </p>
+      <p
+        className="tc-write-gate__grant-path"
+        data-testid="tc-write-gate-grant-path"
+      >
+        {request.path}
+      </p>
+      {state === "failed" ? (
+        <p
+          className="tc-write-gate__grant-failure"
+          data-testid="tc-write-gate-grant-failure"
+        >
+          {grant.failureMessage ??
+            "The folder was not shared, and nothing was granted."}
+        </p>
+      ) : null}
+      {settled ? null : (
+        <div className="tc-write-gate__grant-actions">
+          {state === "granting" ? (
+            <button
+              type="button"
+              className="ui-button ui-button--sm ui-button--ghost"
+              data-testid="tc-write-gate-grant-cancel"
+              onClick={grant.onCancel}
+            >
+              Cancel
+            </button>
+          ) : (
+            <button
+              type="button"
+              className="ui-button ui-button--sm ui-button--ghost tc-write-gate__grant-btn"
+              data-testid={testId}
+              // The label is STATE-INVARIANT, including after a failure: the
+              // failure line above already says what went wrong, and a button
+              // that renames itself to "Try again" is a second control by
+              // width and by name for what is one verb — ask for this folder.
+              disabled={busy || access === null}
+              onClick={grant.onGrant}
+            >
+              Always allow this folder
+            </button>
+          )}
+        </div>
+      )}
+      {access === null ? (
+        <p
+          className="tc-write-gate__grant-note"
+          data-testid="tc-write-gate-grant-unknown-access"
+        >
+          This request didn&apos;t say what access it needs, so the folder
+          can&apos;t be handed over from here — add it in Settings instead.
+        </p>
+      ) : settled ? null : (
+        // Unconditional halves are properties of the MECHANISM — a grant binds
+        // one root and the broker refuses anything outside it, and every grant
+        // is revocable — so they are stated flatly. The access clause is a claim
+        // about THIS ask, which is why it is the conditional one.
+        <p className="tc-write-gate__grant-note">
+          {[access, "this folder only", "revoke anytime"].join(" · ")}
+        </p>
+      )}
+    </div>
+  );
+}
+
+/** What the durable arm says about itself, per state. */
+function grantLead(state: WorkspaceGrantCardState, folderName: string): string {
+  switch (state) {
+    case "granting":
+      return `Your computer is asking you to confirm ${folderName} — approve there and the run continues.`;
+    case "granted":
+      return `${folderName} is available to this agent until you revoke it.`;
+    case "failed":
+      return `${folderName} was not shared.`;
+    default:
+      // Names BOTH arms, because the once arm is the button in the header and
+      // nothing else on the card would otherwise say that approving is a
+      // one-off. A durable option offered beside an unexplained default is how
+      // a user learns to click the bigger one to make the asking stop.
+      return "Approve above to allow this once, or hand over the whole folder until you revoke it:";
+  }
 }
