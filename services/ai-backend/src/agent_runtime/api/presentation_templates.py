@@ -107,6 +107,14 @@ class _ErrorMessage:
         "Step interrupted",
         "0xCopilot lost track of this step and stopped it.",
     )
+    # Says what happened to the STEP and then declines to blame the tool. The
+    # old copy for this case was TOOL_EXCEPTION's — "the tool reported an error
+    # and didn't return a result" — which is an assertion about the tool, and a
+    # false one: the tool reported nothing because the run ended underneath it.
+    TOOL_RUN_FAILED = (
+        "Step interrupted",
+        "The run stopped before this step finished; the tool itself reported no error.",
+    )
     TOOL_CANCELLED = (
         "Step cancelled",
         "This step was cancelled before it could finish.",
@@ -151,11 +159,15 @@ class _ErrorRetryability:
     #: Listed for the record: repeating these is guaranteed to fail identically.
     #: PERMISSION_DENIED needs a grant, WORKSPACE_UNAVAILABLE needs a folder,
     #: and TOOL_CANCELLED was the user's own decision — re-running is a new
-    #: instruction, not a retry.
+    #: instruction, not a retry. TOOL_RUN_FAILED is here rather than beside its
+    #: TOOL_RUN_* siblings because retrying the STEP is meaningless: whether
+    #: anything can change is a property of the run's failure, which the
+    #: ``run_failed`` event reports under its own code and retryability.
     _NOT_RETRYABLE = frozenset(
         {
             "PERMISSION_DENIED",
             "TOOL_CANCELLED",
+            "TOOL_RUN_FAILED",
             "WORKSPACE_UNAVAILABLE",
             "WORKSPACE_NO_GRANTS",
             "WORKSPACE_PERMISSION_DENIED",

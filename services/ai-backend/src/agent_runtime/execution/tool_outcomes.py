@@ -61,6 +61,16 @@ class ToolErrorCode(StrEnum):
     TOOL_TIMEOUT = "tool_timeout"
     TOOL_RUN_TIMEOUT = "tool_run_timeout"
     TOOL_RUN_ABANDONED = "tool_run_abandoned"
+    # The RUN failed for a reason of its own — a step-ceiling overrun, a
+    # provider error, a bug anywhere in the graph — while this call was still
+    # in flight. The tool never reported anything: it may well have been about
+    # to succeed. Distinct from ``TOOL_EXCEPTION`` because collapsing the two
+    # makes the ledger assert something false about the tool, and a reader with
+    # only the ledger cannot tell them apart. That is not hypothetical — a
+    # benchmark run read four ``write_todos`` rows, saw the last one closed as
+    # ``tool_exception``, and published "write_todos threw on its 4th call"
+    # about a run that had actually hit LangGraph's step limit.
+    TOOL_RUN_FAILED = "tool_run_failed"
     TOOL_CANCELLED = "tool_cancelled"
     # Per-tool budget rejection enforced at the gate. The model sees the
     # safe error string and can decide to continue without this tool.

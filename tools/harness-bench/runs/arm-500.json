@@ -1,0 +1,53 @@
+{
+  "recursion_limit": "500",
+  "tasks": [
+    {
+      "task": "t1-trivial",
+      "run_id": "e0f2115a15ca4d20905929d7412f1d8e",
+      "status": "completed",
+      "safe_error": null,
+      "seconds": 6.0,
+      "llm_calls": 0,
+      "tool_calls": 0,
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "events": 9
+    },
+    {
+      "task": "t2-three-steps",
+      "run_id": "aa6a5d77e0464ef283d4b197f978748e",
+      "status": "completed",
+      "safe_error": null,
+      "seconds": 6.5,
+      "llm_calls": 0,
+      "tool_calls": 0,
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "events": 10
+    },
+    {
+      "task": "t3-todo-driven",
+      "run_id": "71930856261a4b89803c3c718d31de43",
+      "status": "completed",
+      "safe_error": null,
+      "seconds": 30.8,
+      "llm_calls": 0,
+      "tool_calls": 5,
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "events": 244
+    },
+    {
+      "task": "t4-long-chain",
+      "run_id": "fff0e6066fcf4f04ae1fef1adcc60382",
+      "status": "completed",
+      "safe_error": null,
+      "seconds": 12.7,
+      "llm_calls": 0,
+      "tool_calls": 0,
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "events": 12
+    }
+  ]
+}

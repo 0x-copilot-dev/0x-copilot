@@ -12,6 +12,35 @@ from runtime_worker.stream_subagents import StreamUpdateProcessor
 from runtime_worker.stream_tools import StreamMessageProcessor
 
 
+#: The checklist from benchmark run ``2d30ca71ad2b4d8da58ee88deb9d4036``, whose
+#: fourth ``write_todos`` call was reported as a tool crash. Recovered from that
+#: run's ``tool_invocations.jsonl`` result summaries and its ``tool_call_delta``
+#: argument buffers.
+_RECORDED_STEPS = (
+    "List three European capitals",
+    "Identify the country of each capital",
+    "Name one river in each country",
+    "Produce final table of all three rows",
+)
+_RECORDED_SEQUENCE = (
+    ("pending", "pending", "pending", "pending"),
+    ("completed", "in_progress", "pending", "pending"),
+    ("completed", "completed", "in_progress", "pending"),
+    ("completed", "completed", "completed", "in_progress"),
+)
+#: What that run's ledger row stored for the SAME argument — every row's
+#: ``content`` concatenated, every ``status`` gone.
+_LEDGER_FLATTENED_TODOS = "".join(_RECORDED_STEPS)
+
+
+def _recorded_todos(statuses: tuple[str, ...]) -> list[dict[str, str]]:
+    """One call of the recorded sequence, as the model sent it."""
+    return [
+        {"content": content, "status": status}
+        for content, status in zip(_RECORDED_STEPS, statuses, strict=True)
+    ]
+
+
 class RecordingEventProducer:
     """Collect every appended event so a test can assert the emitted stream."""
 
@@ -245,6 +274,58 @@ class TestTodoListEventEmission(_WriteTodosDriverMixin):
         assert any(
             event["event_type"] is RuntimeApiEventType.TOOL_RESULT
             for event in producer.events
+        )
+
+    async def test_the_recorded_four_call_sequence_emits_four_checklists(self) -> None:
+        # The sequence a live benchmark reported as a ``write_todos`` crash on
+        # its fourth call, replayed through the seam on the provider path it
+        # actually took (arguments as JSON text deltas). Four calls in, four
+        # checklists out, and nothing raised — the tool was not the fault.
+        producer = RecordingEventProducer()
+        processor = self.processor(producer)
+        run = self.run_record()
+        for index, statuses in enumerate(_RECORDED_SEQUENCE):
+            await self.write_todos(
+                processor,
+                run,
+                call_id=f"call_{index}",
+                todos=_recorded_todos(statuses),
+                streamed=True,
+            )
+
+        payloads = self.todo_events(producer)
+        assert [payload["generation"] for payload in payloads] == [1, 1, 1, 1]
+        assert payloads[-1]["todos"] == _recorded_todos(_RECORDED_SEQUENCE[-1])
+
+    async def test_a_streamed_list_arrives_as_rows_not_as_one_run_on_string(
+        self,
+    ) -> None:
+        # The trap that would have hidden the list: read a tool's arguments off
+        # the DISPLAY payload and every ``{"content": ..., "status": ...}`` row
+        # collapses into its concatenated ``content`` values, statuses gone. The
+        # benchmark's ledger stored exactly that string. The projector must not
+        # be reading from there — and the proof is that the statuses survive.
+        producer = RecordingEventProducer()
+        processor = self.processor(producer)
+        todos = _recorded_todos(_RECORDED_SEQUENCE[-1])
+        await self.write_todos(
+            processor,
+            self.run_record(),
+            call_id="call_last",
+            todos=todos,
+            streamed=True,
+        )
+
+        [payload] = self.todo_events(producer)
+        assert payload["todos"] == todos
+        assert [row["status"] for row in payload["todos"]] == list(
+            _RECORDED_SEQUENCE[-1]
+        )
+        # The same argument, flattened the way the display/ledger path does it:
+        # byte-for-byte the string that live run's ledger row recorded.
+        assert (
+            StreamMessageParser.payload_mapping({"todos": todos})["todos"]
+            == _LEDGER_FLATTENED_TODOS
         )
 
     async def test_other_tools_never_emit_a_checklist(self) -> None:
