@@ -50,7 +50,6 @@ agent_runtime.capabilities.mcp.freshness:McpDescriptorFreshnessDecision.reuse_al
 agent_runtime.capabilities.mcp.freshness:RevisionAwareMcpDiscoveryCache.subject_registration_diagnostics :: no src caller at all; referenced only by 1 test file(s)
 agent_runtime.capabilities.mcp.middleware.exec_policy_tool:McpExecPolicyTool.stream_resumption_enabled :: no src caller at all; referenced only by 1 test file(s)
 agent_runtime.capabilities.mcp.proxy_transport:BackendProxyTransport.handle_async_request :: no src caller at all; referenced only by 1 test file(s)
-agent_runtime.capabilities.middleware.runtime_tool_control:RuntimeControlMiddleware.before_model :: no src caller at all; referenced only by 4 test file(s)
 agent_runtime.capabilities.middleware.runtime_tool_control:RuntimeControlMiddleware.final_tool_surface :: no src caller at all; referenced only by 2 test file(s)
 agent_runtime.capabilities.operations.builtin_catalog:BuiltinOperationCatalog.descriptor_or_safe_default :: no src caller at all; referenced only by 1 test file(s)
 agent_runtime.capabilities.operations.builtin_catalog:BuiltinOperationCatalog.model_visible_entries :: no src caller at all; referenced only by 2 test file(s)

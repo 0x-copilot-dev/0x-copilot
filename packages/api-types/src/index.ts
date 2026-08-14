@@ -732,6 +732,7 @@ export type RuntimeApiEventType =
   | "run_cancelled"
   | "run_completed"
   | "run_failed"
+  | "run_steered"
   | "progress"
   | "reasoning_summary"
   | "reasoning_summary_delta"
@@ -824,6 +825,7 @@ export const RUNTIME_API_EVENT_TYPES = [
   "run_cancelled",
   "run_completed",
   "run_failed",
+  "run_steered",
   "progress",
   "reasoning_summary",
   "reasoning_summary_delta",
@@ -3772,6 +3774,24 @@ export interface ApprovalUndoRequestedPayload {
   [key: string]: unknown;
 }
 
+/** One user interjection addressed to a run that is already executing. */
+export interface RuntimeSteeringMessage {
+  steer_id: string;
+  text: string;
+  requested_by_user_id: UserId;
+  created_at: string;
+  [key: string]: unknown;
+}
+
+/**
+ * The user's mid-run interjection, as the transcript records it. Carries the
+ * same message the queued steer command carries, not a transcript-only copy.
+ */
+export interface RuntimeSteerNotePayload {
+  steer: RuntimeSteeringMessage;
+  [key: string]: unknown;
+}
+
 export interface RuntimeEventPayloadByType
   extends
     ArtifactRuntimeEventPayloadMap,
@@ -3782,6 +3802,7 @@ export interface RuntimeEventPayloadByType
   run_cancelled: RuntimeLifecyclePayload;
   run_completed: RuntimeLifecyclePayload;
   run_failed: RuntimeLifecyclePayload;
+  run_steered: RuntimeSteerNotePayload;
   progress: RuntimeTextPayload;
   reasoning_summary: ReasoningSummaryPayload;
   reasoning_summary_delta: ReasoningSummaryDeltaPayload;
