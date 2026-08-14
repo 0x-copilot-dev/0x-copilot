@@ -222,3 +222,31 @@ prices, and about 15x the recursion set. A number far from that is itself the
 finding: far below means the model batched work the prompts asked it to serialise
 (read `peak_parallel`), far above means something is looping (read `budget_notes`
 and `terminal_code` before concluding anything about the ceiling).
+
+## 5. The cold-prompt trajectory, measured at each step
+
+Same four tasks, same model, same stage discipline (re-staged from the tree
+under test before every run). Cold prompt is run 1's input, which is the one
+paid at full price.
+
+| build                                   | cold prompt | tools segment | 4-task total | completion |
+| --------------------------------------- | ----------- | ------------- | ------------ | ---------- |
+| baseline (harness program as merged)    | 23,181      | 9,759         | 95,655       | 3/4 @ 25   |
+| + `run_tool_program` gated, attribution | 22,304      | 9,159         | 91,098       | 4/4        |
+| + first-party tool disclosure           | **20,547**  | **7,910**     | **83,662**   | 4/4        |
+
+**Cumulative: −2,634 cold tokens (−11.4%), −11,993 total (−12.5%), completion
+3/4 → 4/4.**
+
+The disclosure step was predicted at −1,326 and measured **−1,757** — it beat its
+own estimate, because deferring prose also shrank text the estimate attributed
+elsewhere. Predictions here are worth recording precisely so they can be scored;
+this one was conservative.
+
+What remains resident and what it costs: `write_todos` 997 (third-party,
+LangChain middleware), `stage_rowset_write` 900, `publish_artifact` 805,
+`ask_a_question` 667 (deliberately resident — it is reached while a human
+waits), `grep` 539 (deepagents). The named next lever is **lossless JSON-schema
+slimming**: pydantic emits a `"title"` for every field, ~15–20% of every args
+schema with zero semantic loss, applying to third-party tools too and requiring
+no model behaviour change at all.
