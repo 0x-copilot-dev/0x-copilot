@@ -6548,3 +6548,20 @@ export { ACTIVITY_RUN_STATUSES } from "./activity";
 // site: ./skills.ts.
 export type { SkillSummary } from "./skills";
 // === end Phase 4 Skills ===
+
+// Declared agents (agent-as-configuration). The read/declare/undeclare surface
+// under `/v1/agent/subagents`, which is how an agent gets its own tools, skills
+// and scopes without hand-editing `subagent_defs/*.json`. Single declaration
+// site: ./subagentDefinitions.ts.
+export type {
+  DeclaredSubagentListResponse,
+  SubagentDefinition,
+  SubagentFilesystemPermission,
+  SubagentPolicyGrant,
+  SubagentPolicyMode,
+  SubagentTransport,
+} from "./subagentDefinitions";
+export {
+  isDeclaredSubagentListResponse,
+  isSubagentDefinition,
+} from "./subagentDefinitions";
