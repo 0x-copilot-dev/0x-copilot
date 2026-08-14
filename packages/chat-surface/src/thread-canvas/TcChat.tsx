@@ -91,6 +91,12 @@ import { useSwimlaneScrub } from "./SwimlaneScrubContext";
 // statement ABOUT the transcript and there is nothing on it to act on.
 import type { CompactionNoticeEntry } from "../destinations/run/compactionProjection";
 import { TcCompactionDivider } from "./TcCompactionDivider";
+// The user's mid-run interjection. Same arrangement as the compaction sibling
+// above — a pure selector upstream (`projectSteerNotes`), interleaved here by
+// seq — and drawn as an in-thread line rather than a card, because the runtime
+// classifies `run_steered` as a `note` for exactly that reason.
+import type { SteerNoteEntry } from "../destinations/run/steerProjection";
+import { TcSteerNote } from "./TcSteerNote";
 import { TcTodoList } from "./TcTodoList";
 import { ToolCallCard } from "./ToolCallCard";
 import { TcWriteGateRow } from "./TcWriteGateRow";
@@ -657,6 +663,21 @@ export interface TcChatProps {
    * existed, which is what makes the prop safe to land unmounted.
    */
   readonly compactionNotices?: readonly CompactionNoticeEntry[];
+  /**
+   * Accepted mid-run steers, interleaved at the seq the coordinator appended
+   * the note — which is the beat the user intervened at, not the beat the model
+   * acted on it. Host-owned (the cockpit holds the projection); omitted ⇒ the
+   * transcript is byte-identical to before this existed.
+   */
+  readonly steerNotes?: readonly SteerNoteEntry[];
+  /**
+   * The bound run is live, so a submit from the composer is a STEER rather than
+   * a new run. Host-owned for the same reason `awaitingFirstOutput` is: only
+   * the cockpit knows the run's status. It changes the placeholder and nothing
+   * else — the composer's own send path is the cockpit's `dispatch`, which
+   * decides what a submit means.
+   */
+  readonly steering?: boolean;
 }
 
 const EMPTY_FLEETS: readonly FleetProjection[] = [];
@@ -664,6 +685,8 @@ const EMPTY_FLEETS: readonly FleetProjection[] = [];
 const EMPTY_INLINE_ARTIFACTS: readonly InlineArtifactEntry[] = [];
 /** Same reason as the artifact default above. */
 const EMPTY_COMPACTION_NOTICES: readonly CompactionNoticeEntry[] = [];
+/** Same reason again. */
+const EMPTY_STEER_NOTES: readonly SteerNoteEntry[] = [];
 const EMPTY_SUBAGENT_ACTIVITIES: ReadonlyMap<
   string,
   readonly SubagentActivityRecord[]
@@ -736,6 +759,8 @@ export function TcChat(props: TcChatProps): ReactElement {
     artifactDownloadPort,
     onOpenArtifactInStudio,
     compactionNotices,
+    steerNotes,
+    steering = false,
   } = props;
   const transport = useTransport();
   const scrub = useSwimlaneScrub();
@@ -823,9 +848,17 @@ export function TcChat(props: TcChatProps): ReactElement {
       : null;
   // One placeholder source for both the base composer and an injected host
   // composer, so the off-live copy stays identical across the seam.
+  //
+  // The steering line is the ONLY announcement that typing mid-run does
+  // something. While a run is live the send control is a Stop button, so the
+  // gesture is ⏎ and nothing on screen would otherwise say so — and a user who
+  // believes the box is dead does not type into it at all. It names the key
+  // because the button that would normally carry the affordance is occupied.
   const composerPlaceholder = ghost
     ? "Snap to now to send a message"
-    : "Send a message…";
+    : steering
+      ? "Steer this run — ⏎ to send"
+      : "Send a message…";
 
   const filteredMessages = filterByScrub(state, scrub.scrubbedTo);
   // PR-3.8 — fleet cards follow the same scrub cursor as messages so a
@@ -901,6 +934,7 @@ export function TcChat(props: TcChatProps): ReactElement {
         awaitingFirstOutput={awaitingFirstOutput}
         {...(inlineArtifacts === undefined ? {} : { inlineArtifacts })}
         {...(compactionNotices === undefined ? {} : { compactionNotices })}
+        {...(steerNotes === undefined ? {} : { steerNotes })}
         {...(artifactTransport === undefined ? {} : { artifactTransport })}
         {...(artifactDownloadPort === undefined
           ? {}
@@ -1493,6 +1527,8 @@ interface MessageListBodyProps {
   readonly onOpenArtifactInStudio?: (subjectKey: string) => void;
   /** Compaction boundaries, interleaved on the same seq order as every card. */
   readonly compactionNotices?: readonly CompactionNoticeEntry[];
+  /** Accepted mid-run steers, on the same seq order as every card. */
+  readonly steerNotes?: readonly SteerNoteEntry[];
 }
 
 function MessageListBody(props: MessageListBodyProps): ReactNode {
@@ -1518,6 +1554,7 @@ function MessageListBody(props: MessageListBodyProps): ReactNode {
     artifactDownloadPort,
     onOpenArtifactInStudio,
     compactionNotices = EMPTY_COMPACTION_NOTICES,
+    steerNotes = EMPTY_STEER_NOTES,
   } = props;
   // The message-load notice never SUPPRESSES the live cards any more. It used
   // to be an early return, which was harmless while approvals lived in a strip
@@ -1539,12 +1576,18 @@ function MessageListBody(props: MessageListBodyProps): ReactNode {
   // early-return past the live cards, and inline that hid a parked run's only
   // way out. An answer that is entirely an artifact — "here is the CSV" with no
   // prose — would otherwise render "No messages yet." over a real result.
+  // Steers count here too, for a sharper version of the same reason: they are
+  // the USER'S OWN WORDS, and a run steered before it had produced anything
+  // visible would otherwise draw "No messages yet." over a sentence the person
+  // reading it had just typed. (Compaction notices deliberately do NOT count —
+  // a boundary with nothing on either side of it is not a transcript.)
   const nothingToShow =
     messages.length === 0 &&
     fleets.length === 0 &&
     toolCalls.length === 0 &&
     approvals.length === 0 &&
     inlineArtifacts.length === 0 &&
+    steerNotes.length === 0 &&
     terminalBeat === undefined;
   if (notice !== null && nothingToShow) {
     return notice;
@@ -1567,6 +1610,7 @@ function MessageListBody(props: MessageListBodyProps): ReactNode {
     activeRunId ?? null,
     inlineArtifacts,
     compactionNotices,
+    steerNotes,
   );
 
   const renderItem = (item: StreamItem): ReactNode => {
@@ -1642,6 +1686,24 @@ function MessageListBody(props: MessageListBodyProps): ReactNode {
             beforeTokens={item.notice.beforeTokens}
             afterTokens={item.notice.afterTokens}
             testId={`tc-chat-compaction-${item.notice.eventId}`}
+          />
+        </li>
+      );
+    }
+    if (item.kind === "steer") {
+      // A note, not a card, and not a chat bubble: the transcript's own row
+      // wrapper and nothing else, exactly as the compaction boundary above
+      // takes it. `approvalItemStyle`'s frame margins would make this read as
+      // an object sitting on the thread rather than an aside to it.
+      return (
+        <li
+          key={`steer-item-${item.note.eventId}`}
+          data-testid={`tc-chat-steer-item-${item.note.eventId}`}
+        >
+          <TcSteerNote
+            label={item.note.label}
+            text={item.note.text}
+            testId={`tc-chat-steer-${item.note.eventId}`}
           />
         </li>
       );
@@ -1946,7 +2008,8 @@ type StreamItem =
   | ActivityItem
   | { readonly kind: "approval"; readonly approval: TcChatApproval }
   | { readonly kind: "artifact"; readonly artifact: InlineArtifactEntry }
-  | { readonly kind: "compaction"; readonly notice: CompactionNoticeEntry };
+  | { readonly kind: "compaction"; readonly notice: CompactionNoticeEntry }
+  | { readonly kind: "steer"; readonly note: SteerNoteEntry };
 
 /** An item anchored to a `sequence_no`, for the interleave pass. */
 interface AnchoredItem {
@@ -2004,6 +2067,7 @@ function mergeStream(
   activeRunId: string | null,
   artifacts: readonly InlineArtifactEntry[] = [],
   compactions: readonly CompactionNoticeEntry[] = [],
+  steers: readonly SteerNoteEntry[] = [],
 ): readonly StreamItem[] {
   const runId = activeRunId ?? inferActiveRunId(messages);
   const anchored: AnchoredItem[] = [];
@@ -2119,6 +2183,18 @@ function mergeStream(
       item: { kind: "compaction", notice },
     });
   }
+  // Steers last of all, on the same stable-sort convention and for a sharper
+  // version of the compaction reason: the user interjected in REACTION to
+  // something, so a steer sharing a seq with a card draws below that card. Its
+  // own `sequence_no` is what puts it at the right beat — the coordinator
+  // appends the note before it enqueues the command, so this is where the user
+  // intervened, not where the model eventually acted on it.
+  for (const note of steers) {
+    anchored.push({
+      seq: cardSeq(note.seq),
+      item: { kind: "steer", note },
+    });
+  }
 
   // A settled run with no message in this transcript (a turn still loading, or
   // one whose message failed to fetch) would otherwise have its cards silently
@@ -2157,7 +2233,13 @@ function mergeStream(
  *   than work the thought did. One landing mid-thought therefore ENDS the
  *   absorbed run and the tools after it stay peers. That is the honest reading:
  *   the model's view narrowed at that line, so what came after is not the same
- *   stretch of thinking as what came before.
+ *   stretch of thinking as what came before;
+ * - **steer notes**, which are not the agent's work at all. Folding the user's
+ *   own words into a collapsed "Thought for 6s" row would hide the record that
+ *   they intervened behind a disclosure about the agent's thinking — and, like
+ *   the divider, a steer landing mid-thought ends the absorbed run, because the
+ *   thinking after an interjection is not the same stretch as the thinking
+ *   before it.
  *
  * Operates on the ACTIVE run's sorted items only. Cards flushed from settled
  * runs are already in `out` by the time this runs, and they must stay peers:
