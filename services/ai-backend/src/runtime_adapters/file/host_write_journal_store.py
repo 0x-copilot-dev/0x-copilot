@@ -93,7 +93,9 @@ class FileHostWriteJournalStore:
             return 0
         self._ledger.rewrite(record.model_dump(mode="json") for record in surviving)
         live = {
-            record.prior_sha256 for record in surviving if record.prior_sha256 is not None
+            record.prior_sha256
+            for record in surviving
+            if record.prior_sha256 is not None
         }
         for record in expired:
             if record.prior_sha256 is not None and record.prior_sha256 not in live:

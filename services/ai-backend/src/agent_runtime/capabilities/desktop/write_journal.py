@@ -148,7 +148,9 @@ class HostWriteJournalPort(Protocol):
     def append(self, record: HostWriteRecord) -> None:
         """Durably append one capture record."""
 
-    def records_for_run(self, *, org_id: str, run_id: str) -> tuple[HostWriteRecord, ...]:
+    def records_for_run(
+        self, *, org_id: str, run_id: str
+    ) -> tuple[HostWriteRecord, ...]:
         """Every record for one run, in capture order."""
 
     def prune(self, *, before: datetime) -> int:

@@ -1388,7 +1388,6 @@ def _tool_program_tool(
     return factory.build_tool(tools_by_name=tools_by_name)  # type: ignore[attr-defined]
 
 
-
 def _prompt_assembly_plan(
     *,
     instructions: str,

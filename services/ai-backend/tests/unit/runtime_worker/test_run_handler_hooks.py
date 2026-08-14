@@ -57,9 +57,7 @@ class WorkerRunMixin:
         )
 
     @staticmethod
-    def agent_factory(
-        *, context, dependencies: RuntimeDependencies
-    ) -> RuntimeHarness:
+    def agent_factory(*, context, dependencies: RuntimeDependencies) -> RuntimeHarness:
         return RuntimeHarness(
             agent=object(),
             context=context,
@@ -122,9 +120,7 @@ class WorkerRunMixin:
         return response.run_id
 
     @classmethod
-    async def drive_run(
-        cls, invoker
-    ) -> tuple[str, InMemoryRuntimeApiStore]:
+    async def drive_run(cls, invoker) -> tuple[str, InMemoryRuntimeApiStore]:
         """Drive one run to completion; return its id and the store."""
 
         store = InMemoryRuntimeApiStore()
@@ -164,9 +160,7 @@ class WorkerRunMixin:
         return observed
 
     @classmethod
-    def summaries(
-        cls, caplog: pytest.LogCaptureFixture
-    ) -> list[logging.LogRecord]:
+    def summaries(cls, caplog: pytest.LogCaptureFixture) -> list[logging.LogRecord]:
         return [
             record
             for record in caplog.records

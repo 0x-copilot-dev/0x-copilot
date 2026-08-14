@@ -110,9 +110,7 @@ class HostWriteUndoService:
         self._store = journal_store
         self._reverter = reverter or HostWriteReverter(journal_store)
 
-    async def list_writes(
-        self, *, org_id: str, run_id: str
-    ) -> HostWriteUndoListing:
+    async def list_writes(self, *, org_id: str, run_id: str) -> HostWriteUndoListing:
         """Every captured change for ``run_id``, after verifying ownership."""
 
         records = await self._owned_records(org_id=org_id, run_id=run_id)
