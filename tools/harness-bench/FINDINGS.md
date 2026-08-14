@@ -2,36 +2,71 @@
 
 Every number here came from the packaged app running against a real model, scored
 from the file-native run store (`run_usage.jsonl`, `tool_invocations.jsonl`,
-`context_occupancy.jsonl`) — the same records the product bills from.
+`context_occupancy.jsonl`, and the session's `events.jsonl`) — the same records
+the product bills from.
 
-## 1. The step-ceiling raise bought nothing (FALSIFIED)
+> **Revision note.** An earlier version of this file declared finding 1
+> FALSIFIED on the strength of a single arm and a metric that could not see the
+> failure it was measuring. It was wrong, and the correction is below rather
+> than quietly edited away, because the mistake is more instructive than the
+> result.
+
+## 1. The step ceiling was binding real work. Raising it is a measured win.
 
 `recursion_limit` was raised from LangGraph's inherited **25** super-steps to an
-explicit 500. Measured on a 4-task set:
+explicit 500. Same stage, same tasks, same model, same order; the only variable
+is `COPILOT_HP__EXECUTION__RECURSION_LIMIT`.
 
-| task           | status     | completed tool rounds |
-| -------------- | ---------- | --------------------- |
-| t1-trivial     | completed  | 0                     |
-| t2-three-steps | completed  | 0                     |
-| t3-todo-driven | **failed** | 3                     |
-| t4-long-chain  | completed  | 1                     |
+| task           | limit=25             | limit=500               |
+| -------------- | -------------------- | ----------------------- |
+| t1-trivial     | completed            | completed               |
+| t2-three-steps | completed            | completed               |
+| t3-todo-driven | **failed** — ceiling | **completed**, 5 rounds |
+| t4-long-chain  | completed            | completed               |
 
-**Peak spend: 3 rounds against a ceiling of 25.** The mechanism cannot bind on
-work like this, so raising it changes no outcome. Arm B (limit=500) was
-deliberately NOT run: a ceiling never approached cannot behave differently when
-raised, and running it would spend real credits to confirm a foregone
-conclusion.
+```
+limit=25 : 3/4 completed, 95,655 total tokens
+limit=500: 4/4 completed, 95,746 total tokens   (+0.1%)
+```
 
-Caveat, stated rather than buried: four short prompts is a thin task set. Heavy
-agentic work — multi-file edits, connector chains — would spend far more rounds
-and could change this. The claim is falsified _for this task set_, and no
-completion-rate win may be claimed until a heavier one says otherwise.
+**+25 points of completion rate for +0.1% tokens.** t3's terminal event at
+limit=25 reads `"code": "recursion_limit_exceeded"` — the run was stopped by the
+ceiling, not by anything it was doing wrong. This is, so far, the only measured
+outcome win in the harness program.
 
-## 2. A real bug, found on the harness's first run
+### How the first pass got this exactly backwards
 
-`t3-todo-driven` did not fail on any limit. `write_todos` threw
-`tool_exception` on its **4th** call and killed the task. Invisible to 9,892
-unit tests; caught in 28 seconds of live running.
+The first scorer inferred "did the ceiling bind?" from the count of **completed**
+tool invocations. It reported 3 rounds against a ceiling of 25 and I concluded
+the ceiling was never approached — then declined to run the second arm on the
+reasoning that a ceiling never reached cannot behave differently when raised.
+Both steps were wrong, and the second compounded the first.
+
+A run that trips the ceiling with a tool call still in flight **never completes
+that call**, so the failing round is invisible to a completed-rounds count. The
+metric was structurally blind to the event it existed to detect. The run's own
+`run_failed` event had said `recursion_limit_exceeded` the whole time.
+
+The rule the scorer now encodes: **read the terminal code; never infer it.**
+
+## 2. The `write_todos` "crash" was a mis-stamped innocent
+
+The earlier version of this file reported that `write_todos` threw
+`tool_exception` on its 4th call. It did not throw at all. The 4th call was in
+flight when the graph hit its step ceiling; the blanket `except Exception`
+handler reconciled every open call with `ToolErrorCode.TOOL_EXCEPTION`, stamping
+a tool that never ran. The tell is in the ledger: the three good rows carry a
+`result_summary`, the accused row carries `{}`.
+
+The real defect was therefore in the error taxonomy, not the todo tool — a
+single blanket code applied to every unhandled-exception run failure, which made
+an infrastructure failure read as a tool bug. That is now
+`ToolErrorCode.TOOL_RUN_FAILED`, with copy that declines to blame the tool and
+names the run's own error instead.
+
+**Both of this file's original headline findings were wrong in the same
+direction: they blamed the thing in front of the evidence rather than reading
+the evidence.**
 
 ## 3. The cost structure — the user's prompt is 15 tokens, the tool schemas are 9,759
 
@@ -69,29 +104,29 @@ raw tokens billed-as-listed : 95,655
 full-price-equivalent       : 32,525   (34% of raw)
 ```
 
-**The cold run alone is 71% of the total cost of all four.** So the fixed ~23k
+**The cold run alone is 71% of the total cost of all four.** The fixed ~23k
 prompt is nearly free when warm and full price on every cold start.
 
 **The decision this forces:** prompt-trimming pays off strictly in proportion to
 cold-start frequency. For a continuously-used session it is close to worthless;
 for a bursty desktop user — open the app, ask one thing, close it — nearly every
-run is a cold start and the 23k is paid in full each time. Trimming is therefore
-worth doing, but sized against that, not against the raw token count. Anything
-that shrinks the _cold_ prompt is the lever; anything that only helps warm runs
-is not.
+run is a cold start and the 23k is paid in full each time. Anything that shrinks
+the _cold_ prompt is the lever; anything that only helps warm runs is not.
 
-Unmeasured and worth measuring next: what fraction of real runs actually hit a
-cold cache.
+Unmeasured and worth measuring next: what fraction of real runs hit a cold cache.
 
-## Method notes, including a mistake worth not repeating
+## Method notes — two instrument failures, both worth not repeating
 
-The first scorer counted `usage.recorded` events off the events API and returned
-**0 tokens for every task** — the matcher was wrong, and a broken instrument
-reporting zero is indistinguishable from a genuinely cheap run. Scoring now
-reads the run store directly, and `rescore.py` is offline, so fixing a
-measurement never costs another paid run.
+1. The first scorer counted `usage.recorded` events off the events API and
+   returned **0 tokens for every task**. A broken instrument reporting zero is
+   indistinguishable from a genuinely cheap run. Scoring now reads the run store
+   directly, and `rescore.py` is offline, so fixing a measurement never costs
+   another paid run.
+2. The first scorer's round count was a **lower bound that could not observe the
+   failure mode under test** (finding 1). A proxy metric must be checked against
+   the thing it proxies before any conclusion rests on it — especially a
+   negative conclusion, which is the kind that stops further investigation.
 
-`tool_rounds` counts COMPLETED tool invocations. That is a lower bound on
-super-step spend, not the spend itself — a turn spends several graph steps
-without calling a tool. It is the honest proxy the store affords, and it is the
-right shape for the ceiling question: a lower bound nowhere near 25 settles it.
+`tool_rounds` still counts COMPLETED tool invocations and is still a lower bound
+on super-step spend. It is retained as a rough cost signal only; the ceiling
+question is now answered by `terminal_code`.
