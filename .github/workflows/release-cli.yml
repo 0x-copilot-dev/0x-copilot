@@ -302,6 +302,12 @@ jobs:
           # (rulesets cover only refs/heads/{dev,main}, so this push is allowed)
           # and open a PR, so the repair is one click instead of a git
           # incantation someone has to remember at the end of a release.
+          #
+          # That PR needs `--admin` to merge, and not only because dev wants two
+          # approvals: GitHub does not start workflow runs for events raised by
+          # GITHUB_TOKEN, so its four required checks never report at all. The
+          # body below says so, because a PR wedged on checks that will never
+          # run is otherwise a genuinely confusing thing to find.
           BRANCH="release/back-merge-${VERSION}"
           PR=""
           if git push --force origin "dev:refs/heads/${BRANCH}"; then
@@ -314,7 +320,9 @@ jobs:
 
           Opened automatically because a direct push to \`dev\` is rejected by its ruleset and \`GITHUB_TOKEN\` cannot bypass it. Until this merges, \`main\` is ahead of \`dev\` and \`promote-to-main\` will refuse to promote.
 
-          No review needed beyond a sanity check -- the diff is the commit already published and tagged." || true)
+          **Merge it with \`gh pr merge --merge --admin\`.** GitHub does not start workflow runs for events raised by \`GITHUB_TOKEN\`, so the four required checks on this PR will never report and it cannot merge any other way. That is safe here: the diff is the commit already published, tagged and released.
+
+          No review needed beyond a sanity check." || true)
             fi
           fi
 
