@@ -83,8 +83,42 @@ homepage. The next real capture set should show the complete user journey:
 3. **After — result + Activity:** the finished artifact beside its sources and
    durable run receipt. This proves the work survives the chat.
 
-`public/media/app-run.png` is retained only as historical source material until
-the current three-image capture set replaces it.
+`public/media/app-run.png` is **deleted**. It was an empty composer — none of
+the three frames above — and it was the image the root `README.md` shipped as
+the project's hero.
+
+Two frames now exist, captured against the real packaged app at 3800x1888 by
+[`tools/desktop-journeys/_marketing_capture.py`](../../tools/desktop-journeys/_marketing_capture.py):
+
+- `public/media/studio-before.png` — **before**, the goal composed and not yet sent.
+- `public/media/studio-run.png` — **after**, the finished document artifact on
+  the canvas beside its transcript, run summary, and context meter. This is what
+  the root README now embeds.
+
+**During is still missing, and not for want of trying.** For an artifact-
+producing task the canvas stays on its "Nothing to review yet" empty state until
+the artifact publishes, which happens as the run completes — so "during" and
+"after" collapse into the same frame. Capturing frame 2 as described above
+(live tool events with an action waiting at a gate) needs a task that _stops at
+an approval_, not one that simply takes a while. Re-run the capture script
+against a write-gated connector task to get it.
+
+Two traps that cost a capture each, recorded so the next person skips them:
+
+- `stage.mjs` **copies** `apps/frontend/dist`, it does not build it. Re-staging
+  alone republishes stale UI under fresh timestamps. Build the frontend first.
+- The composer renders the model name, so every Studio capture names a model.
+  External copy is not supposed to. Crop the composer's right edge or accept it
+  deliberately — but decide, rather than discovering it after publishing.
+- **Capture wider than the screen.** With the canvas open the composer sits in a
+  rail about a third of the window, and below roughly 1900 CSS px the composer's
+  bottom controls wrap onto two lines — `[+ tools mode]` above
+  `[context model mic send]`. macOS fullscreen does not fix this, because it caps
+  the window at the display (1512 logical here) which is already too narrow.
+  `setContentSize` accepts a window LARGER than the screen and the screenshot is
+  of the renderer, so `CAPTURE_WIDTH=1900` is not limited by the panel it runs
+  on. The script asserts the row is unwrapped, and self-checks that assertion by
+  squeezing to 1200 and confirming it trips.
 
 ## Post-launch — the numbers on the page
 
