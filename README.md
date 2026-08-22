@@ -1,46 +1,88 @@
 # 0xCopilot
 
-**Put your day on autopilot.**
+**A local-first desktop agent that runs on your own API keys.** The runtime, the
+database, and every conversation stay on your machine. Bring a key from any of
+eight providers — or run a model locally and use no key at all.
+
+**The cheapest task is the one that finishes.** You buy inference at your
+provider's list price — no seat, no markup, nobody reselling you tokens — you
+can see what a task will cost before you run it, and the harness is tuned so
+runs finish instead of dying at eighty percent.<sup>\*</sup> An unfinished run
+costs full price and delivers nothing.
+
+_Put your day on autopilot._
 
 [![ci](https://github.com/0x-copilot-dev/0x-copilot/actions/workflows/ci-cli.yml/badge.svg)](https://github.com/0x-copilot-dev/0x-copilot/actions/workflows/ci-cli.yml)
 [![npm](https://img.shields.io/npm/v/@0x-copilot/cli?logo=npm&color=cb3837&label=%400x-copilot%2Fcli)](https://www.npmjs.com/package/@0x-copilot/cli)
 [![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows-lightgrey)](tools/cli#requirements)
-[![local-first](https://img.shields.io/badge/local--first-bring_your_own_key-6f42c1)](#local-first-by-design)
-
-Copilot lives on your machine, moves through your files and tools, and quietly
-takes care of the work. You can check in, change direction, or leave it running
-while you focus on what matters.
-
-**Consider your day handled.**
 
 ```bash
 npm install -g @0x-copilot/cli
 copilot
 ```
 
-Requires Node.js 20+ on macOS (Apple Silicon or Intel) or Windows x64. Prefer
-Bun? Install with `bun add -g @0x-copilot/cli`.
+Node.js 20+, macOS (Apple Silicon or Intel) or Windows x64. Prefer Bun?
+`bun add -g @0x-copilot/cli`.
 
-![0xCopilot desktop workspace](apps/website/public/media/app-run.png)
+![0xCopilot Studio — a run that produced a document artifact, with the transcript and context meter alongside](apps/website/public/media/studio-run.png)
 
-## How Copilot handles your day
+- **Nothing is hosted.** An embedded PostgreSQL and three local services run on
+  `localhost`. No account of ours sits between you and your model provider.
+- **Your keys, your choice of model.** OpenAI, Anthropic, Google, Groq, xAI,
+  OpenRouter, Virtuals compute, or **any OpenAI-compatible endpoint**. Local
+  models run on your own GPU through Ollama.
+- **Connects to real tools over MCP**, with OAuth handled for servers that
+  support it and consequential writes held at an approval gate.
+- **Work lands as artifacts you keep** — documents, code, and datasets, editable
+  in place, revisioned, and downloadable.
+- **You can see the bill forming.** A context meter in the composer, and a model
+  catalogue carrying real per-million-token pricing — so cost is a decision you
+  make up front, not a surprise you read afterwards.
+- **Runs that finish.** An inherited step ceiling was quietly terminating live
+  work mid-task; removing it raised task completion for **+0.1% tokens**.<sup>\*</sup>
 
-- **Works where you work.** Copilot moves across connected files, tools, and
-  apps instead of stopping at an answer.
-- **Keeps moving.** Hand off multi-step work and let it continue while you
-  focus elsewhere.
-- **Keeps you in control.** Check progress, change direction, stop a run, or
-  approve sensitive actions before they happen.
+<sup>\*</sup> Measured on internal benchmarks, driven against the packaged app and
+scored from the same records the product bills from. Method, results, and the
+claims that did not survive: [`tools/harness-bench/FINDINGS.md`](tools/harness-bench/FINDINGS.md).
 
-### Local-first by design
+## Local-first by design
 
-The desktop runtime, database, and activity history stay on your machine. When a
-task uses a model provider or external connector, the relevant prompts and
-context are sent to the services you configure.
+Prompts and context leave your machine only for the model provider or connector
+a task actually uses, and go nowhere else.
 
-Bring your own OpenAI, Anthropic, or Google Gemini key. Self-hosted deployments
-can also connect to local models through Ollama.
+Provider keys are encrypted at rest in a local vault. Local run history can be
+encrypted too, and the app can require Touch ID to open and lock itself when
+idle.
+
+## Bring your own compute
+
+The model picker is built from the provider's own live catalogue, so it is
+discovered rather than hardcoded:
+
+|               |                                                              |
+| ------------- | ------------------------------------------------------------ |
+| Direct        | OpenAI · Anthropic · Google Gemini · Groq · xAI              |
+| Gateways      | Virtuals compute · OpenRouter                                |
+| Local         | Ollama — install, run, and set a default from inside the app |
+| Anything else | any OpenAI-compatible endpoint                               |
+
+**Virtuals compute** is the reason that matters in practice: it fronts roughly
+sixty models from ten vendors behind one endpoint and publishes its own live
+inventory, priced per million tokens, so a model added upstream appears here
+without a release. **Local models** run on your own GPU or CPU through Ollama —
+private, offline, and no key at all.
+
+## Connect your tools
+
+Copilot speaks MCP, with OAuth handled for servers that support discovery and
+dynamic client registration, and per-server credentials for those that do not.
+Connector tokens live in the same encrypted local vault as your provider keys.
+Writes through a connector are gated: a consequential action waits for your
+approval on the surface it affects.
+
+You can also give Copilot reusable skills, group work into projects, and review
+everything it did from the activity destination.
 
 ## Get started
 
@@ -49,10 +91,32 @@ can also connect to local models through Ollama.
 2. **Sign in.** Connect a wallet, or use Google when it is enabled for your
    deployment.
 3. **Choose a model.** Open **Settings → Models & keys → Provider keys** and add
-   the provider you want to use.
+   the provider you want to use, or install a local model instead.
 
 For diagnostics, updates, data locations, and uninstall instructions, see the
 [`@0x-copilot/cli` guide](tools/cli/README.md).
+
+## Measured, in public
+
+[`tools/harness-bench/FINDINGS.md`](tools/harness-bench/FINDINGS.md) is the
+harness benchmark. Every number in it comes from the packaged app running
+against a real model, scored from the same records the product bills from.
+
+It also carries the correction of an earlier version of itself, which had
+declared its own headline finding falsified on the strength of a metric that was
+structurally blind to the failure it existed to detect.
+
+Claims that did not survive are retracted there rather than quietly dropped —
+which is the point of publishing it at all.
+
+## From Kleos Research
+
+0xCopilot is built by [Kleos Research](https://kleosresearch.xyz), which works on
+the layer between agents and the models they run on. Its other project is
+[Kaleidoscope](https://memory.kleosresearch.xyz), filesystem-native memory for
+agents — user-owned files, no database server, and no model of its own.
+Held-out results are published in
+[Optimising for memory recall](https://kleosresearch.xyz/research/optimising-for-memory-recall.pdf).
 
 ## Contributing
 
@@ -106,8 +170,7 @@ how promotion and publishing are run:
 
 ## Community and support
 
-Join the [Discord community](https://discord.gg/NhCv7zDkmX) for questions,
-support, and feature requests. Follow reported work on
+Questions, bug reports, and feature requests belong on
 [GitHub Issues](https://github.com/0x-copilot-dev/0x-copilot/issues).
 
 Please report vulnerabilities privately as described in the
