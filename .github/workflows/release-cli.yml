@@ -51,6 +51,9 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write # push the version commit + tag, create the Release
+      # The back-merge falls back to opening a pull request when dev's ruleset
+      # refuses a direct push. See that step for why it cannot simply push.
+      pull-requests: write
       # This IS the npm credential. Without it there is no OIDC token to exchange
       # and, with no NPM_TOKEN to fall back to, publishing fails outright.
       # Provenance rides along on the same mechanism.
@@ -216,17 +219,126 @@ jobs:
             --verify-tag
 
       # main is now one commit ahead of dev. Left alone that breaks the next
-      # fast-forward promotion, so carry the release commit back immediately.
-      # A conflict here is reported, never forced.
+      # promotion -- promote-to-main is a fast-forward and refuses to promote
+      # over a release commit that was never carried back -- so carry it back now.
+      #
+      # This cannot simply `git push origin dev`. dev's ruleset requires a pull
+      # request plus its four required checks, and GITHUB_TOKEN is not a bypass
+      # actor; because the repository is owned by a USER, `actor_type:
+      # Integration` bypass entries cannot be granted at all (root CLAUDE.md #6),
+      # so there is no permission to add that would make the push work. It is
+      # rejected outright:
+      #
+      #   GH013: Repository rule violations found for refs/heads/dev.
+      #   - Changes must be made through a pull request.
+      #   - 4 of 4 required status checks are expected.
+      #
+      # Until 2026-08-17 that failed the job, which is the worst outcome
+      # available here: the publish is irreversible several steps earlier, so a
+      # red run described a release that had in fact shipped, and the obvious
+      # response -- re-run it -- dies on "already published" without repairing
+      # the drift it was named for.
+      #
+      # So the step DEGRADES rather than fails. It pushes directly when a bypass
+      # token exists, opens a pull request when it does not, and says which it
+      # did in the job summary. Nothing here is ever forced onto dev, and
+      # nothing here can fail the release.
       - name: Back-merge the release commit into dev
         if: ${{ !inputs.dry_run }}
+        # The script below handles the EXPECTED failures (conflict, rejected
+        # push) and exits 0 with an annotation. This is the backstop for the
+        # unexpected ones -- a fetch that times out, a bug in this step -- so
+        # that no fault here can red a release that already shipped. The step
+        # still shows as failed, and its annotations still say why.
+        continue-on-error: true
+        env:
+          # Optional. A fine-grained PAT belonging to an account that IS a
+          # ruleset bypass actor (0x-copilot-dev) makes this fully automatic.
+          # Unset today -- the PR fallback below is what actually runs.
+          ADMIN_TOKEN: ${{ secrets.REPO_ADMIN_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          VERSION: ${{ steps.plan.outputs.version }}
         run: |
+          set -u
+          note() { echo "$1" >>"$GITHUB_STEP_SUMMARY"; }
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git fetch origin dev
           git checkout -B dev origin/dev
-          if git merge --no-edit origin/main; then
-            git push origin dev
-            echo "dev now carries the release commit."
-          else
-            echo "::warning::Back-merge into dev conflicts. Resolve manually: git merge origin/main"
+
+          # Normally a fast-forward: dev is behind main by exactly the release
+          # commit. A real conflict means someone changed the changelog or the
+          # package version on dev, which a machine must not resolve.
+          if ! git merge --no-edit origin/main; then
             git merge --abort
+            echo "::warning::Back-merge into dev conflicts; dev does not carry ${VERSION}."
+            note "### Back-merge conflicted"
+            note ""
+            note "\`dev\` does not carry \`@0x-copilot/cli ${VERSION}\`, so the next promotion is blocked. Resolve locally:"
+            note ""
+            note '```bash'
+            note "git checkout dev && git merge origin/main && git push origin dev"
+            note '```'
+            exit 0
           fi
+
+          if [ -n "$ADMIN_TOKEN" ]; then
+            # Actions masks the token in logs; it never reaches the summary.
+            git remote set-url --push origin \
+              "https://x-access-token:${ADMIN_TOKEN}@github.com/${REPO}.git"
+          fi
+
+          if git push origin dev; then
+            echo "dev now carries the release commit."
+            note "### Back-merged into dev"
+            note ""
+            note "\`dev\` carries \`@0x-copilot/cli ${VERSION}\`. The next promotion is a clean fast-forward."
+            exit 0
+          fi
+
+          # Rejected by dev's ruleset. Park the merged state on a side branch
+          # (rulesets cover only refs/heads/{dev,main}, so this push is allowed)
+          # and open a PR, so the repair is one click instead of a git
+          # incantation someone has to remember at the end of a release.
+          #
+          # That PR needs `--admin` to merge, and not only because dev wants two
+          # approvals: GitHub does not start workflow runs for events raised by
+          # GITHUB_TOKEN, so its four required checks never report at all. The
+          # body below says so, because a PR wedged on checks that will never
+          # run is otherwise a genuinely confusing thing to find.
+          BRANCH="release/back-merge-${VERSION}"
+          PR=""
+          if git push --force origin "dev:refs/heads/${BRANCH}"; then
+            PR=$(gh pr list --base dev --head "$BRANCH" --state open \
+                   --json url --jq '.[0].url // empty' || true)
+            if [ -z "$PR" ]; then
+              PR=$(gh pr create --base dev --head "$BRANCH" \
+                --title "chore(release): back-merge @0x-copilot/cli ${VERSION} into dev" \
+                --body "Carries the \`${VERSION}\` release commit (version bump + changelog) from \`main\` back to \`dev\`.
+
+          Opened automatically because a direct push to \`dev\` is rejected by its ruleset and \`GITHUB_TOKEN\` cannot bypass it. Until this merges, \`main\` is ahead of \`dev\` and \`promote-to-main\` will refuse to promote.
+
+          **Merge it with \`gh pr merge --merge --admin\`.** GitHub does not start workflow runs for events raised by \`GITHUB_TOKEN\`, so the four required checks on this PR will never report and it cannot merge any other way. That is safe here: the diff is the commit already published, tagged and released.
+
+          No review needed beyond a sanity check." || true)
+            fi
+          fi
+
+          if [ -n "$PR" ]; then
+            echo "::warning::Direct push to dev was rejected by its ruleset; opened ${PR}."
+            note "### Back-merge needs a merge: ${PR}"
+            note ""
+            note "A direct push to \`dev\` is rejected by its ruleset, so the release commit is waiting in a pull request. **Merge it before the next promotion** -- \`main\` is ahead of \`dev\` until you do."
+          else
+            echo "::warning::Could not push to dev or open a back-merge PR; dev does not carry ${VERSION}."
+            note "### Back-merge did not land"
+            note ""
+            note "\`dev\` does not carry \`@0x-copilot/cli ${VERSION}\`, so the next promotion is blocked. Fast-forward it from an account that bypasses the ruleset:"
+            note ""
+            note '```bash'
+            note "git fetch origin && git push origin origin/main:dev"
+            note '```'
+          fi
+          exit 0
