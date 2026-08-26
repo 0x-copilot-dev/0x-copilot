@@ -180,8 +180,24 @@ class TestAnthropicChunk:
         assert usage.cache_creation_input_tokens == 50
         assert usage.cached_input_tokens == 25
 
-    def test_cache_read_from_input_token_details(self) -> None:
-        # When the cache_read field lives nested under input_token_details.
+    def test_cache_read_from_input_token_details_is_a_subset_not_an_addend(
+        self,
+    ) -> None:
+        """LangChain's ``input_tokens`` already contains the cache read.
+
+        Regression. This assertion used to read ``== 375  # 300 + 0 + 75``,
+        which treated the detail as an addend and so inflated every cached
+        call by the size of its own cache read. LangChain's ``UsageMetadata``
+        documents ``input_tokens`` as "the sum of all input token types" and
+        its own example carries details summing to LESS than it, so the read
+        is a subset of the 300 and gross input is 300.
+
+        Measured against 442 real runs, the old arithmetic showed Anthropic
+        warm runs with a fresh (``input - cached``) portion of 21,091 tokens —
+        the whole prompt over again — where OpenAI, which never takes this
+        branch, showed 346.
+        """
+
         chunk = _chunk_with_usage_metadata(
             {
                 "input_tokens": 300,
@@ -193,7 +209,99 @@ class TestAnthropicChunk:
         usage = self.extractor.extract(chunk)
         assert usage is not None
         assert usage.cached_input_tokens == 75
-        assert usage.input_tokens == 375  # 300 + 0 + 75
+        assert usage.input_tokens == 300
+        assert usage.provider_cache_metadata_observed is True
+
+    def test_cache_creation_is_read_from_input_token_details_too(self) -> None:
+        """The write counter had no details lookup, so writes were invisible.
+
+        ``cache_read`` got a second lookup inside ``input_token_details`` and
+        ``cache_creation`` got none, while LangChain 1.5.3's
+        ``InputTokenDetails`` exposes exactly ``audio`` / ``cache_creation`` /
+        ``cache_read``. The asymmetry made a cache WRITE unobservable: 442
+        real runs recorded 6,333,964 cache-read tokens and zero writes, which
+        is impossible — a read requires a preceding write.
+        """
+
+        chunk = _chunk_with_usage_metadata(
+            {
+                "input_tokens": 300,
+                "output_tokens": 100,
+                "input_token_details": {"cache_creation": 200, "cache_read": 75},
+            }
+        )
+        usage = self.extractor.extract(chunk)
+        assert usage is not None
+        assert usage.cache_creation_input_tokens == 200
+        assert usage.cached_input_tokens == 75
+        # Both are subsets of the reported total, so it is unchanged.
+        assert usage.input_tokens == 300
+
+    def test_a_write_only_details_block_is_observed_as_cache_metadata(self) -> None:
+        """A cold call writes cache and reads none — still cache metadata.
+
+        Before the fix the observed-bit consulted only ``cache_read`` in the
+        details, so the one call that proves caching is switched on at all
+        reported ``provider_cache_metadata_observed=False`` — and the contract
+        says a zero without that bit "must never be called a miss".
+        """
+
+        chunk = _chunk_with_usage_metadata(
+            {
+                "input_tokens": 20_000,
+                "output_tokens": 5,
+                "input_token_details": {"cache_creation": 19_800},
+            }
+        )
+        usage = self.extractor.extract(chunk)
+        assert usage is not None
+        assert usage.cache_creation_input_tokens == 19_800
+        assert usage.cached_input_tokens == 0
+        assert usage.provider_cache_metadata_observed is True
+
+    def test_provider_raw_block_still_sums_because_input_excludes_caches(
+        self,
+    ) -> None:
+        """The other wire shape must keep its old arithmetic.
+
+        ``response_metadata.usage`` is Anthropic's own shape, where
+        ``input_tokens`` is the NON-cache portion. Summing is correct there,
+        and the fix must not flatten both shapes onto one rule.
+        """
+
+        chunk = _chunk_with_response_metadata(
+            {
+                "input_tokens": 100,
+                "output_tokens": 40,
+                "cache_creation_input_tokens": 50,
+                "cache_read_input_tokens": 25,
+            }
+        )
+        usage = self.extractor.extract(chunk)
+        assert usage is not None
+        assert usage.input_tokens == 175  # 100 + 50 + 25
+        assert usage.cache_creation_input_tokens == 50
+        assert usage.cached_input_tokens == 25
+
+    def test_an_uncached_raw_block_is_not_mistaken_for_a_normalized_one(
+        self,
+    ) -> None:
+        """No cache counters at all: the total is the input either way.
+
+        A raw block that did no caching has no top-level counters, so it takes
+        the normalized branch. That is the right answer rather than a lucky
+        one — with both caches at zero the two rules agree.
+        """
+
+        chunk = _chunk_with_response_metadata(
+            {"input_tokens": 900, "output_tokens": 40}
+        )
+        usage = self.extractor.extract(chunk)
+        assert usage is not None
+        assert usage.input_tokens == 900
+        assert usage.cached_input_tokens == 0
+        assert usage.cache_creation_input_tokens == 0
+        assert usage.provider_cache_metadata_observed is False
 
     def test_extended_thinking_reasoning_tokens(self) -> None:
         chunk = _chunk_with_response_metadata(

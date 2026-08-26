@@ -382,17 +382,30 @@ class OpenAIProviderTokenUsageExtractor:
 
 
 class AnthropicProviderTokenUsageExtractor:
-    """Anthropic Messages API.
+    """Anthropic Messages API, in either of the two shapes that reach us.
 
-    Anthropic's wire shape differs from OpenAI's:
+    :class:`_UsageBlocks` yields LangChain's normalized ``usage_metadata``
+    *and* the provider-raw dict under ``response_metadata.usage``. **The two
+    disagree about what ``input_tokens`` means**, so the shape has to be
+    decided before the arithmetic rather than after:
 
-    - ``input_tokens`` is the NON-cache portion only.
-    - ``cache_creation_input_tokens`` is tokens written to cache.
-    - ``cache_read_input_tokens`` is tokens read from cache.
+    * **Provider-raw** — ``input_tokens`` is the NON-cache portion, and the
+      cache counters sit beside it as ``cache_creation_input_tokens`` /
+      ``cache_read_input_tokens``. Gross input is the sum of all three.
+    * **LangChain-normalized** — ``input_tokens`` is already "the sum of all
+      input token types", and ``input_token_details`` holds ``cache_creation``
+      / ``cache_read`` as SUBSETS of it (LangChain's own example is
+      ``input_tokens: 350`` over details summing to 310). Gross input is
+      ``input_tokens`` unchanged, and adding the details back on top
+      double-counts them.
 
-    Gross input = ``input + cache_creation + cache_read``. This
-    extractor normalizes so ``NormalizedTokenUsage.input_tokens`` is
-    the gross figure, matching the OpenAI semantic.
+    Either way ``NormalizedTokenUsage.input_tokens`` ends up gross, matching
+    the OpenAI semantic, and the two cache fields are subsets of it.
+
+    Top-level counters decide the shape because only the raw wire carries
+    them; a block with neither is read as normalized, which is also the right
+    answer for a raw block that did no caching at all (there, ``input_tokens``
+    is already the whole input).
 
     Extended-thinking models surface reasoning tokens under
     ``cache_creation`` semantics in some preview API shapes; this
@@ -409,8 +422,9 @@ class AnthropicProviderTokenUsageExtractor:
         CACHE_CREATION_SHORT = "cache_creation"
         CACHE_READ_SHORT = "cache_read"
         REASONING_TOKENS = "reasoning_tokens"
-        # LangChain's normalized ``usage_metadata`` may also expose
-        # cached input via ``input_token_details.cache_read``.
+        # LangChain's normalized ``usage_metadata`` carries BOTH cache
+        # counters here — ``cache_read`` and ``cache_creation`` — as subsets
+        # of ``input_tokens``, never as additions to it.
         INPUT_DETAILS = "input_token_details"
 
     def extract(self, chunk: object) -> NormalizedTokenUsage | None:
@@ -425,22 +439,39 @@ class AnthropicProviderTokenUsageExtractor:
 
     @classmethod
     def _normalize(cls, block: Mapping[str, object]) -> NormalizedTokenUsage | None:
-        non_cache_input = _first_int(block, cls._F.INPUT)
+        reported_input = _first_int(block, cls._F.INPUT)
         output_tokens = _first_int(block, cls._F.OUTPUT)
-        if non_cache_input == 0 and output_tokens == 0:
+        if reported_input == 0 and output_tokens == 0:
             return None
-        cache_creation = _first_int(
+
+        top_creation = _first_int(
             block, cls._F.CACHE_CREATION, cls._F.CACHE_CREATION_SHORT
         )
-        cache_read = _first_int(block, cls._F.CACHE_READ_INPUT, cls._F.CACHE_READ_SHORT)
-        # If neither cache field was on the top-level block, look at
-        # ``input_token_details`` (LangChain-normalized).
-        if cache_read == 0:
+        top_read = _first_int(block, cls._F.CACHE_READ_INPUT, cls._F.CACHE_READ_SHORT)
+
+        if top_creation or top_read:
+            # Provider-raw: ``input_tokens`` excludes both caches, so gross is
+            # the sum. Read the details too, so a raw block that carries only
+            # one of the two counters at top level still reports the other.
+            cache_creation = top_creation or _detail_int(
+                block, (cls._F.INPUT_DETAILS,), cls._F.CACHE_CREATION_SHORT
+            )
+            cache_read = top_read or _detail_int(
+                block, (cls._F.INPUT_DETAILS,), cls._F.CACHE_READ_SHORT
+            )
+            gross_input = reported_input + cache_creation + cache_read
+        else:
+            # LangChain-normalized: ``input_tokens`` is already the sum of every
+            # input kind and the details are subsets of it. Adding them back on
+            # top inflates every cached call by the size of its own cache read.
+            cache_creation = _detail_int(
+                block, (cls._F.INPUT_DETAILS,), cls._F.CACHE_CREATION_SHORT
+            )
             cache_read = _detail_int(
                 block, (cls._F.INPUT_DETAILS,), cls._F.CACHE_READ_SHORT
             )
-        # Anthropic's input_tokens is non-cache; gross = sum of all three.
-        gross_input = non_cache_input + cache_creation + cache_read
+            gross_input = reported_input
+
         reasoning = _first_int(block, cls._F.REASONING_TOKENS)
         return NormalizedTokenUsage(
             input_tokens=gross_input,
@@ -461,7 +492,7 @@ class AnthropicProviderTokenUsageExtractor:
                 or _cache_detail_field_observed(
                     block,
                     (cls._F.INPUT_DETAILS,),
-                    (cls._F.CACHE_READ_SHORT,),
+                    (cls._F.CACHE_READ_SHORT, cls._F.CACHE_CREATION_SHORT),
                 )
             ),
         )

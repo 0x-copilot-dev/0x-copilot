@@ -35,45 +35,58 @@ a reader to "recommend trimming the stable prefix, which is exactly backwards".
 
 ## 1. Ranked
 
-| #      | Item                                                  | Effort | Why it is where it is                                                                       |
-| ------ | ----------------------------------------------------- | ------ | ------------------------------------------------------------------------------------------- |
-| **1**  | Anthropic cache-**write** read symmetry               | hours  | 3 lines; permanently removes a dropped-vs-absent ambiguity in the billing instrument        |
-| **2**  | Populate the occupancy ledger's provider/cache fields | days   | 820/820 records empty; a shipped user-facing meter is cache-blind because of it             |
-| **3**  | Lossless JSON-schema slimming (drop `title`)          | hours  | the named next lever; ~15–20% of every args schema, and it reaches third-party tools        |
-| **4**  | Decide `artifact_family` exposure                     | —      | a decision, not code: 1,705 resident tokens on every cold run, parked pending an owner      |
-| **5**  | Run the heavy arms                                    | ~$2    | 830 LOC of validated harness never driven; 5 claims still unmeasured                        |
-| **6**  | `expires_at` + sweeper default                        | hours  | Top-8 #5, re-verified open; half-built machinery a compliance reviewer reads as implemented |
-| **7**  | A correctness axis on the bench                       | days   | today a trimming change can degrade answers and still report 4/4                            |
-| **8**  | Wire FTS5 conversation search                         | days   | Top-8 #6, re-verified open; we pay to maintain the index on every write                     |
-| **9**  | Desktop skill authoring                               | days   | Top-8 #8, re-verified open; on the surface CLAUDE.md calls the product                      |
-| **10** | Close the dark-wiring zero-default blind spot         | days   | a field defaulting to `0` and never produced reads as a measurement, not as absent          |
-| **11** | Grow the interactive corpus                           | —      | 13 runs on one machine is not a sample; it is the denominator for all cost work             |
+| #      | Item                                                  | Effort | Why it is where it is                                                                            |
+| ------ | ----------------------------------------------------- | ------ | ------------------------------------------------------------------------------------------------ |
+| **1**  | ~~Anthropic cache accounting~~ ✅ landed              | hours  | was two defects: writes invisible (latent) **and** reads counted twice (live, 71.7% over-report) |
+| **2**  | Populate the occupancy ledger's provider/cache fields | days   | 820/820 records empty; a shipped user-facing meter is cache-blind because of it                  |
+| **3**  | Lossless JSON-schema slimming (drop `title`)          | hours  | the named next lever; ~15–20% of every args schema, and it reaches third-party tools             |
+| **4**  | Decide `artifact_family` exposure                     | —      | a decision, not code: 1,705 resident tokens on every cold run, parked pending an owner           |
+| **5**  | Run the heavy arms                                    | ~$2    | 830 LOC of validated harness never driven; 5 claims still unmeasured                             |
+| **6**  | `expires_at` + sweeper default                        | hours  | Top-8 #5, re-verified open; half-built machinery a compliance reviewer reads as implemented      |
+| **7**  | A correctness axis on the bench                       | days   | today a trimming change can degrade answers and still report 4/4                                 |
+| **8**  | Wire FTS5 conversation search                         | days   | Top-8 #6, re-verified open; we pay to maintain the index on every write                          |
+| **9**  | Desktop skill authoring                               | days   | Top-8 #8, re-verified open; on the surface CLAUDE.md calls the product                           |
+| **10** | Close the dark-wiring zero-default blind spot         | days   | a field defaulting to `0` and never produced reads as a measurement, not as absent               |
+| **11** | Grow the interactive corpus                           | —      | 13 runs on one machine is not a sample; it is the denominator for all cost work                  |
 
 ---
 
 ## 2. Cost and caching — the thread just measured
 
-### 1. Restore the cache-write read symmetry — `hours`
+### 1. Anthropic cache accounting — ✅ **LANDED on this branch**
 
-`observability/token_usage.py:432-441`. `cache_read` gets a second lookup inside
-`input_token_details` when the top-level block has none; `cache_creation` gets no
-such fallback. LangChain 1.5.3's `InputTokenDetails` has exactly three keys —
-`audio`, `cache_creation`, `cache_read` — so the read is found there and the
-write structurally cannot be. `provider_cache_metadata_observed` carries the same
-asymmetry.
+Opened as "restore the cache-**write** read symmetry" and turned out to be **two**
+defects in the same function, one of them live. They could not be fixed apart:
+adding the missing write lookup to the old arithmetic would have added it on top
+of an already-gross figure and made the live one worse.
 
-**Evidence:** 6,333,964 cache-read tokens across 442 runs, against **zero**
-recorded writes. A read is impossible without a preceding write.
+**1a — writes are invisible (latent).** `cache_read` gets a second lookup inside
+`input_token_details`; `cache_creation` got none, while LangChain 1.5.3's
+`InputTokenDetails` exposes exactly `audio` / `cache_creation` / `cache_read`.
+6,333,964 recorded cache-read tokens against **zero** writes, which is impossible.
+Whether it was costing tokens is still **not** established — a dropped write and
+an absent write produce an identical record.
 
-**What is honestly unknown:** whether this currently costs tokens. If writes were
-being dropped, cold runs' recorded `input_tokens` would be anomalously small
-(`gross = non_cache + cache_creation + cache_read`); measured, they are not. **A
-dropped write and an absent write produce an identical record.** Fix it because
-the ambiguity is permanent otherwise, not because a leak is proven.
+**1b — reads are counted twice (live).** `_UsageBlocks` yields two wire shapes
+that disagree about `input_tokens`: provider-raw excludes the caches, LangChain's
+`usage_metadata` is "the sum of all input token types" with the details as
+**subsets**. `gross = input + creation + read` was applied to both, so every
+LangChain-shaped Anthropic call was inflated by its own cache read. Anthropic's
+warm "fresh" portion (`input − cached`) measured **21,091 tokens — the whole
+prompt again** — against OpenAI's 346 on the same metric.
 
-**Fix:** one `_detail_int(block, (INPUT_DETAILS,), CACHE_CREATION_SHORT)` fallback
-plus the matching `_cache_detail_field_observed` key. Add a test that fails on a
-LangChain-normalized Anthropic usage block carrying only `input_token_details`.
+**Impact:** anthropic input over-reported by **71.7%** across 442 runs (7,972,019
+recorded vs 4,642,605 corrected). Cost identity collapses to
+`true_gross·p_in + cached·p_cached`, i.e. **cached tokens billed at the full input
+rate as well as the cached rate.** Any absolute anthropic token or cost figure
+read out of the run store before this fix is inflated; §4's `cached / input` ratio
+is unaffected, since both terms move together.
+
+**Landed:** shape decided before the arithmetic, five tests including a regression
+that pins the old assertion as wrong. Written up in
+[FINDINGS.md §7.1](../../../tools/harness-bench/FINDINGS.md), including the method
+failure — the anomaly was in the first table §7 printed and was explained rather
+than tested.
 
 ### 2. Populate the occupancy ledger's provider/cache fields — `days`
 

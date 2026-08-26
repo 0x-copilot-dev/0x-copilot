@@ -347,10 +347,10 @@ suite:
   the write never is. `provider_cache_metadata_observed` carries the same
   asymmetry.
 
-**What is NOT established:** whether that asymmetry is currently costing tokens.
-If writes were being dropped, a cold run's recorded `input_tokens` would be
-anomalously small, since `gross_input = non_cache + cache_creation + cache_read`.
-Measured, they are not:
+**On the write half, what is NOT established** is whether the missing counter is
+currently costing tokens. If writes were being dropped, a cold run's recorded
+`input_tokens` would be anomalously small, since
+`gross_input = non_cache + cache_creation + cache_read`. Measured, they are not:
 
 ```
                 cold median input    warm median input
@@ -359,12 +359,61 @@ Measured, they are not:
   virtuals             21,655               22,977
 ```
 
-Cold runs are comparable to warm ones, so no write-sized hole is visible.
-**A dropped write and an absent write produce an identical record — and that
+Cold runs are comparable to warm ones, so no write-sized hole is visible. **A
+dropped write and an absent write produce an identical record — and that
 indistinguishability is the finding.** It is the same shape as §1: a metric that
-cannot observe the event it exists to detect. Restoring the symmetry is a
-three-line change and removes the ambiguity permanently, which is why it is
-worth doing whether or not it is currently costing anything.
+cannot observe the event it exists to detect.
+
+### 7.1 The same table had a second finding in it, and this file missed it
+
+The row above was read once and explained away — anthropic warm runs are 2x cold
+runs because a warm run is a later turn carrying more conversation. That is a
+plausible story and it is wrong, which the neighbouring rows already say: openai
+and virtuals are 1.1x on the same argument. Only anthropic doubles.
+
+The check that settles it asks what a warm run's **fresh** portion is. If
+`input_tokens` is a correct gross figure, `input − cached` is just the new turn's
+content and should be small. If a cache read was added on top of a figure that
+already included it, `input − cached` is the whole prompt over again:
+
+```
+             warm median (input − cached)     cold median input      ratio
+  anthropic            21,091                      20,058            1.05
+  openai                  346                      11,465            0.03
+  virtuals                931                      21,655            0.04
+```
+
+**Anthropic's "fresh" portion is the entire prompt.** OpenAI's is 346 tokens,
+which is what a correct figure looks like.
+
+The cause is one line up from the missing write counter, in the same function.
+`_UsageBlocks` yields **two** wire shapes and they disagree about what
+`input_tokens` means. Provider-raw `response_metadata.usage` excludes the caches,
+so summing is right. LangChain's `usage_metadata` documents `input_tokens` as
+"the sum of all input token types" — its own example is `input_tokens: 350` over
+details summing to 310 — so the details are **subsets**, and
+`gross = input + cache_creation + cache_read` counts the read twice. Anthropic is
+the only provider whose extractor takes that branch, which is exactly the shape
+of the measurement.
+
+Across 442 runs, anthropic input is over-reported by **71.7%** — 7,972,019
+recorded against a corrected 4,642,605. The pricing consequence is not a wash,
+because the identity `(input − cached − creation)·p_in + cached·p_cached` turns
+into `true_gross·p_in + cached·p_cached` once `input` carries `cached` twice:
+**the cached tokens are billed at the full input rate _and_ at the cached rate.**
+
+Two things worth keeping from how this went. The first is that §4's headline —
+"97% of it is cache reads" — is unaffected, because it was computed from
+`cached / input` on a bench arm and both terms move together; but any absolute
+anthropic token or cost figure taken from the run store before this fix is
+inflated. The second is the method failure, which is the familiar one: **the
+anomaly was in the first table this file printed, and it was explained rather
+than tested.** A one-line ratio against the other two providers would have caught
+it immediately. §1's rule generalizes — read the number, never infer the reason.
+
+Both halves are fixed together, because they cannot be fixed apart: adding the
+missing `cache_creation` details lookup to the old arithmetic would have added it
+on top of an already-gross figure and made the over-count worse.
 
 ```bash
 python tools/harness-bench/cache_profile.py          # free, offline, no app
