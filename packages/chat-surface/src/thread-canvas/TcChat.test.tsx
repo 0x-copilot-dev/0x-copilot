@@ -22,6 +22,10 @@ import type {
 
 import type { FleetProjection, SubagentActivityRecord } from "../subagents";
 import type { ToolCallEntry } from "./eventProjector";
+import {
+  DEFAULT_RENDER_BUDGET,
+  DEFAULT_RENDER_BUDGET_SLACK,
+} from "./renderBudget";
 import type { McpAuthPort } from "../destinations/run/mcpAuthPort";
 import { TransportProvider } from "../providers/TransportProvider";
 import { SwimlaneScrubProvider } from "./SwimlaneScrubContext";
@@ -2848,5 +2852,485 @@ describe("TcChat — a card belongs to the turn that produced it", () => {
     expect(indexOf("Calling legacy")).toBeGreaterThan(
       indexOf("what's in the csvs"),
     );
+  });
+});
+
+// ===========================================================================
+// The render budget — what a long run MOUNTS
+// ===========================================================================
+//
+// Nothing here asserts a pixel, and that is the point. The transcript's cost
+// is a DOM fact — how many cards exist — and jsdom can answer that honestly
+// while it cannot answer a single question about layout. A windowing
+// virtualizer would have had to be tested against `getBoundingClientRect`
+// returning zeros, which is the shape of a green suite over a broken screen.
+
+const LONG_RUN_STEPS = 200;
+
+/** A run long enough to cross the budget several times over. Seq 2 up, so an
+ *  approval can be anchored ahead of it or between its steps. */
+function longRun(count: number, fromSeq = 2): ToolCallEntry[] {
+  return Array.from({ length: count }, (_, i) =>
+    toolCall({
+      id: `step-${i}`,
+      title: `Calling step_${i}`,
+      status: "complete",
+      sequenceNo: fromSeq + i,
+      durationMs: 12,
+    }),
+  );
+}
+
+/**
+ * Mounted tool cards — the `<li>` wrapper, matched EXACTLY.
+ *
+ * The anchors are the point. `renderToolCard`'s row is `tc-chat-tool-step-3`
+ * and the card inside it is `tc-chat-tool-call-step-3`, so an unanchored
+ * `/^tc-chat-tool-/` counts the row, the card and the card's status line and
+ * reports three times the truth. It is a helper that can only ever be wrong in
+ * the direction that makes the budget look broken, but a count used in an
+ * equality (`mounted + withheld === steps`) has no safe direction.
+ */
+const mountedSteps = (): number =>
+  screen.queryAllByTestId(/^tc-chat-tool-step-\d+$/).length;
+
+const withheldSteps = (): number =>
+  screen
+    .queryAllByTestId("tc-chat-elided-steps")
+    .reduce((n, el) => n + Number(el.getAttribute("data-elided-count")), 0);
+
+/** Every element under the transcript column — the cost the budget bounds. */
+const mountedNodes = (): number =>
+  screen.getByTestId("tc-chat-messages").querySelectorAll("*").length;
+
+describe("TcChat — the render budget", () => {
+  it("mounts far fewer rows than a long run has steps", () => {
+    const { transport } = makeTransport(() => Promise.resolve(SAMPLE_RESPONSE));
+    render(
+      withTransport(
+        transport,
+        <TcChat
+          conversationId="c"
+          mode="studio"
+          messages={[]}
+          toolCalls={longRun(LONG_RUN_STEPS)}
+        />,
+      ),
+    );
+    expect(mountedSteps()).toBeLessThan(LONG_RUN_STEPS);
+    // Not merely "fewer": bounded. A regression that withheld one row would
+    // satisfy the line above and leave the transcript exactly as expensive.
+    expect(mountedSteps()).toBeLessThanOrEqual(
+      DEFAULT_RENDER_BUDGET + DEFAULT_RENDER_BUDGET_SLACK,
+    );
+  });
+
+  it("mounts a fraction of the DOM the same transcript costs unbounded", () => {
+    // The number the whole exercise is about, measured rather than inferred.
+    // Counting CARDS proves the fold ran; counting ELEMENTS proves it bought
+    // something, because a card is not one node — it is a row, a disclosure, a
+    // header, a status line and an inline result, and the diffs and payloads
+    // under them are why a long run gets expensive in the first place.
+    //
+    // Expanding is the only honest control available: it is the SAME
+    // transcript, the same props and the same render path with the budget
+    // lifted, so the ratio is attributable to the fold and to nothing else.
+    const { transport } = makeTransport(() => Promise.resolve(SAMPLE_RESPONSE));
+    render(
+      withTransport(
+        transport,
+        <TcChat
+          conversationId="c"
+          mode="studio"
+          messages={SAMPLE_MESSAGES}
+          toolCalls={longRun(LONG_RUN_STEPS)}
+        />,
+      ),
+    );
+    const bounded = mountedNodes();
+
+    fireEvent.click(screen.getAllByTestId("tc-chat-elided-steps")[0]);
+    const unbounded = mountedNodes();
+
+    expect(bounded).toBeLessThan(unbounded / 2);
+  });
+
+  it("never elides the call the run is waiting on", () => {
+    // The budget withholds tool cards as PROCESS. A call parked on a live
+    // decision is not process — it is the thing the run is stopped on, and
+    // eliding it hides which call the reader owes an answer about, in exactly
+    // the long runs the budget exists for.
+    //
+    // Not a safety claim: the ask card and the "N waiting" strip survive the
+    // budget regardless. This is about the reader being able to SEE which of
+    // 250 steps is the one asking.
+    const gated: ToolCallEntry = {
+      ...toolCall({
+        id: "gated",
+        title: "Writing report.csv",
+        status: "running",
+        sequenceNo: 1,
+        durationMs: 12,
+      }),
+      blockedBy: { kind: "decision", approvalId: "mcp_write:run-1:call-1" },
+    } as ToolCallEntry;
+
+    const { transport } = makeTransport(() => Promise.resolve(SAMPLE_RESPONSE));
+    render(
+      withTransport(
+        transport,
+        <TcChat
+          conversationId="c"
+          mode="studio"
+          messages={SAMPLE_MESSAGES}
+          toolCalls={[gated, ...longRun(LONG_RUN_STEPS)]}
+        />,
+      ),
+    );
+
+    // The positive control: the budget really did fire on this transcript, so
+    // a pass cannot come from the fold silently not running.
+    expect(
+      screen.getAllByTestId("tc-chat-elided-steps").length,
+    ).toBeGreaterThan(0);
+    expect(screen.queryByTestId("tc-chat-tool-gated")).not.toBeNull();
+  });
+
+  it("costs the same at 600 steps as at 200 — the bound is the budget, not the run", () => {
+    // The claim the previous test cannot make. A ratio against the expanded
+    // transcript would still hold if the fold merely halved a cost that kept
+    // growing; what has to be true is that the cost STOPS growing.
+    //
+    // Deliberately not a magic node ceiling. Any absolute number here would be
+    // a measurement of today's `ToolCallCard` markup — it would drift on any
+    // change to that card, and it would fail for a reason having nothing to do
+    // with this fold. Tripling the input and demanding under double the DOM
+    // separates O(budget) from O(run) without pinning a constant, and it
+    // tolerates a full slack band of variation in where the boundary landed.
+    const nodesFor = (steps: number): number => {
+      const { transport } = makeTransport(() =>
+        Promise.resolve(SAMPLE_RESPONSE),
+      );
+      render(
+        withTransport(
+          transport,
+          <TcChat
+            conversationId="c"
+            mode="studio"
+            messages={SAMPLE_MESSAGES}
+            toolCalls={longRun(steps)}
+          />,
+        ),
+      );
+      const nodes = mountedNodes();
+      cleanup();
+      return nodes;
+    };
+
+    expect(nodesFor(600)).toBeLessThan(nodesFor(200) * 2);
+  });
+
+  it("cannot reach the composer, because the composer is not in the fold", () => {
+    // The composer is a SIBLING of the transcript, not a row inside it, so no
+    // fold over the transcript's items can ever withhold it. That is a
+    // structural guarantee rather than a rule someone has to remember, and it
+    // is worth a test precisely because it would stop being one quietly: move
+    // the composer inside `tc-chat-messages` for some layout reason and the
+    // budget silently acquires the ability to elide the way to send a message.
+    const { transport } = makeTransport(() => Promise.resolve(SAMPLE_RESPONSE));
+    render(
+      withTransport(
+        transport,
+        <TcChat
+          conversationId="c"
+          mode="studio"
+          messages={[]}
+          toolCalls={longRun(LONG_RUN_STEPS)}
+        />,
+      ),
+    );
+    expect(mountedSteps()).toBeLessThan(LONG_RUN_STEPS);
+    const composer = screen.getByTestId("tc-chat-composer-slot");
+    expect(composer).toBeInTheDocument();
+    expect(screen.getByTestId("tc-chat-messages").contains(composer)).toBe(
+      false,
+    );
+  });
+
+  it("keeps the expanded transcript across a mode switch", () => {
+    // ⌘M must not re-collapse what the reader opened. It does not, because
+    // Studio and Focus are the same element tree with a different style on the
+    // outer div (FR-3.9's single mount) — so `MessageListBody` is never
+    // remounted and the latch holding the decision survives. Pinned because
+    // that is a property of the TREE, not of this fold: giving Focus its own
+    // wrapper element would remount the body and silently drop the decision.
+    const { transport } = makeTransport(() => Promise.resolve(SAMPLE_RESPONSE));
+    const { rerender } = render(
+      withTransport(
+        transport,
+        <TcChat
+          conversationId="c"
+          mode="studio"
+          messages={[]}
+          toolCalls={longRun(LONG_RUN_STEPS)}
+        />,
+      ),
+    );
+    fireEvent.click(screen.getAllByTestId("tc-chat-elided-steps")[0]);
+    expect(mountedSteps()).toBe(LONG_RUN_STEPS);
+
+    rerender(
+      withTransport(
+        transport,
+        <TcChat
+          conversationId="c"
+          mode="focus"
+          messages={[]}
+          toolCalls={longRun(LONG_RUN_STEPS)}
+        />,
+      ),
+    );
+    expect(mountedSteps()).toBe(LONG_RUN_STEPS);
+  });
+
+  it("accounts for every withheld step in the summary line", () => {
+    // What makes the row honest: nothing falls between mounted and counted.
+    const { transport } = makeTransport(() => Promise.resolve(SAMPLE_RESPONSE));
+    render(
+      withTransport(
+        transport,
+        <TcChat
+          conversationId="c"
+          mode="studio"
+          messages={[]}
+          toolCalls={longRun(LONG_RUN_STEPS)}
+        />,
+      ),
+    );
+    expect(withheldSteps()).toBeGreaterThan(0);
+    expect(mountedSteps() + withheldSteps()).toBe(LONG_RUN_STEPS);
+  });
+
+  it("mounts the whole run once the reader asks for it, and stays that way", () => {
+    // The escape hatch is what makes withholding safe, so it has to actually
+    // reach the withheld cards — and it has to stick, on the same rule
+    // `ToolRunGroup` pins on: a transcript that re-hides what you deliberately
+    // opened is hostile.
+    const { transport } = makeTransport(() => Promise.resolve(SAMPLE_RESPONSE));
+    const { rerender } = render(
+      withTransport(
+        transport,
+        <TcChat
+          conversationId="c"
+          mode="studio"
+          messages={[]}
+          toolCalls={longRun(LONG_RUN_STEPS)}
+        />,
+      ),
+    );
+    fireEvent.click(screen.getAllByTestId("tc-chat-elided-steps")[0]);
+    expect(mountedSteps()).toBe(LONG_RUN_STEPS);
+    expect(
+      screen.queryByTestId("tc-chat-elided-steps"),
+    ).not.toBeInTheDocument();
+
+    // The run keeps growing; the budget does not re-arm underneath the reader.
+    rerender(
+      withTransport(
+        transport,
+        <TcChat
+          conversationId="c"
+          mode="studio"
+          messages={[]}
+          toolCalls={longRun(LONG_RUN_STEPS + 40)}
+        />,
+      ),
+    );
+    expect(mountedSteps()).toBe(LONG_RUN_STEPS + 40);
+  });
+
+  it("re-arms on a different conversation rather than leaking the decision", () => {
+    // Sticky forever would mean the next conversation you open mounts
+    // unbounded on a decision somebody made about a different transcript.
+    const { transport } = makeTransport(() => Promise.resolve(SAMPLE_RESPONSE));
+    const { rerender } = render(
+      withTransport(
+        transport,
+        <TcChat
+          conversationId="c1"
+          mode="studio"
+          messages={[]}
+          toolCalls={longRun(LONG_RUN_STEPS)}
+        />,
+      ),
+    );
+    fireEvent.click(screen.getAllByTestId("tc-chat-elided-steps")[0]);
+    expect(mountedSteps()).toBe(LONG_RUN_STEPS);
+
+    rerender(
+      withTransport(
+        transport,
+        <TcChat
+          conversationId="c2"
+          mode="studio"
+          messages={[]}
+          toolCalls={longRun(LONG_RUN_STEPS)}
+        />,
+      ),
+    );
+    expect(mountedSteps()).toBeLessThan(LONG_RUN_STEPS);
+  });
+
+  it("leaves a transcript that fits exactly as it was", () => {
+    // The identity case. A short run must render byte-for-byte what it did
+    // before the budget existed — no summary row, no missing card.
+    const { transport } = makeTransport(() => Promise.resolve(SAMPLE_RESPONSE));
+    render(
+      withTransport(
+        transport,
+        <TcChat
+          conversationId="c"
+          mode="studio"
+          messages={SAMPLE_MESSAGES}
+          toolCalls={longRun(6)}
+        />,
+      ),
+    );
+    expect(mountedSteps()).toBe(6);
+    expect(
+      screen.queryByTestId("tc-chat-elided-steps"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("never withholds what the user or the agent actually said", () => {
+    // Process is withheld; product is not. Hiding the answer behind "N earlier
+    // steps" while keeping the process inverts exactly what PRD-03's density
+    // work set out to fix — and it would hide the user's own words.
+    const { transport } = makeTransport(() => Promise.resolve(SAMPLE_RESPONSE));
+    render(
+      withTransport(
+        transport,
+        <TcChat
+          conversationId="c"
+          mode="studio"
+          messages={SAMPLE_MESSAGES}
+          toolCalls={longRun(LONG_RUN_STEPS)}
+        />,
+      ),
+    );
+    expect(mountedSteps()).toBeLessThan(LONG_RUN_STEPS);
+    expect(screen.getByText("Draft an email to ops")).toBeInTheDocument();
+    expect(screen.getByText("Sure — here is a draft.")).toBeInTheDocument();
+  });
+});
+
+describe("TcChat — the render budget never withholds an approval", () => {
+  // THE safety property. A pending ask is a parked run's only way out, and an
+  // elided card is not merely hidden behind a disclosure — it is absent from
+  // the document, where the seven fs journeys that press Approve by testid
+  // prefix look for it. `MessageListBody`'s load notice and
+  // `groupActivityStream`'s opt-in predicate both already refuse to bury one;
+  // this refuses harder, because the failure is worse.
+  const parked = (id: string, sequenceNo: number): TcChatApproval =>
+    approval({ approvalId: id, sequenceNo });
+
+  const renderParkedRun = (approvals: readonly TcChatApproval[]) => {
+    const { transport } = makeTransport(() => Promise.resolve(SAMPLE_RESPONSE));
+    return render(
+      withTransport(
+        transport,
+        <TcChat
+          conversationId="c"
+          mode="studio"
+          messages={[]}
+          approvals={approvals}
+          toolCalls={longRun(LONG_RUN_STEPS)}
+        />,
+      ),
+    );
+  };
+
+  it("renders an ask anchored at the very head of a withheld run", () => {
+    renderParkedRun([parked("appr-head", 1)]);
+    // The budget really did withhold most of the run around it…
+    expect(mountedSteps()).toBeLessThan(LONG_RUN_STEPS);
+    // …and the card is still there, whole: the row, the ask card itself, and
+    // the control that decides it. Asserting the CARD (`tc-write-gate`) as well
+    // as the id-scoped names is deliberate — a rename of the scoped decision
+    // names cannot silence the card's own root.
+    const row = screen.getByTestId("tc-chat-approval-item-appr-head");
+    expect(row).toBeInTheDocument();
+    const card = within(row).getByTestId("tc-chat-approval-appr-head");
+    expect(within(card).getByTestId("tc-write-gate")).toBeInTheDocument();
+    expect(
+      within(card).getByTestId("tc-chat-approval-approve-appr-head"),
+    ).toBeInTheDocument();
+  });
+
+  it("renders an ask asked in the MIDDLE of a withheld run, in place", () => {
+    // The harder case, and the one a "hoist the survivors to the top" fold
+    // would fail: the ask keeps its anchor beside the tool call that provoked
+    // it, with the work around it summarised on either side.
+    renderParkedRun([parked("appr-mid", 100)]);
+    const row = screen.getByTestId("tc-chat-approval-item-appr-mid");
+    expect(row).toBeInTheDocument();
+    expect(
+      screen.getByTestId("tc-chat-approval-approve-appr-mid"),
+    ).toBeInTheDocument();
+
+    // In place: the summary rows sit on BOTH sides of it, which is what proves
+    // the withheld run was broken around the card rather than moved off it.
+    const rows = [...screen.getAllByTestId(/^tc-chat-elided-item-/), row].sort(
+      (a, b) =>
+        a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING
+          ? -1
+          : 1,
+    );
+    expect(rows.indexOf(row)).toBeGreaterThan(0);
+    expect(rows.indexOf(row)).toBeLessThan(rows.length - 1);
+  });
+
+  it("keeps every parked ask when several are waiting at once", () => {
+    // Two asks parked at once is a drawn state. A budget that kept the newest
+    // and dropped the older would leave the run undecidable and the reachability
+    // line above the composer pointing at nothing.
+    renderParkedRun([
+      parked("appr-a", 1),
+      parked("appr-b", 90),
+      parked("appr-c", 150),
+    ]);
+    for (const id of ["appr-a", "appr-b", "appr-c"]) {
+      expect(
+        screen.getByTestId(`tc-chat-approval-item-${id}`),
+      ).toBeInTheDocument();
+    }
+    expect(screen.getByTestId("tc-chat-approvals-waiting")).toHaveAttribute(
+      "data-pending-count",
+      "3",
+    );
+  });
+
+  it("keeps the jump target the waiting line points at resolvable", () => {
+    // The strip above the composer says "3 waiting" and jumps to the OLDEST —
+    // and `jumpToApproval` resolves that by querying the transcript subtree for
+    // `[data-testid="tc-chat-approval-item-<id>"]`. It no-ops silently when the
+    // node is missing, which is correct for a scrubbed or unreplayed card and
+    // catastrophic for a withheld one: the run stays parked, the line still
+    // says 3, and the control that should reach the decision does nothing.
+    //
+    // The oldest is the one under real pressure — it sits deepest in the head,
+    // which is exactly the region the budget withholds — so this asserts the
+    // SELECTOR the jump runs, not merely that a card exists somewhere.
+    renderParkedRun([
+      parked("appr-oldest", 1),
+      parked("appr-b", 90),
+      parked("appr-c", 150),
+    ]);
+    const transcript = screen.getByTestId("tc-chat-messages");
+    expect(
+      transcript.querySelector(
+        '[data-testid="tc-chat-approval-item-appr-oldest"]',
+      ),
+    ).not.toBeNull();
   });
 });

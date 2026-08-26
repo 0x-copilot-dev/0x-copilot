@@ -878,7 +878,10 @@ def wc6_checklist_and_consent_coexist_honestly(s: DriverSession) -> None:
         assert card["waiting"] == "true", card
         assert not card["spinner"], f"a parked tool card still spins: {card!r}"
         assert card["stillGlyph"], f"the waiting glyph is missing: {card!r}"
-        assert "Waiting" in card["text"], card
+        # "Needs you" is the card the decision is actually ABOUT; "Waiting"
+        # is every other open call while the graph is interrupted. Both are
+        # parked, which is what this block asserts.
+        assert "Waiting" in card["text"] or "Needs you" in card["text"], card
     log(
         f"{len(active)} parked row(s) and {len(stalled)} parked card(s) read as waiting"
     )
