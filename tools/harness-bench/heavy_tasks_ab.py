@@ -48,7 +48,9 @@ Four constraints, each of which killed a more interesting design:
    round count swings run-to-run cannot support an A/B, and a task with no
    checkable answer repeats the mistake FINDINGS.md documents: measuring a proxy
    and never asking whether the work was actually done. ``outcome_ok`` is the
-   outcome metric; ``tool_rounds`` is only a cost signal.
+   outcome metric; ``tool_rounds`` is only a cost signal. Each row records the
+   pattern it was graded against, so ``rescore.py`` can RE-GRADE a finished arm
+   offline — a scoring mistake never costs a second paid arm.
 2. **No connector, no OAuth.** A journey can *never* complete an OAuth connect —
    the driver stubs ``shell.openExternal`` (see tools/desktop-journeys/README).
    The MCP namespacing task is therefore declared with
@@ -405,6 +407,25 @@ def write_ledger(root: Path) -> Path:
     return path
 
 
+def recorded_pattern(pattern: re.Pattern[str]) -> str:
+    """The pattern STRING an offline scorer can recompile to the same verdict.
+
+    ``re.Pattern.pattern`` drops the flags, so a case-insensitive expectation
+    recompiled bare grades differently offline than it did live — silently, and
+    in the direction that invents a wrong answer. Inlining the flag keeps the
+    recorded string self-contained, which is what lets ``rescore.py`` stay
+    stdlib-only instead of importing this file to reach ``TASKS``.
+
+    Only ``re.IGNORECASE`` is handled because it is the only flag this file
+    uses; a new flag here without a line here would reintroduce the divergence,
+    which is why a gate test asserts the round trip for every task.
+    """
+
+    return (
+        f"(?i){pattern.pattern}" if pattern.flags & re.IGNORECASE else pattern.pattern
+    )
+
+
 # ── driving one arm ──────────────────────────────────────────────────────────
 def terminal_run(session: DriverSession, run_id: str, timeout_s: int = 420) -> dict:
     """Wait for a terminal run and RETURN it, whatever it is.
@@ -567,6 +588,12 @@ class Arm:
             # The OUTCOME, not a proxy for it. A run can complete having done
             # none of the work; only this column says whether it did.
             "outcome_ok": bool(pattern.search(answer)),
+            # `pattern` is already fixture-substituted here, so the recorded
+            # string is self-contained and `rescore.py` can re-grade this arm
+            # offline by the same uniform rule it applies to every other arm —
+            # with no fixture plumbing in the scorer. A row WITHOUT this key
+            # declared no expectation and is reported UNKNOWN, never wrong.
+            "expected": recorded_pattern(pattern),
             "answer_head": answer.strip()[:200],
             "seconds": round(time.time() - started, 1),
             **measure(self.session, run_id),
