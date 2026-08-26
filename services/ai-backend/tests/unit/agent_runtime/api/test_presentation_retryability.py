@@ -71,3 +71,36 @@ class TestFailureCardCarriesTheTypedCause(FailureEventMixin):
         assert card["title"] == "Step failed"
         assert card.get("code") is None
         assert card["retryable"] is False
+
+
+class TestAModelTheProviderRefusesOffersNoRetry(FailureEventMixin):
+    """The exact card a retired-model 404 used to render, and now must not.
+
+    Measured before the fix, from a stored ``run_failed`` event: title
+    "Service unavailable", summary "We couldn't complete this run. Please try
+    again.", ``retryable: true``. ``RunTerminalBeatCard`` reads
+    ``presentation.title``/``summary`` verbatim and gates its "start a new run
+    with this goal" button on ``retryable === true``, so that card literally
+    offered to re-send the same goal to the same refused model.
+
+    The presentation is stamped at PERSIST time, not read time, so this is the
+    only place the card can be pinned without a live run.
+    """
+
+    def test_the_card_names_the_model_and_offers_nothing(self) -> None:
+        card = self._render(error_code="model_not_found", retryable=False)
+
+        assert card["title"] == "Model unavailable"
+        assert card["code"] == "model_not_found"
+        # ``retryable`` false is what removes the button.
+        assert card["retryable"] is False
+        assert "try again" not in str(card["summary"]).lower()
+
+    def test_the_code_is_absent_from_the_retryable_table(self) -> None:
+        # Belt and braces: even if a producer forgets the explicit payload
+        # value, the table must not fill in ``True`` the way
+        # ``EXTERNAL_SERVICE_ERROR`` does.
+        assert _ErrorRetryability.for_code("MODEL_NOT_FOUND") is False
+        assert _ErrorRetryability.for_code("model_not_found") is False
+        # Contrast with the code this case used to land on.
+        assert _ErrorRetryability.for_code("EXTERNAL_SERVICE_ERROR") is True

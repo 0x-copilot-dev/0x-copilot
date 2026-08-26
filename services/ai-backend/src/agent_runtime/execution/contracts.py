@@ -76,6 +76,13 @@ class RuntimeErrorCode(StrEnum):
     #: fails with a reason the user can act on instead of an opaque library
     #: exception paraphrased by the model.
     RECURSION_LIMIT_EXCEEDED = "recursion_limit_exceeded"
+    #: The provider answered 404 for the model this run addressed. Separated
+    #: from ``EXTERNAL_SERVICE_ERROR`` because that code is retryable and this
+    #: situation never is: a second identical request gets a second identical
+    #: 404. Blind spot worth naming — a 404 cannot distinguish a retired model
+    #: id from a wrong ``base_url`` on an OpenAI-compatible endpoint, so the
+    #: copy this code selects must not claim to know which.
+    MODEL_NOT_FOUND = "model_not_found"
 
 
 class RuntimeRunStatus(StrEnum):
