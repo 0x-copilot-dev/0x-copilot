@@ -774,9 +774,22 @@ anthropic/claude-3-haiku     "Claude 3 Haiku (OpenRouter)"
 anthropic/claude-haiku-4.5   "Claude Haiku 4.5 (OpenRouter)"
 ```
 
-A fragment of `"haiku"` therefore lands on the retired model, and the helper
+A fragment of `"haiku"` therefore landed on the retired model, and the helper
 returned `True` without recording which row it clicked. Two bench stores on disk
 carry `"model_name":"claude-3-haiku-20240307"`.
+
+`select_model` now ranks exact over prefix over substring, **refuses** a fragment
+that ties across differently-named rows rather than letting picker order decide,
+and records the row it clicked on `selected_model_row`. Verified against the row
+order above: `"haiku"` is now refused, naming all four candidates; `"Claude Haiku
+4.5"` still resolves, because its two tied rows (the family alias and its dated
+snapshot) render the same name and so are not ambiguous to a name matcher.
+
+One gap left open, and worth knowing before the next arm: the picker renders only
+the **display name**, so the helper cannot match a model **id** at all —
+`COPILOT_JOURNEY_MODEL="claude-haiku-4-5"` matches nothing, because the row reads
+"Claude Haiku 4.5". Closing that needs a `data-model-id` on the product's row
+element in the shared chat surface, which is its own change.
 
 Deliberately **not** addressed by pinning a specific retired id anywhere in the
 harness — that is a hardcoded denylist in test clothing, and it rots the moment a
