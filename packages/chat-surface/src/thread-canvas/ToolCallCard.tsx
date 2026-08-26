@@ -11,6 +11,7 @@ import {
   activityCardTileStyle,
 } from "../activity/ActivityCardChrome";
 import type { ToolCallEntry } from "./eventProjector";
+import { toolViewFor, type ToolView } from "./toolViews";
 
 /**
  * Compact, portable presentation for one projected main-agent tool call.
@@ -43,11 +44,12 @@ export function ToolCallCard({
   toolCall,
   parked = false,
 }: ToolCallCardProps): ReactElement {
+  const view = toolViewFor(toolCall.toolName);
   const hasDetails = hasToolDetails(toolCall);
   const [detailsOpen, setDetailsOpen] = useState(false);
   // Only a call that is still running can be parked; a finished one is history.
   const waiting = parked && toolCall.status === "running";
-  const header = renderHeader(toolCall, hasDetails, waiting);
+  const header = renderHeader(toolCall, hasDetails, waiting, view);
 
   if (!hasDetails) {
     return (
@@ -91,9 +93,14 @@ function renderHeader(
   toolCall: ToolCallEntry,
   discloseable: boolean,
   waiting: boolean,
+  view: ToolView,
 ): ReactElement {
   const running = toolCall.status === "running" && !waiting;
   const statusLabel = waiting ? "Waiting" : statusText(toolCall.status);
+  // Derived from the call's own arguments, so it is available as soon as they
+  // finish streaming — for a file tool this is the single most useful fact on
+  // the row, and it used to be buried inside the raw JSON payload.
+  const subtitle = view.subtitle(toolCall);
   const provenance = provenanceLabel(toolCall);
   const access = accessLabel(toolCall.accessMode);
   const duration = formatDuration(toolCall.durationMs);
@@ -110,11 +117,19 @@ function renderHeader(
       style={discloseable ? summaryHeaderStyle : activityCardStaticHeaderStyle}
     >
       <span style={activityCardTileStyle} aria-hidden="true">
-        {toolTileGlyph(toolCall.toolName)}
+        {/* A registered tool gets its own glyph; the long tail of connector
+            tools keeps the letter tile, which at least tells two unfamiliar
+            tool names apart. */}
+        {view.icon ?? toolTileGlyph(toolCall.toolName)}
       </span>
       <span style={headerCopyStyle}>
         <span style={identityLineStyle}>
           <span style={toolTitleStyle}>{toolCall.title}</span>
+          {subtitle !== null ? (
+            <span style={subtitleStyle} data-testid="tc-tool-card-subtitle">
+              {subtitle}
+            </span>
+          ) : null}
           {provenance !== null ? (
             <span style={provenanceStyle}>{provenance}</span>
           ) : null}
@@ -180,14 +195,11 @@ function renderHeader(
 
 function ToolCallDetails({ toolCall }: ToolCallCardProps): ReactElement {
   const source = sourceLabel(toolCall);
-  return (
-    <div
-      style={activityCardDetailStyle}
-      data-testid={`tc-chat-tool-${toolCall.id}-details`}
-    >
-      {toolCall.title !== toolCall.toolName ? (
-        <DetailRow label="tool" value={toolCall.toolName} />
-      ) : null}
+  const Body = toolViewFor(toolCall.toolName).Body;
+  const specialised = Body === null ? null : <Body toolCall={toolCall} />;
+
+  const payloadRows = (
+    <>
       {toolCall.args !== undefined ? (
         <PayloadRow
           label="args"
@@ -201,6 +213,31 @@ function ToolCallDetails({ toolCall }: ToolCallCardProps): ReactElement {
           value={toolCall.result}
           testId={`tc-chat-tool-${toolCall.id}-result`}
         />
+      ) : null}
+    </>
+  );
+  const hasPayload =
+    toolCall.args !== undefined || toolCall.result !== undefined;
+
+  return (
+    <div
+      style={activityCardDetailStyle}
+      data-testid={`tc-chat-tool-${toolCall.id}-details`}
+    >
+      {specialised}
+      {toolCall.title !== toolCall.toolName ? (
+        <DetailRow label="tool" value={toolCall.toolName} />
+      ) : null}
+      {/* With a specialised view the raw payload is demoted, not deleted: the
+          view is a reading of the call, and the JSON remains the record of what
+          actually crossed the wire. Without one it stays the primary body. */}
+      {specialised === null ? (
+        payloadRows
+      ) : hasPayload ? (
+        <details style={rawPayloadStyle}>
+          <summary style={rawPayloadSummaryStyle}>raw payload</summary>
+          {payloadRows}
+        </details>
       ) : null}
       {source !== null ? <DetailRow label="source" value={source} /> : null}
       {toolCall.errorMessage !== undefined ? (
@@ -418,6 +455,36 @@ const toolTitleStyle: CSSProperties = {
   overflow: "hidden",
   textOverflow: "ellipsis",
   whiteSpace: "nowrap",
+};
+
+/** The filename / pattern chip. Mono because it is a machine identifier, and
+ *  quieter than the title so the row still reads title-first. */
+const subtitleStyle: CSSProperties = {
+  color: "var(--color-text-muted)",
+  fontFamily: "var(--font-mono)",
+  fontSize: "var(--font-size-mono-10)",
+  lineHeight: "15px",
+  maxWidth: "22ch",
+  overflow: "hidden",
+  textOverflow: "ellipsis",
+  whiteSpace: "nowrap",
+};
+
+const rawPayloadStyle: CSSProperties = {
+  borderTop: "1px solid var(--color-border)",
+  marginTop: 8,
+  paddingTop: 4,
+};
+
+const rawPayloadSummaryStyle: CSSProperties = {
+  color: "var(--color-text-subtle)",
+  cursor: "pointer",
+  fontFamily: "var(--font-mono)",
+  fontSize: "var(--font-size-mono-9-5)",
+  letterSpacing: "0.04em",
+  lineHeight: "16px",
+  listStyle: "revert",
+  userSelect: "none",
 };
 
 const toolMetaStyle: CSSProperties = {

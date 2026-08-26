@@ -53,6 +53,11 @@ export type IconName =
   | "clock"
   | "play"
   | "dots"
+  // file-change tools in the transcript (`toolViews`): a call that edits an
+  // existing file, and one that writes a new one. Both are drawn from `doc` so
+  // the three filesystem glyphs read as one family.
+  | "pencil"
+  | "docPlus"
   // rail destinations outside the v3 solo set (legacy/team rails). Not in the
   // v3 design's `Icon` registry — carried over from the rail's own glyphs at the
   // canonical stroke so the rail has one icon source for every slug it renders.
@@ -185,6 +190,19 @@ export const ICON_PATHS: Readonly<Record<IconName, ReactNode>> = {
     <>
       <path d="M6 3h8l4 4v14H6z" />
       <path d="M14 3v4h4" />
+    </>
+  ),
+  pencil: (
+    <>
+      <path d="M4 20l4-1L19 8l-3-3L5 16z" />
+      <path d="M14.5 6.5l3 3" />
+    </>
+  ),
+  docPlus: (
+    <>
+      <path d="M6 3h8l4 4v14H6z" />
+      <path d="M14 3v4h4" />
+      <path d="M12 12v5M9.5 14.5h5" />
     </>
   ),
   clock: (

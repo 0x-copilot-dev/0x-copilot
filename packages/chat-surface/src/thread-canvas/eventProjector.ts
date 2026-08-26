@@ -42,6 +42,7 @@ import type { RuntimeEventEnvelope, SurfaceSpec } from "@0x-copilot/api-types";
 // TODO(merge): replace import from "./_approvals-stub" with "@0x-copilot/api-types"
 import type { SurfaceHue } from "../surfaces/surfaceHue";
 import type { Approval, ApprovalState } from "./_approvals-stub";
+import { resolveToolArgs } from "./streamedToolArgs";
 
 /**
  * The projected state every consumer reads from. A consumer picks the
@@ -1058,7 +1059,12 @@ function reduceToolStarted(
       null,
     // A result may (on an out-of-order replay) have landed first — keep it.
     status: prior?.status ?? "running",
-    args: readRecord(event.payload?.["args"]) ?? prior?.args,
+    // Same unwrapping as the delta path. A `tool_call_started` frame normally
+    // carries `{}` (streamed tools) or the real arguments (`read_file` in the
+    // capture emitted no deltas at all), and both pass through unchanged — but
+    // routing them through one function keeps a started frame that ever carries
+    // the streaming envelope from re-introducing the escaped-JSON card.
+    args: updatedToolArgs(event, prior?.args),
     result: prior?.result,
     summary:
       agentToolDisplayValue(event, "display_summary", "_display_summary") ??
@@ -1298,10 +1304,18 @@ function toolCallKey(event: RuntimeEventEnvelope): string {
 export const UNKEYED_TOOL_CALL_PREFIX = "unkeyed:";
 
 /**
- * Runtime tool-call deltas currently carry the latest accumulated `args`
- * snapshot. Accept `args_delta` too for forward-compatible partial updates.
- * A full snapshot intentionally replaces a stale placeholder such as `{}` or
- * `{ delta: "…" }` emitted before the streaming JSON became parseable.
+ * Intermediate tool-call deltas carry `args` as a streaming-JSON envelope —
+ * `{delta: "<the argument JSON so far>"}` — not as the arguments themselves.
+ * `resolveToolArgs` unwraps it once the accumulated string parses and holds the
+ * last good parse while it is still a prefix; see `streamedToolArgs.ts` for the
+ * captured frame sequence this is written against.
+ *
+ * This only ever affected a call IN FLIGHT: the runtime's final delta carries
+ * the parsed object, so a settled card already read `file_path` /
+ * `old_string` / `new_string` correctly. Storing the envelope verbatim is what
+ * made a streaming call render escaped JSON nested in a JSON string.
+ *
+ * `args_delta` is still accepted for forward-compatible partial updates.
  */
 function updatedToolArgs(
   event: RuntimeEventEnvelope,
@@ -1309,7 +1323,7 @@ function updatedToolArgs(
 ): Record<string, unknown> | undefined {
   const snapshot = readRecord(event.payload?.["args"]);
   if (snapshot !== undefined) {
-    return snapshot;
+    return resolveToolArgs(snapshot, prior);
   }
   const delta = readRecord(event.payload?.["args_delta"]);
   if (delta === undefined) {
