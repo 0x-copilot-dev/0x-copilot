@@ -427,7 +427,7 @@ describe("projectApprovals — workspace folder grant", () => {
           approval_kind: "tool_action",
           display_name: "List Downloads",
           workspace_grant: {
-            path: "/Users/parthpahwa/Downloads",
+            path: "/Users/ada/Downloads",
             mode: "read_only",
             reason: "to see what you downloaded today",
           },
@@ -435,7 +435,7 @@ describe("projectApprovals — workspace folder grant", () => {
       }),
     ]);
     expect(projection.approvals[0]?.workspaceGrant).toEqual({
-      path: "/Users/parthpahwa/Downloads",
+      path: "/Users/ada/Downloads",
       folderName: "Downloads",
       mode: "read_only",
       reason: "to see what you downloaded today",

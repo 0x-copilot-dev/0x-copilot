@@ -1,8 +1,12 @@
 """Unit tests for :class:`SurfaceGenerationScheduler` + the projector seam (PRD-07).
 
 Covers AC5 (per-run cap), AC6 (``SURFACE_SPEC_MODEL`` unset ⇒ zero scheduling),
-the success path (put → emit), the failure path (record_failure → no emit), and
-that the projector schedules only on a ladder miss.
+the success path (put → emit), the failure path (record_failure → no upgrade
+emitted), and that the projector schedules only on a ladder miss.
+
+The scheduler emits a PAIR — ``surface_spec_requested`` when the shaping call
+starts, ``surface_spec_generated`` when it lands — so these tests filter by
+event type rather than counting emissions.
 """
 
 from __future__ import annotations
@@ -24,8 +28,11 @@ from agent_runtime.capabilities.surfaces.spec_models import (
     validate_surface_spec,
 )
 from agent_runtime.capabilities.surfaces.store import InMemorySurfaceSpecStore, SpecKey
+from runtime_api.schemas import RuntimeApiEventType
 
 _DESCRIPTOR = GenToolDescriptor(name="get_thing")
+_REQUESTED = RuntimeApiEventType.SURFACE_SPEC_REQUESTED
+_GENERATED = RuntimeApiEventType.SURFACE_SPEC_GENERATED
 
 
 def _spec() -> SurfaceSpec:
@@ -56,11 +63,11 @@ class _Harness:
     def __init__(self, result: object, *, max_per_run: int = 5) -> None:
         self.store = InMemorySurfaceSpecStore()
         self.scheduled: list[Coroutine[Any, Any, None]] = []
-        self.emitted: list[dict[str, object]] = []
+        self.emitted: list[tuple[RuntimeApiEventType, dict[str, object]]] = []
         self.generator = FakeGenerator(result)
 
-        async def _emit(payload):
-            self.emitted.append(dict(payload))
+        async def _emit(event_type, payload):
+            self.emitted.append((event_type, dict(payload)))
 
         self.scheduler = SurfaceGenerationScheduler(
             generator=self.generator,  # type: ignore[arg-type]
@@ -79,6 +86,11 @@ class _Harness:
             output=output,
             surface_uri="record://customsvc/get_thing/1",
         )
+
+    def payloads(self, event_type: RuntimeApiEventType) -> list[dict[str, object]]:
+        """Payloads emitted under one event type, in order."""
+
+        return [payload for emitted, payload in self.emitted if emitted is event_type]
 
     def close_pending(self) -> None:
         """Discard collected-but-unrun coroutines (avoids 'never awaited')."""
@@ -106,8 +118,9 @@ class TestSchedulerSuccess:
 
         assert harness.store.get_stored(harness.key_for(output)) is not None
         assert harness.store.get(server="customsvc", tool="get_thing") == _spec()
-        assert len(harness.emitted) == 1
-        payload = harness.emitted[0]
+        generated = harness.payloads(_GENERATED)
+        assert len(generated) == 1
+        payload = generated[0]
         assert payload["surface_uri"] == "record://customsvc/get_thing/1"
         assert payload["archetype"] == "record"
         assert payload["generator_model"] == "fake-nano"
@@ -116,7 +129,7 @@ class TestSchedulerSuccess:
 
 
 class TestSchedulerFailure:
-    async def test_genfailure_records_and_emits_nothing(self) -> None:
+    async def test_genfailure_records_and_emits_no_upgrade(self) -> None:
         harness = _Harness(
             GenFailure(reason="lint failed", raw_output="{}", attempts=2)
         )
@@ -126,7 +139,10 @@ class TestSchedulerFailure:
 
         assert harness.store.has_failure(harness.key_for(output)) is True
         assert harness.store.get(server="customsvc", tool="get_thing") is None
-        assert harness.emitted == []
+        # No upgrade — nothing on screen changes. The progress signal still
+        # fired, because it announces that the call STARTED, and it did.
+        assert harness.payloads(_GENERATED) == []
+        assert len(harness.payloads(_REQUESTED)) == 1
 
 
 class TestSchedulerCapAndDedup:
@@ -199,7 +215,7 @@ class TestSchedulerFactory:
     def test_disabled_when_model_unset(self) -> None:
         store = InMemorySurfaceSpecStore()
 
-        async def _emit(payload):  # pragma: no cover - never called
+        async def _emit(_event_type, _payload):  # pragma: no cover - never called
             return None
 
         assert (
@@ -216,7 +232,7 @@ class TestSchedulerFactory:
     def test_enabled_with_injected_completion(self) -> None:
         store = InMemorySurfaceSpecStore()
 
-        async def _emit(payload):  # pragma: no cover - not exercised here
+        async def _emit(_event_type, _payload):  # pragma: no cover - not exercised here
             return None
 
         class _StubCompletion:

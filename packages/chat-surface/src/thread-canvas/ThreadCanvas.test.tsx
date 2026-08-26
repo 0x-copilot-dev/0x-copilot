@@ -8,7 +8,7 @@
 // underlying component instance survives.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import type { ReactNode } from "react";
 
 import type {
@@ -33,6 +33,8 @@ import {
   ThreadCanvas,
   type ThreadMode,
 } from "./ThreadCanvas";
+import { TcChat } from "./TcChat";
+import type { ToolCallEntry } from "./eventProjector";
 import type { TcTab } from "./TcTabs";
 
 // ============================================================
@@ -106,6 +108,7 @@ interface RenderArgs {
   readonly onScrub?: (sequenceNo: number) => void;
   readonly onSnapToNow?: () => void;
   readonly focusCards?: ReactNode;
+  readonly rightRail?: ReactNode;
   readonly railWidth?: number;
   readonly railCollapsed?: boolean;
   readonly canvasEmpty?: boolean;
@@ -132,6 +135,7 @@ function renderCanvas(args: RenderArgs = {}) {
         onScrub={args.onScrub}
         onSnapToNow={args.onSnapToNow}
         focusCards={args.focusCards}
+        rightRail={args.rightRail}
         railWidth={args.railWidth}
         railCollapsed={args.railCollapsed}
         canvasEmpty={args.canvasEmpty}
@@ -326,6 +330,96 @@ describe("ThreadCanvas", () => {
         "data-visible",
         "false",
       );
+    });
+  });
+
+  // WHAT FOCUS SUBTRACTS, AND WHAT IT MUST NOT.
+  //
+  // Focus is the single-column reading mode: it drops the surface column and
+  // the swimlanes, and that is its identity, not a deficiency. What it may
+  // never drop is transcript CONTENT — with no surface column there, the
+  // transcript is the only place a run's work can appear, so a gate there
+  // leaves the mode looking empty. It looked exactly that way while the inline
+  // tool result was gated to Studio.
+  //
+  // This asserts both halves at once, because either alone is satisfiable by
+  // the wrong fix: "content is present" passes if Focus grows a surface column
+  // back, and "no surface column" passes over a transcript showing nothing.
+  describe("Focus promotes the transcript instead of subtracting from it", () => {
+    const EDIT_CALL: ToolCallEntry = {
+      id: "call-edit",
+      toolName: "edit_file",
+      title: "Edit a file",
+      status: "complete",
+      sequenceNo: 3,
+      runId: null,
+      createdAtMs: 1716000030000,
+      args: {
+        file_path: "/tmp/report.md",
+        old_string: "old line",
+        new_string: "new line",
+      },
+      result: { content: "Updated /tmp/report.md" },
+    };
+
+    it("reaches a tool card's body and its file diff without leaving Focus", () => {
+      const transport = makeTransport();
+      render(
+        withProviders(
+          transport,
+          <ThreadCanvas
+            mode="focus"
+            conversationId={CONV_ID}
+            runId={RUN_ID}
+            events={[]}
+            onModeChange={() => {}}
+            tabs={SAMPLE_TABS}
+            activeUri="email://draft-1"
+            onActivateTab={() => {}}
+            onCloseTab={() => {}}
+            transport={transport}
+            // The cockpit injects the chat column; the default `TcChat` mount
+            // takes no projections, so a run's tool calls can only reach the
+            // transcript through the rail the host composes.
+            rightRail={
+              <TcChat
+                conversationId="conv-1"
+                mode="focus"
+                messages={[]}
+                toolCalls={[EDIT_CALL]}
+              />
+            }
+          />,
+        ),
+      );
+
+      // The content half. jsdom performs no layout, so a collapsed <details>
+      // still has its body in the DOM — asserting the OPEN STATE is what
+      // "reachable without switching modes" has to mean. This used to click
+      // the summary first; a file-change card now opens itself (a live run
+      // found the diff collapsed and therefore unread), so the click would
+      // CLOSE it and the stronger assertion is that no click is needed.
+      const item = screen.getByTestId("tc-chat-tool-call-edit");
+      const card = item.querySelector("details");
+      expect(card).not.toBeNull();
+      expect(card!).toHaveAttribute("open");
+      expect(
+        within(card!).getByTestId("tc-tool-edit-diff-counts"),
+      ).toHaveTextContent("+1−1");
+
+      // The identity half — still one column. Not restored, on purpose.
+      // `runId` is non-null above so the swimlanes negative is about the MODE:
+      // with a null run the band is withheld anyway and the assertion would
+      // pass vacuously in Studio too.
+      expect(screen.getByTestId("run-canvas-slot")).toHaveAttribute(
+        "data-visible",
+        "false",
+      );
+      expect(screen.queryByTestId("tc-swimlanes-slot")).not.toBeInTheDocument();
+      expect(
+        getComputedStyle(screen.getByTestId("thread-canvas"))
+          .gridTemplateColumns,
+      ).toBe("minmax(0, 1fr)");
     });
   });
 

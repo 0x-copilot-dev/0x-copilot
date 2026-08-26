@@ -36,12 +36,20 @@
 //    clobbers newer `data`. `surfaceTabs` is a pure derivation over the same
 //    single pass — NOT a second subscription. Legacy flat payloads
 //    (`payload.surface_uri` + `payload.state`) are still accepted unchanged.
+// 6. **Spec generation is UNDERWAY (`surface_spec_requested`)**. The runtime
+//    emits that progress signal immediately before the spec-generation model
+//    call starts, and `surface_spec_generated` (5) remains the terminal event.
+//    It folds into `surfaceSpecGeneration` in the SAME pass, so the surface can
+//    say what is happening instead of shimmering at a blank. Nothing may depend
+//    on it arriving: a runtime that never emits it leaves the map empty, and an
+//    empty map is what every consumer already sees today.
 
 import type { RuntimeEventEnvelope, SurfaceSpec } from "@0x-copilot/api-types";
 
 // TODO(merge): replace import from "./_approvals-stub" with "@0x-copilot/api-types"
 import type { SurfaceHue } from "../surfaces/surfaceHue";
 import type { Approval, ApprovalState } from "./_approvals-stub";
+import { resolveToolArgs } from "./streamedToolArgs";
 
 /**
  * The projected state every consumer reads from. A consumer picks the
@@ -66,8 +74,30 @@ export interface ProjectedState {
    * spec's `title_path` resolved against `data`, falling back to the URI tail.
    */
   readonly surfaceTabs: readonly SurfaceTab[];
+  /**
+   * Surfaces whose spec generation is UNDERWAY right now, keyed by the same
+   * surface identity `surfaceState` uses (a surface's mount/tab URI IS its
+   * `surface_id` — see the identity note in `ledgerProjection.ts`).
+   *
+   * Membership is the whole signal: an entry appears on `surface_spec_requested`
+   * and is removed by its terminal `surface_spec_generated` (or by the run
+   * ending). So `surfaceSpecGeneration.get(uri)` answers "is a model choosing
+   * this surface's layout at this instant", which is a claim the tier cannot
+   * make — `pending` only ever meant "no `view.derived` yet", which is equally
+   * true of a generation that never started and of one that died.
+   */
+  readonly surfaceSpecGeneration: ReadonlyMap<string, SurfaceSpecGeneration>;
   /** Highest `sequence_no` we've seen — useful for time-travel cursor. */
   readonly lastSequenceNo: number;
+}
+
+/**
+ * One in-flight surface-spec generation. `modelId` is the runtime's `model_id`
+ * (`null` when it did not name one) and is display-only — it is echoed to the
+ * reader, never matched against a model catalog.
+ */
+export interface SurfaceSpecGeneration {
+  readonly modelId: string | null;
 }
 
 /**
@@ -252,6 +282,7 @@ const EMPTY_STATE: ProjectedState = {
   approvals: new Map(),
   surfaceState: new Map(),
   surfaceTabs: EMPTY_SURFACE_TABS,
+  surfaceSpecGeneration: new Map(),
   lastSequenceNo: -1,
 };
 
@@ -277,6 +308,7 @@ export function project(
   const approvals = new Map<string, Approval>();
   const surfaceState = new Map<string, SurfacePayload>();
   const surfaceMeta = new Map<string, SurfaceMeta>();
+  const surfaceSpecGeneration = new Map<string, SurfaceSpecGeneration>();
   let lastSequenceNo = -1;
 
   for (const event of events) {
@@ -294,6 +326,7 @@ export function project(
       approvals,
       surfaceState,
       surfaceMeta,
+      surfaceSpecGeneration,
     });
   }
 
@@ -304,6 +337,7 @@ export function project(
     approvals,
     surfaceState,
     surfaceTabs: buildSurfaceTabs(surfaceState, surfaceMeta),
+    surfaceSpecGeneration,
     lastSequenceNo,
   };
 }
@@ -328,6 +362,7 @@ export function projectAt(
   const approvals = new Map<string, Approval>();
   const surfaceState = new Map<string, SurfacePayload>();
   const surfaceMeta = new Map<string, SurfaceMeta>();
+  const surfaceSpecGeneration = new Map<string, SurfaceSpecGeneration>();
   let lastSequenceNo = -1;
 
   for (const event of events) {
@@ -348,6 +383,7 @@ export function projectAt(
       approvals,
       surfaceState,
       surfaceMeta,
+      surfaceSpecGeneration,
     });
   }
 
@@ -358,6 +394,7 @@ export function projectAt(
     approvals,
     surfaceState,
     surfaceTabs: buildSurfaceTabs(surfaceState, surfaceMeta),
+    surfaceSpecGeneration,
     lastSequenceNo,
   };
 }
@@ -379,12 +416,17 @@ export function projectSurfaceTabs(
   const seen = new Set<string>();
   const surfaceState = new Map<string, SurfacePayload>();
   const surfaceMeta = new Map<string, SurfaceMeta>();
+  // The strip shows tabs, not progress, so this fold's generation half is
+  // discarded. It is still passed rather than made optional: one signature for
+  // `applySurfaceEvent` is what keeps this selector byte-identical to
+  // `project().surfaceTabs`, which is the property the parity test pins.
+  const surfaceSpecGeneration = new Map<string, SurfaceSpecGeneration>();
   for (const event of events) {
     if (seen.has(event.event_id)) {
       continue;
     }
     seen.add(event.event_id);
-    applySurfaceEvent(event, surfaceState, surfaceMeta);
+    applySurfaceEvent(event, surfaceState, surfaceMeta, surfaceSpecGeneration);
   }
   return buildSurfaceTabs(surfaceState, surfaceMeta);
 }
@@ -570,6 +612,7 @@ interface MutableState {
   readonly approvals: Map<string, Approval>;
   readonly surfaceState: Map<string, SurfacePayload>;
   readonly surfaceMeta: Map<string, SurfaceMeta>;
+  readonly surfaceSpecGeneration: Map<string, SurfaceSpecGeneration>;
 }
 
 /**
@@ -650,9 +693,16 @@ function reduceEvent(event: RuntimeEventEnvelope, state: MutableState): void {
 
   // Surface state — `tool_result` / draft / presentation carry the new
   // surface payload (legacy flat OR the PRD-01 `payload.surface` envelope);
-  // `surface_spec_generated` merges a late spec by URI. Handled in one place so
-  // `project()` and the `projectSurfaceTabs` selector stay byte-identical.
-  applySurfaceEvent(event, state.surfaceState, state.surfaceMeta);
+  // `surface_spec_requested` / `surface_spec_generated` open and close a spec
+  // generation, and the latter also merges the late spec by URI. Handled in one
+  // place so `project()` and the `projectSurfaceTabs` selector stay
+  // byte-identical.
+  applySurfaceEvent(
+    event,
+    state.surfaceState,
+    state.surfaceMeta,
+    state.surfaceSpecGeneration,
+  );
 }
 
 function isVisibleToUser(event: RuntimeEventEnvelope): boolean {
@@ -884,24 +934,88 @@ function readSurfaceEnvelope(
 }
 
 /**
- * Apply one event's surface effect into `surfaceState` + `surfaceMeta`.
+ * The runtime's "spec generation has started" progress signal.
+ *
+ * A plain union comparison. This briefly needed a bare-string constant and a
+ * widened read, because the literal was added to the Python enum without being
+ * mirrored into `RuntimeApiEventType` — and that gap was not cosmetic: the
+ * runtime type guard (`isRuntimeApiEventType` → `isRuntimeEventEnvelope`) drops
+ * any envelope whose type is not in the closed union, so the event was thrown
+ * away by every client BEFORE the projector ever saw it. The workaround
+ * typechecked and its tests passed only because they feed `project()` directly,
+ * downstream of the guard. The mirror is what makes the feature reachable;
+ * this comparison is just what it looks like afterwards.
+ */
+function isSpecGenerationRequested(event: RuntimeEventEnvelope): boolean {
+  return event.event_type === "surface_spec_requested";
+}
+
+/** Run terminals — the outer bound on every in-flight model call in the run. */
+function isRunTerminal(event: RuntimeEventEnvelope): boolean {
+  return (
+    event.event_type === "run_completed" ||
+    event.event_type === "run_failed" ||
+    event.event_type === "run_cancelled"
+  );
+}
+
+/**
+ * Apply one event's surface effect into `surfaceState` + `surfaceMeta` +
+ * `surfaceSpecGeneration`.
  *
  * - `tool_result` / `draft_updated` / `presentation_updated`: merge the surface
  *   payload (`{spec?, data}` from the envelope, or a legacy flat state object).
- * - `surface_spec_generated`: merge ONLY the `spec` key so a late spec upgrades
- *   the surface in place and never clobbers newer `data` (D4). Replay-idempotent
- *   because the caller deduplicates by `event_id` and the writes are keyed.
+ * - `surface_spec_requested`: open a generation for the surface. Purely a
+ *   progress signal — an absent event is indistinguishable from today (the map
+ *   simply stays empty), so nothing downstream may require it.
+ * - `surface_spec_generated`: close that generation AND merge ONLY the `spec`
+ *   key, so a late spec upgrades the surface in place and never clobbers newer
+ *   `data` (D4). Replay-idempotent because the caller deduplicates by
+ *   `event_id` and the writes are keyed.
+ * - a run terminal: close every generation still open. A model call that dies
+ *   with its run never emits its own terminal event, and a "generating…" state
+ *   that outlives the run is a claim the reader cannot dismiss.
  */
 function applySurfaceEvent(
   event: RuntimeEventEnvelope,
   surfaceState: Map<string, SurfacePayload>,
   surfaceMeta: Map<string, SurfaceMeta>,
+  surfaceSpecGeneration: Map<string, SurfaceSpecGeneration>,
 ): void {
+  if (isSpecGenerationRequested(event)) {
+    // The contract's key is `surface_id`; `extractSurfaceUri` is the fallback
+    // because the two are the SAME identity — a surface's mount/tab URI IS its
+    // `surface_id` (the identity note in `ledgerProjection.ts`), which is also
+    // why this can share a map key with `surface_spec_generated`'s `surface_uri`.
+    // Unattributed (`null`) ⇒ record nothing: no surface can honestly claim a
+    // generation the runtime declined to name, and inventing a run-wide flag
+    // would light up whichever surface happened to be open.
+    const named = pickString(event.payload, "surface_id");
+    const uri =
+      named !== null && named !== "" ? named : extractSurfaceUri(event);
+    if (uri === undefined || uri === "") {
+      return;
+    }
+    surfaceSpecGeneration.set(uri, {
+      modelId: pickString(event.payload, "model_id"),
+    });
+    return;
+  }
+
+  if (isRunTerminal(event)) {
+    surfaceSpecGeneration.clear();
+    return;
+  }
+
   if (event.event_type === "surface_spec_generated") {
     const uri = extractSurfaceUri(event);
     if (uri === undefined) {
       return;
     }
+    // Close the generation BEFORE validating the spec: the model call is over
+    // either way, and only the upgrade is in doubt. Closing after the guard
+    // would leave a malformed spec showing "generating…" for the rest of the run.
+    surfaceSpecGeneration.delete(uri);
     const spec = event.payload?.["spec"];
     if (!spec || typeof spec !== "object") {
       return;
@@ -1058,7 +1172,12 @@ function reduceToolStarted(
       null,
     // A result may (on an out-of-order replay) have landed first — keep it.
     status: prior?.status ?? "running",
-    args: readRecord(event.payload?.["args"]) ?? prior?.args,
+    // Same unwrapping as the delta path. A `tool_call_started` frame normally
+    // carries `{}` (streamed tools) or the real arguments (`read_file` in the
+    // capture emitted no deltas at all), and both pass through unchanged — but
+    // routing them through one function keeps a started frame that ever carries
+    // the streaming envelope from re-introducing the escaped-JSON card.
+    args: updatedToolArgs(event, prior?.args),
     result: prior?.result,
     summary:
       agentToolDisplayValue(event, "display_summary", "_display_summary") ??
@@ -1298,10 +1417,18 @@ function toolCallKey(event: RuntimeEventEnvelope): string {
 export const UNKEYED_TOOL_CALL_PREFIX = "unkeyed:";
 
 /**
- * Runtime tool-call deltas currently carry the latest accumulated `args`
- * snapshot. Accept `args_delta` too for forward-compatible partial updates.
- * A full snapshot intentionally replaces a stale placeholder such as `{}` or
- * `{ delta: "…" }` emitted before the streaming JSON became parseable.
+ * Intermediate tool-call deltas carry `args` as a streaming-JSON envelope —
+ * `{delta: "<the argument JSON so far>"}` — not as the arguments themselves.
+ * `resolveToolArgs` unwraps it once the accumulated string parses and holds the
+ * last good parse while it is still a prefix; see `streamedToolArgs.ts` for the
+ * captured frame sequence this is written against.
+ *
+ * This only ever affected a call IN FLIGHT: the runtime's final delta carries
+ * the parsed object, so a settled card already read `file_path` /
+ * `old_string` / `new_string` correctly. Storing the envelope verbatim is what
+ * made a streaming call render escaped JSON nested in a JSON string.
+ *
+ * `args_delta` is still accepted for forward-compatible partial updates.
  */
 function updatedToolArgs(
   event: RuntimeEventEnvelope,
@@ -1309,7 +1436,7 @@ function updatedToolArgs(
 ): Record<string, unknown> | undefined {
   const snapshot = readRecord(event.payload?.["args"]);
   if (snapshot !== undefined) {
-    return snapshot;
+    return resolveToolArgs(snapshot, prior);
   }
   const delta = readRecord(event.payload?.["args_delta"]);
   if (delta === undefined) {

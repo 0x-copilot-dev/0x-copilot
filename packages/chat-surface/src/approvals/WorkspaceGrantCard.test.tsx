@@ -18,7 +18,7 @@ import {
 } from "./index";
 
 const DOWNLOADS: WorkspaceGrantRequest = {
-  path: "/Users/parthpahwa/Downloads",
+  path: "/Users/ada/Downloads",
   folderName: "Downloads",
   mode: "read_only",
   reason: "to list what you downloaded today",
@@ -30,12 +30,12 @@ describe("<WorkspaceGrantCard>", () => {
 
     // The whole path, verbatim — the subject of the decision.
     expect(screen.getByTestId("wg-path").textContent).toBe(
-      "/Users/parthpahwa/Downloads",
+      "/Users/ada/Downloads",
     );
     // The short name carries the sentence.
     expect(
       screen.getByRole("group", {
-        name: "Folder access: /Users/parthpahwa/Downloads",
+        name: "Folder access: /Users/ada/Downloads",
       }),
     ).toBeTruthy();
     expect(screen.getByText(/Let the agent read Downloads\?/)).toBeTruthy();
@@ -78,7 +78,7 @@ describe("<WorkspaceGrantCard>", () => {
     expect(screen.getByText("this folder only · revoke anytime")).toBeTruthy();
     // The folder is still named — the user learns what was asked for.
     expect(screen.getByTestId("wg-path").textContent).toBe(
-      "/Users/parthpahwa/Downloads",
+      "/Users/ada/Downloads",
     );
   });
 
@@ -93,7 +93,7 @@ describe("<WorkspaceGrantCard>", () => {
 
     expect(screen.getByTestId("wg-grant").hasAttribute("disabled")).toBe(true);
     expect(screen.getByTestId("wg-path").textContent).toBe(
-      "/Users/parthpahwa/Downloads",
+      "/Users/ada/Downloads",
     );
   });
 
@@ -146,7 +146,7 @@ describe("<WorkspaceGrantCard>", () => {
     expect(screen.queryByTestId("wg-deny")).toBeNull();
     // Still names the folder — now it is what you would revoke.
     expect(screen.getByTestId("wg-path").textContent).toBe(
-      "/Users/parthpahwa/Downloads",
+      "/Users/ada/Downloads",
     );
   });
 });
@@ -156,7 +156,7 @@ describe("parseWorkspaceGrantRequest", () => {
     const parsed = parseWorkspaceGrantRequest({
       approval_id: "appr-1",
       [WORKSPACE_GRANT_PAYLOAD_KEY]: {
-        path: "/Users/parthpahwa/Downloads",
+        path: "/Users/ada/Downloads",
         mode: "read_only",
         reason: "to list what you downloaded today",
       },

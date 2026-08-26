@@ -3028,9 +3028,10 @@ class RuntimeRunHandler:
         ``SURFACE_SPEC_STORE_BACKEND`` (``memory`` default test, ``file`` desktop
         single-user, ``backend`` team/web); an unset value preserves the prior
         auto behaviour (durable file store when configured, else in-process).
-        The emit callback ships ``surface_spec_generated`` back onto the same
-        event producer every other emission uses, so the FE upgrades the surface
-        in place.
+        The emit callback ships ``surface_spec_requested`` (progress, before the
+        model call) and ``surface_spec_generated`` (terminal, on success) back
+        onto the same event producer every other emission uses, so the FE can
+        say a layout is being chosen and then upgrade the surface in place.
 
         ``credentials`` is required, not optional: the refinement model is a
         second outbound call on the run's provider and ``extra_kwargs`` is the
@@ -3047,12 +3048,32 @@ class RuntimeRunHandler:
                 user_id=run.user_id,
             )
 
-        async def _emit(payload: Mapping[str, object]) -> None:
+        # ``surface_spec_requested`` (the shaping call started) and
+        # ``surface_spec_generated`` (it landed) ride one closure so they cannot
+        # end up on different channels or leave one of the pair unwired.
+        #
+        # The microcopy mirrors the projector's display titles
+        # (``_Fields.SURFACE_PREPAR{ING,ED}_TITLE``) rather than importing them:
+        # that module's field class is private, and the summary line has been a
+        # separate emitter-side string since the terminal event shipped. Change
+        # one and change the other.
+        _SURFACE_SPEC_SUMMARIES = {
+            RuntimeApiEventType.SURFACE_SPEC_REQUESTED: "Preparing a view",
+            RuntimeApiEventType.SURFACE_SPEC_GENERATED: "Prepared a view",
+        }
+
+        async def _emit(
+            event_type: RuntimeApiEventType, payload: Mapping[str, object]
+        ) -> None:
             await self.event_producer.append_api_event(
                 run=run,
                 source=StreamEventSource.SYSTEM,
-                event_type=RuntimeApiEventType.SURFACE_SPEC_GENERATED,
-                summary="Prepared a view",
+                event_type=event_type,
+                # Subscript, not ``.get``: a third event type routed through
+                # here would otherwise ship ``summary=None`` silently. This
+                # callback serves exactly the two spec events, so an unmapped
+                # one is a wiring mistake and should say so.
+                summary=_SURFACE_SPEC_SUMMARIES[event_type],
                 payload=dict(payload),
             )
             # Generative Surfaces v2 (PRD-A3 D4, Hook 2): the async spec upgrade
@@ -3060,6 +3081,13 @@ class RuntimeRunHandler:
             # first, v2 second (additive). No-op unless SURFACES_V2 bound an
             # emitter; the generation task captured the ContextVar at schedule
             # time (during the tool call, while the emitter is bound).
+            #
+            # Gated on the TERMINAL event: the ledger records what a run did, and
+            # "a shaping call started" is not a derived view. Folding the progress
+            # signal in here would mint a second ``view.derived`` per surface with
+            # no spec behind it.
+            if event_type is not RuntimeApiEventType.SURFACE_SPEC_GENERATED:
+                return
             emitter = WorkLedgerEmitter.active()
             if emitter is not None:
                 await emitter.on_spec_generated(payload=payload)

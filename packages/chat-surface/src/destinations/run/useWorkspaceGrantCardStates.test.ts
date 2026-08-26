@@ -24,7 +24,7 @@ const DOWNLOADS: WorkspaceGrant = {
 };
 
 const ASK: WorkspaceGrantRequest = {
-  path: "/Users/parthpahwa/Downloads",
+  path: "/Users/ada/Downloads",
   folderName: "Downloads",
   mode: "read_only",
   reason: "to see what you downloaded today",
@@ -58,7 +58,7 @@ describe("useWorkspaceGrantCardStates", () => {
       expect(result.current.states["appr-fs-1"]).toBe("granted"),
     );
     expect(port.requestGrant).toHaveBeenCalledWith({
-      path: "/Users/parthpahwa/Downloads",
+      path: "/Users/ada/Downloads",
       mode: "read_only",
       reason: "to see what you downloaded today",
     });
@@ -178,7 +178,7 @@ describe("useWorkspaceGrantCardStates", () => {
     // Absent, never `null`-as-a-mode: the host applies its own default
     // (read-only) rather than being handed an access nobody asked for.
     expect(port.requestGrant).toHaveBeenCalledWith({
-      path: "/Users/parthpahwa/Downloads",
+      path: "/Users/ada/Downloads",
       reason: "to see what you downloaded today",
     });
   });

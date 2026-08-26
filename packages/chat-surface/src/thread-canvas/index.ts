@@ -3,6 +3,27 @@ export {
   type InlineDiffState,
   type TcInlineDiffProps,
 } from "./TcInlineDiff";
+// === Per-tool transcript views + the file-change diff ===
+// Branches the one-shape-fits-every-tool card on tool name, and renders an
+// actual code change for the filesystem tools. `TcInlineDiff` above is the
+// connector-surface APPROVAL state machine and is unrelated despite the name.
+// The diff is computed client-side from the call's own arguments because the
+// runtime emits no structured diff; the projection seam stays host-free.
+export { TcFileDiff, type TcFileDiffProps } from "./TcFileDiff";
+export {
+  computeLineDiff,
+  type DiffHunk,
+  type DiffLine,
+  type FileDiff,
+  type LineDiffOptions,
+} from "./lineDiff";
+export {
+  toolViewFor,
+  SPECIALISED_TOOL_NAMES,
+  type ToolView,
+  type ToolViewKind,
+} from "./toolViews";
+// === end per-tool transcript views ===
 export {
   TcSurfaceMount,
   type TcSurfaceMountProps,
@@ -39,6 +60,10 @@ export {
 // Pure selector over the single canonical run stream — surface-tab strip data
 // for the Run cockpit. No second subscription / projector (FR-3.3).
 export { projectSurfaceTabs, type SurfaceTab } from "./eventProjector";
+// The in-flight spec-generation signal a surface frame reads. Exported because
+// a host adapter cannot name `TcSurfaceFrame`'s `specGeneration` prop without
+// it — the prop was unreachable outside this package until it was.
+export { type SurfaceSpecGeneration } from "./eventProjector";
 // === end PRD-04 (genui) ===
 
 // === Inline tool-call cards (Workstream D) ===

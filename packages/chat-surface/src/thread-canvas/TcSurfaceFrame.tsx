@@ -11,6 +11,7 @@ import type { CSSProperties, ReactElement, ReactNode } from "react";
 import { RawFallbackView } from "../surfaces/raw/RawFallbackView";
 import { TcProvenanceFooter } from "./TcProvenanceFooter";
 import { TcSurfaceSkeleton } from "./TcSurfaceSkeleton";
+import type { SurfaceSpecGeneration } from "./eventProjector";
 import { resolveSurfaceOpenIn, type SurfaceProvenance } from "./provenance";
 
 export interface TcSurfaceFrameProps {
@@ -18,6 +19,13 @@ export interface TcSurfaceFrameProps {
   readonly provenance: SurfaceProvenance | null;
   /** Surface payload — used for tier `"raw"` and for deep-link resolution. */
   readonly rawPayload?: unknown;
+  /**
+   * This surface's entry in `project().surfaceSpecGeneration` — present exactly
+   * while the runtime says a spec-generation model call is in flight for it.
+   * Omitted / `null` ⇒ no such signal, which is what a runtime that never emits
+   * `surface_spec_requested` (and every session replayed from disk) supplies.
+   */
+  readonly specGeneration?: SurfaceSpecGeneration | null;
   readonly onCopyText?: (text: string) => Promise<void>;
   readonly onSaveFile?: (text: string, filename: string) => Promise<void>;
   readonly frameActionsSlot?: ReactNode; // reserved: B3 toggle, B4 entry point
@@ -50,6 +58,7 @@ function rawFilename(ledgerId: string): string {
 export function TcSurfaceFrame({
   provenance,
   rawPayload,
+  specGeneration = null,
   onCopyText,
   onSaveFile,
   frameActionsSlot,
@@ -64,12 +73,37 @@ export function TcSurfaceFrame({
   // event selector) before handing a fully-formed provenance to the footer.
   const resolved = resolveSurfaceOpenIn(provenance, rawPayload);
 
+  // WHAT DRAWS THE SKELETON IS UNCHANGED: `tier === "pending"`, exactly as
+  // before. `specGeneration` only decides what the skeleton SAYS.
+  //
+  // It is tempting to OR the two — "the runtime says a model call is in flight,
+  // so draw the skeleton" — and that is wrong, because the signal is not a
+  // matched pair. `_emit_requested` fires unconditionally at the top of
+  // `_generate`, but only the SUCCESS exit emits `surface_spec_generated`; a
+  // raise and a `GenFailure` (a normal outcome, not a crash) both return without
+  // a terminal. Generation is also fire-and-forget (`asyncio.create_task`, never
+  // awaited), so `surface_spec_requested` can even land after `run_completed`.
+  //
+  // Under an OR, every one of those leaves the entry set and the frame replaces
+  // an ALREADY-RENDERED surface with a shimmer reading "Asking … to lay out this
+  // table" for the rest of the run. A progress hint that can hide drawn content
+  // is worse than no hint: the failure mode is indistinguishable from the
+  // "chrome vanishing unbidden" bug this frame exists to avoid.
+  //
+  // Gating on `pending` makes unpaired presence harmless by construction — the
+  // signal can only ever ADD a line to a skeleton that was already going to be
+  // drawn, and a lost terminal costs nothing. The deliberate trade: a
+  // regenerate over an already-rendered surface no longer shows a skeleton.
+  // That feedback is worth having, but not at the price of a stuck one, and it
+  // should come from an event that actually closes on every exit.
+  const generating = specGeneration !== null && provenance.tier === "pending";
   let body: ReactNode;
   if (provenance.tier === "pending") {
     body = (
       <TcSurfaceSkeleton
         connector={provenance.connector}
         kind={provenance.kind}
+        generation={specGeneration}
       />
     );
   } else if (provenance.tier === "raw") {
