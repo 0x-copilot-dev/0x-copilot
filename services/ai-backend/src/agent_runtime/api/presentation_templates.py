@@ -91,6 +91,19 @@ class _ErrorMessage:
         "Service unavailable",
         "The connected app didn't respond.",
     )
+    # Says the model is unavailable and stops. It does NOT say "retired": the
+    # runtime saw a numeric 404, which is equally what a wrong endpoint path or
+    # an unpulled local model returns, and naming a vendor policy we did not
+    # observe would be the copy asserting more than the code measured. This
+    # code is absent from ``_ErrorRetryability._RETRYABLE`` on purpose — a
+    # second identical request earns a second identical 404, so offering the
+    # "start a new run with this goal" button would offer a remedy that cannot
+    # work. Before this code existed the case landed on EXTERNAL_SERVICE_ERROR
+    # and did exactly that.
+    MODEL_NOT_FOUND = (
+        "Model unavailable",
+        "The provider wouldn't serve the model this run selected.",
+    )
     TOOL_EXCEPTION = (
         "Step failed",
         "The tool reported an error and didn't return a result.",

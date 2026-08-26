@@ -69,6 +69,31 @@ def test_failure_threshold_cooldown_and_probe_admission() -> None:
     assert health.admission(key) is ProviderCircuitAdmission.ALLOW
 
 
+def test_a_model_the_provider_will_not_serve_is_not_evidence_about_the_provider() -> (
+    None
+):
+    """A 404 for one model id says nothing about the deployment's health.
+
+    ``_CIRCUIT_RELEVANT_FAILURES`` is an allow-set, so omission is the whole
+    mechanism. Asserted rather than assumed: counting these would trip the
+    circuit on a provider that is answering perfectly well, and then block
+    every *working* model behind the same key for the cooldown.
+    """
+
+    clock = _Clock()
+    health = ProcessLocalProviderCircuitHealth(
+        ProviderCircuitConfig(open_failure_threshold=1, cooldown_seconds=10),
+        now=clock,
+    )
+    key = _key("primary")
+
+    assert (
+        health.observe_failure(key, ModelFailureClass.MODEL_NOT_FOUND)
+        is ModelDeploymentHealth.AVAILABLE
+    )
+    assert health.admission(key) is ProviderCircuitAdmission.ALLOW
+
+
 def test_capacity_and_ttl_are_bounded() -> None:
     clock = _Clock()
     health = ProcessLocalProviderCircuitHealth(

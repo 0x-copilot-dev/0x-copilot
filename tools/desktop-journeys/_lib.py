@@ -258,6 +258,11 @@ class DriverSession:
         #: phase produced them. One boot now carries a dozen phases, and
         #: ``07-transcript.png`` alone cannot tell you which claim it evidences.
         self.phase_prefix = ""
+        #: The picker row ``select_model`` last clicked, verbatim. ``None`` means
+        #: no selection was made — never "the default was used", which is a
+        #: different and unmeasured claim. Recorded because a bare ``True``
+        #: left an arm's log unable to say which model it exercised.
+        self.selected_model_row: str | None = None
 
     @property
     def _user_data_dir(self) -> Path:
@@ -732,41 +737,103 @@ class DriverSession:
     def select_model(self, name_fragment: str, timeout_s: int = 20) -> bool:
         """Open the composer's model picker and choose the matching row.
 
-        Matches on the visible row name, case-insensitively, so a caller can
-        pass "haiku" rather than the exact catalog label. Returns False when no
-        enabled row matches — a keyless row is not selectable, and silently
-        continuing on the wrong model would misreport what was exercised.
+        Matches the visible row name case-insensitively, so a caller can pass
+        "Claude Haiku 4.5" rather than reproduce the label exactly. Returns False
+        when no enabled row matches — a keyless row is not selectable, and
+        silently continuing on the wrong model would misreport what was
+        exercised.
+
+        WHY THIS IS STRICTER THAN IT LOOKS. The old version took the FIRST row
+        whose name merely CONTAINED the fragment. The picker's fallback ordering
+        is provider-asc then id-asc, and on a fresh store the LiteLLM fallback
+        serves (the models.dev snapshot has not landed yet), so the anthropic
+        rows arrive as "Claude 3 Haiku", "Claude Haiku 4.5", … — and a fragment
+        of "haiku" selected a model Anthropic has RETIRED. A benchmark arm died
+        five runs deep on the resulting 404, and the log could not say which
+        model it had run because the helper returned a bare ``True``. Both
+        halves are addressed:
+
+        * Exact beats prefix beats substring, and an AMBIGUOUS fragment — two or
+          more differently-named rows tied at the best rank — is refused rather
+          than resolved by DOM order. DOM order is the picker's business, not a
+          statement about which model the caller meant, and letting it decide is
+          exactly what picked the retired row. Rows that tie with the SAME name
+          (a family alias and its dated snapshot both render "Claude Haiku 4.5")
+          are not ambiguous to a caller matching on names, so the first is taken.
+        * The clicked row is recorded on ``selected_model_row`` and printed, so
+          an arm's log states which model it exercised instead of leaving it to
+          be reverse-engineered from a provider error message.
+
+        KNOWN GAP, not closed here: the picker renders only the DISPLAY name, so
+        this helper cannot match a model **id**. ``COPILOT_JOURNEY_MODEL=
+        "claude-haiku-4-5"`` matches nothing and returns False — verified, the
+        row reads "Claude Haiku 4.5". Closing that needs a ``data-model-id`` on
+        the product's row element, which is a change to the shared chat surface
+        and belongs in its own commit. Until then, pass the display name.
 
         POLLS rather than looking once. `wait_model_pill_resolved` returns as
         soon as the pill stops showing its placeholder, which can be BEFORE the
         just-added provider's rows land in the catalog. Opening the menu at that
         instant shows a shorter list, and a single look concluded "no such
         model" for a model that was about to appear — a race that passed
-        standalone and failed under the load of a full-suite run.
+        standalone and failed under the load of a full-suite run. Ambiguity is
+        NOT polled through: more rows arriving can only widen it.
         """
 
         deadline = time.time() + timeout_s
         while time.time() < deadline:
             self.click(".atlas-model-pill")
             if self.wait_for(".atlas-model-pill__item", 5):
-                clicked = self.evaluate(
+                result = self.evaluate(
                     """
                     (() => {
-                      const want = %r.toLowerCase();
+                      const want = %r.trim().toLowerCase();
                       const rows = [...document.querySelectorAll('.atlas-model-pill__item')];
-                      const row = rows.find((r) => {
+                      // 0 = exact, 1 = prefix, 2 = substring, null = no match.
+                      const named = [];
+                      for (const r of rows) {
+                        if (r.disabled) continue;
                         const nm = r.querySelector('.atlas-model-pill__nm');
-                        return nm && nm.innerText.toLowerCase().includes(want)
-                          && !r.disabled;
-                      });
-                      if (!row) return null;
-                      row.click();
-                      return row.innerText;
+                        if (!nm) continue;
+                        const got = nm.innerText.trim();
+                        const low = got.toLowerCase();
+                        let score = null;
+                        if (low === want) score = 0;
+                        else if (low.startsWith(want)) score = 1;
+                        else if (low.includes(want)) score = 2;
+                        if (score !== null) named.push({ row: r, name: got, score });
+                      }
+                      if (!named.length) return { status: 'none' };
+                      const best = Math.min(...named.map((c) => c.score));
+                      const tied = named.filter((c) => c.score === best);
+                      const distinct = [...new Set(tied.map((c) => c.name))];
+                      if (distinct.length > 1) {
+                        return { status: 'ambiguous', candidates: distinct };
+                      }
+                      tied[0].row.click();
+                      return { status: 'clicked', name: tied[0].name };
                     })()
                     """
                     % name_fragment
                 )
-                if clicked:
+                status = (result or {}).get("status")
+                if status == "ambiguous":
+                    candidates = (result or {}).get("candidates") or []
+                    print(
+                        f"  [{self.name}] model {name_fragment!r} is AMBIGUOUS — "
+                        f"{len(candidates)} rows match equally well: "
+                        f"{candidates}. Refusing rather than letting picker "
+                        f"order choose; pass a longer fragment.",
+                        flush=True,
+                    )
+                    return False
+                if status == "clicked":
+                    self.selected_model_row = str((result or {}).get("name") or "")
+                    print(
+                        f"  [{self.name}] model {name_fragment!r} -> "
+                        f"{self.selected_model_row!r}",
+                        flush=True,
+                    )
                     return self.wait_model_pill_contains(name_fragment, timeout_s)
             # Close the popover before retrying: a stacked-open menu swallows
             # the next click, and the catalog may still be refreshing.

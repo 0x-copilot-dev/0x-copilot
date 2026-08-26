@@ -843,3 +843,143 @@ Same shape as §2 — a terminal row with an empty `result_summary`, a tool that
 looks like it threw and never ran — but the cause here is budget exhaustion, not
 a step ceiling. The scorer named it unprompted, which is the second time that
 column has found this shape without being told what to look for.
+
+## 9. The arm that cost a model that no longer exists — and why no catalog filter ships
+
+One heavy arm burned five runs in seven seconds against a model Anthropic has
+retired. This section records what was measured about the catalog, because the
+tempting fix — "stop offering retired models" — turns out to have no reliable
+signal behind it, and shipping it anyway would hide working models.
+
+### What happened
+
+`journey-bench-heavy-25-1787733971337049000/logs/ai-backend.log` carries five
+`runtime.stream.failed` rows:
+
+```
+exception_type     NotFoundError
+exception_message  Error code: 404 - {'type': 'error', 'error':
+                   {'type': 'not_found_error',
+                    'message': 'model: claude-3-haiku-20240307'}}
+error_code         external_service_error
+retryable          true
+safe_message       We couldn't complete this run. Please try again.
+```
+
+The classification half of that is now fixed in the runtime — a provider 404 is
+`model_not_found`, permanent, with copy that does not invite a retry. This
+section is about the other half: how a retired model reached the picker at all.
+
+### The primary source already handles this; the fallback is the hole
+
+models.dev is the primary catalog source and excludes dead rows two independent
+ways. Both verified against the on-disk snapshot:
+
+| measurement                                   | value                                                 |
+| --------------------------------------------- | ----------------------------------------------------- |
+| rows in the snapshot                          | 7,300                                                 |
+| rows with `status` in `{deprecated, retired}` | 190                                                   |
+| OpenAI rows so marked                         | 10 (`gpt-3.5-turbo`, `gpt-4`, `gpt-4-turbo`, `o1`, …) |
+| anthropic rows in the snapshot                | 13, all current                                       |
+| `claude-3-haiku-20240307` under `anthropic`   | **absent**                                            |
+
+`ModelsDevCatalogPolicy.DEAD_STATUSES` is live and drops the 190. Separately,
+models.dev simply does not carry retired Anthropic models — the id appears in
+the snapshot only under `helicone`, a provider key this product does not map.
+Driving `ModelsDevModelSource.records()` against that snapshot yields 303
+records, and the retired id is not among them.
+
+So the retired row can only arrive through the **LiteLLM fallback**, which
+`ModelsDevModelSource.records()` serves when the snapshot is missing — i.e. on a
+fresh `COPILOT_HOME`, before the background fetch lands. That is exactly a
+journey or bench boot. The bench store above holds no `models-dev-catalog.json`
+at all, which is the direct confirmation.
+
+### LiteLLM's own deprecation signal exists, and does not cover this case
+
+`LitellmModelSource._candidate` already drops any row carrying a
+`deprecation_date`. Measured against the bundled offline cost map:
+
+```
+claude-3-opus-20240229   deprecation_date = '2026-05-01'   -> filtered
+claude-3-haiku-20240307  deprecation_date = None           -> offered
+```
+
+I dumped the full row for the retired model. Its 16 fields are pricing,
+context-window and capability flags; there is **no other machine-readable
+retirement field**. The signal exists upstream and is simply not populated for
+this id. Nothing in this repo can supply it.
+
+### The tempting proxy is measurably wrong
+
+"Absent from models.dev" looks like a deprecation signal. It is not:
+
+- 73 of the 193 records the LiteLLM fallback serves are absent from the
+  models.dev tables for the four mapped providers.
+- That set contains live flagships and current dated snapshots —
+  `claude-opus-4-1`, `chatgpt-4o-latest`, `gpt-4.1-2025-04-14` — plus
+  niche-but-alive rows models.dev drops on its own rules
+  (`gpt-4o-audio-preview`, `gpt-4o-mini-search-preview`).
+- It does **not** contain `gpt-3.5-turbo` or `gpt-4-turbo`. Those are present in
+  models.dev, carrying `status: deprecated`.
+
+The proxy has the correlation backwards: the dead ids it would supposedly catch
+are the ones models.dev _does_ carry, with a status that already filters them,
+while the absent set is dominated by models that work. A filter on absence would
+hide working models in order to remove one ugly row. `max_output_tokens`,
+release-date and id-shape heuristics fail the same way.
+
+### Verdict: no catalog filter ships
+
+The rule decides it — a wrong filter that hides a working model is worse than an
+ugly row — and no reliable signal exists for this case. The classification fix
+carries the whole outcome: the row may still be offered, but selecting it now
+fails once, permanently, with copy that says to choose a different model instead
+of offering a retry that cannot succeed.
+
+The one signal that _would_ work is the vendor's own `/v1/models` list. It is not
+this change, for two structural reasons: `models_dev_source.py`'s module contract
+is that the network is never on the request path, and the credential is per-user
+BYOK, so there is no deployment-wide key to enumerate with.
+
+One pre-existing over-filter noticed and deliberately left alone:
+`LitellmModelSource` drops any row with a `deprecation_date` including a
+**future** one, so a model announced for retirement next year is already
+invisible. That is the opposite error from this section's and needs its own
+evidence.
+
+### The mechanism that picked the retired row (harness hygiene, not product)
+
+`tools/desktop-journeys/_lib.py:select_model` matched a case-insensitive
+**substring** of the visible row name. On a fresh store the LiteLLM fallback
+serves, sorted provider-asc then id-asc, so the anthropic haiku rows appear in
+this order:
+
+```
+claude-3-haiku-20240307      "Claude 3 Haiku"                <- retired, sorts first
+claude-haiku-4-5             "Claude Haiku 4.5"
+claude-haiku-4-5-20251001    "Claude Haiku 4.5"
+anthropic/claude-3-haiku     "Claude 3 Haiku (OpenRouter)"
+anthropic/claude-haiku-4.5   "Claude Haiku 4.5 (OpenRouter)"
+```
+
+A fragment of `"haiku"` therefore landed on the retired model, and the helper
+returned `True` without recording which row it clicked. Two bench stores on disk
+carry `"model_name":"claude-3-haiku-20240307"`.
+
+`select_model` now ranks exact over prefix over substring, **refuses** a fragment
+that ties across differently-named rows rather than letting picker order decide,
+and records the row it clicked on `selected_model_row`. Verified against the row
+order above: `"haiku"` is now refused, naming all four candidates; `"Claude Haiku
+4.5"` still resolves, because its two tied rows (the family alias and its dated
+snapshot) render the same name and so are not ambiguous to a name matcher.
+
+One gap left open, and worth knowing before the next arm: the picker renders only
+the **display name**, so the helper cannot match a model **id** at all —
+`COPILOT_JOURNEY_MODEL="claude-haiku-4-5"` matches nothing, because the row reads
+"Claude Haiku 4.5". Closing that needs a `data-model-id` on the product's row
+element in the shared chat surface, which is its own change.
+
+Deliberately **not** addressed by pinning a specific retired id anywhere in the
+harness — that is a hardcoded denylist in test clothing, and it rots the moment a
+vendor retires something else.

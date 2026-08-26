@@ -3421,7 +3421,8 @@ export type ModelFailureClass =
   | "stream_interrupted_after_content"
   | "ambiguous_provider_state"
   | "cancelled"
-  | "deadline_exceeded";
+  | "deadline_exceeded"
+  | "model_not_found";
 export type ModelAttemptLifecycleState =
   | "admitted"
   | "dispatching"

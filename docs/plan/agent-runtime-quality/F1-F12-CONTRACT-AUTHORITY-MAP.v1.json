@@ -74,7 +74,7 @@
     },
     "F10": {
       "path": "docs/plan/agent-runtime-quality/prds/PRD-AR-F10-model-invocation-reliability-routing.md",
-      "sha256": "3f02e93be212889e8251238f669f38b955fae1a1cdaa84801b54639ba5dc559e",
+      "sha256": "d32a62fb489bef4e2bdfec16d0d28dba48952ab8437d6e01fd4d72d66c0c843a",
       "digest_scope": "full_document"
     },
     "F11": {
@@ -665,6 +665,6 @@
   "integrity": {
     "algorithm": "sha256",
     "canonicalization": "UTF-8 JSON with sorted keys and compact separators; omit integrity.digest",
-    "digest": "90d45ee163b48a839b5a37cf1226a8e10ac18ea288410632d3aaacdbffdafa3e"
+    "digest": "4d24b1689892682ce17bbb517e6566c7aa84a957caa19571c5c70f262fd0c216"
   }
 }
