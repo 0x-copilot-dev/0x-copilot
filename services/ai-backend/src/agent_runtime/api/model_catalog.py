@@ -153,7 +153,44 @@ class ModelCatalog:
         # first) while replacing its value with the last same-id entry (so a
         # richer source record supersedes the minimal default placeholder).
         deduped = {item.id: item for item in items}
-        return tuple(deduped.values())
+        return cls._drop_dated_twins(tuple(deduped.values()))
+
+    @staticmethod
+    def _drop_dated_twins(
+        items: tuple[ModelCatalogItem, ...],
+    ) -> tuple[ModelCatalogItem, ...]:
+        """Drop ``<id>-YYYYMMDD`` when plain ``<id>`` is already in the catalog.
+
+        Once :class:`~agent_runtime.api.litellm_model_source.ModelDisplayName`
+        stopped rendering the release stamp, ``claude-haiku-4-5`` and
+        ``claude-haiku-4-5-20251001`` derive the SAME label, and the picker would
+        show two identical rows for one model.
+
+        **Deliberately the narrowest rule that fixes that.** An earlier version
+        collapsed by display *name*, choosing the most canonical id per label —
+        and it dropped `claude-opus-4-8` from a real-table build, because "most
+        canonical" is a judgement that can go wrong in a catalog of 279 rows
+        whose labels come from several sources. This version can only ever
+        remove an id that is **character-for-character another id plus a date
+        stamp**, from the same provider. A model with no plain twin is
+        untouchable, which is the property the previous rule lacked.
+
+        The default model is safe for the same reason: it is only dropped if the
+        catalog also carries it without its stamp, in which case the label the
+        user picks still resolves to a runnable model.
+        """
+
+        by_provider: dict[str, set[str]] = {}
+        for item in items:
+            by_provider.setdefault(item.provider, set()).add(item.id)
+
+        def is_dated_twin(item: ModelCatalogItem) -> bool:
+            head, separator, tail = item.id.rpartition("-")
+            if not separator or len(tail) != 8 or not tail.isdigit():
+                return False
+            return head in by_provider.get(item.provider, frozenset())
+
+        return tuple(item for item in items if not is_dated_twin(item))
 
     # ------------------------------------------------------------------
     # Private helpers
