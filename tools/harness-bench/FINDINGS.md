@@ -250,3 +250,122 @@ waits), `grep` 539 (deepagents). The named next lever is **lossless JSON-schema
 slimming**: pydantic emits a `"title"` for every field, ~15–20% of every args
 schema with zero semantic loss, applying to third-party tools too and requiring
 no model behaviour change at all.
+
+## 7. The cold-start question §4 left open: it is a process boundary, not a clock
+
+§4 ended by naming the next measurement: _"what fraction of real runs hit a cold
+cache."_ That fraction is the multiplier on every trimming change, so it decides
+whether the remaining prompt levers are worth building at all.
+
+`cache_profile.py` answers it offline from `run_usage.jsonl` records already on
+disk — **99 stores, 442 runs, no paid run**. It is the same discipline as
+`rescore.py`: scoring is free, so a measurement mistake never costs money.
+
+```
+cold rate by position in store
+  first in store              96 runs    65 cold    67.7%
+  later in store             341 runs    27 cold     7.9%
+```
+
+**A run that opens a store is cold about two times in three. A run that follows
+another inside the same store is cold about one time in thirteen.** Those two
+populations sit on the same time scale — a store's runs are typically seconds to
+minutes apart either way — so the ~9x difference is not the cache expiring.
+
+### The obvious explanation is wrong, and the test that kills it
+
+A prompt cache lives at the **provider**, keyed on the prefix — not on our disk.
+So a fresh COPILOT_HOME should still hit a warm cache when an identical prefix
+went out recently from any process, and the cold rate on a store's first run
+should fall away as the gap to the nearest earlier run anywhere shrinks.
+
+It does not:
+
+```
+first-run-in-store, by gap to the nearest earlier run ANYWHERE (same provider)
+  < 1 min      27 runs    74.1% cold     ← the LOWEST gap is the HIGHEST cold rate
+  1-5 min      22 runs    54.5% cold
+  5-15 min     10 runs    60.0% cold
+  15-60 min    11 runs    81.8% cold
+  1-24 h       17 runs    70.6% cold
+  > 1 day       6 runs    66.7% cold
+```
+
+Flat, non-monotone, and worst at the shortest gap. **Time is not the driver.**
+Whatever makes a first run cold is structural, and it survives an identical
+prompt having gone out seconds earlier.
+
+**What this buys the trimming program:** §4 said prompt-trimming pays "strictly
+in proportion to cold-start frequency", and that for a bursty desktop user —
+open the app, ask one thing, close it — "nearly every run is a cold start". That
+was a reasonable assumption. It is now an evidenced one: a session's opening run
+is the expensive one regardless of when the app was last used, so **there is no
+usage pattern a user can adopt that makes the resident prefix cheap.** Every
+token cut from the cold prompt is paid back on the first run of every session.
+
+### Three limits on that number, stated rather than buried
+
+1. **`run_usage` is a rollup across every model call in the run.** A run whose
+   first call was cold and whose later calls were warm reports `cached > 0` and
+   scores WARM. 67.7% is a **lower bound**.
+2. **A store is a COPILOT_HOME, not a person.** 424 of the 442 runs are journey
+   boots with heterogeneous configs, so "first in store" conflates a process
+   start with a prefix change. This corpus cannot separate them — that needs the
+   per-call ledger, which is empty (below).
+3. **The interactive corpus is 13 runs from one machine on one day.** Its 15.4%
+   is reported for completeness and should not be read as a user-behaviour rate.
+
+### The instrument that could settle it has never been populated
+
+```
+runs reading cache :   346 of 442   (6,333,964 tokens)
+runs writing cache :     0 of 442   (0 tokens)
+occupancy calls carrying any cache field : 0 of 820
+occupancy calls carrying provider totals : 0 of 820
+```
+
+A cache read is impossible without a preceding write. 6.3M read tokens against
+zero recorded writes is a statement about the instrument, not the cache.
+
+Two distinct defects sit behind it, and neither is visible from a green test
+suite:
+
+- **`ContextOccupancySnapshot` cache fields are dead on every real run.** All
+  820 per-model-call records across 98 stores carry `cached_input_tokens: 0`
+  and `provider_input_tokens: null`. The reconciliation that consumes them
+  (`context_occupancy_recorder.py:1511`, `_cache_subsets`) has never received a
+  populated usage object in production. The record's own docstring says these
+  fields are "what makes the report correct rather than merely large", because
+  without them a reader "would recommend trimming the stable prefix, which is
+  exactly backwards" — which is precisely the reading the composer's context
+  meter (#625/#626) now presents to users.
+- **The Anthropic extractor cannot see a cache write in LangChain's normalized
+  shape.** `token_usage.py:432-441` reads `cache_creation_input_tokens` from the
+  top-level block only, while `cache_read` gets a second lookup inside
+  `input_token_details`. LangChain 1.5.3's `InputTokenDetails` has exactly three
+  keys — `audio`, `cache_creation`, `cache_read` — so the read is found there and
+  the write never is. `provider_cache_metadata_observed` carries the same
+  asymmetry.
+
+**What is NOT established:** whether that asymmetry is currently costing tokens.
+If writes were being dropped, a cold run's recorded `input_tokens` would be
+anomalously small, since `gross_input = non_cache + cache_creation + cache_read`.
+Measured, they are not:
+
+```
+                cold median input    warm median input
+  anthropic            20,058               40,844
+  openai               11,465               12,898
+  virtuals             21,655               22,977
+```
+
+Cold runs are comparable to warm ones, so no write-sized hole is visible.
+**A dropped write and an absent write produce an identical record — and that
+indistinguishability is the finding.** It is the same shape as §1: a metric that
+cannot observe the event it exists to detect. Restoring the symmetry is a
+three-line change and removes the ambiguity permanently, which is why it is
+worth doing whether or not it is currently costing anything.
+
+```bash
+python tools/harness-bench/cache_profile.py          # free, offline, no app
+```
