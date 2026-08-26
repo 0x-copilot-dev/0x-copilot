@@ -8,8 +8,14 @@
 // so it follows the same rule. Only the pieces that genuinely need a selector
 // (hover, reduced motion) go in a scoped <style>.
 
-import type { CSSProperties, ReactElement } from "react";
+import { useMemo, type CSSProperties, type ReactElement } from "react";
 
+import { useSyntaxLines } from "../messages/highlight/useSyntaxLines";
+import {
+  syntaxLanguageForPath,
+  type SyntaxLine,
+  type SyntaxToken,
+} from "../messages/highlight/syntaxTokens";
 import type { DiffHunk, DiffLine, FileDiff } from "./lineDiff";
 
 export interface TcFileDiffProps {
@@ -50,9 +56,53 @@ export function TcFileDiff({
   applied = true,
   testId = "tc-file-diff",
 }: TcFileDiffProps): ReactElement | null {
-  if (diff.hunks.length === 0) return null;
+  const budget = useMemo(
+    () => takeRows(diff.hunks, maxRows),
+    [diff.hunks, maxRows],
+  );
 
-  const budget = takeRows(diff.hunks, maxRows);
+  // The language is a property of the FILE, and the tool call never states it —
+  // so it comes from the path, the only evidence there is. `null` when the path
+  // is absent or the extension is one we carry no grammar for, which renders
+  // exactly as it did before highlighting existed.
+  //
+  // Withheld entirely on a REFUSED edit, for the same reason the add/remove
+  // colours are: colour is this card's "this happened" signal, and a diff that
+  // never landed has not earned it. The rows stay legible, just quiet.
+  const language = useMemo(
+    () => (applied ? syntaxLanguageForPath(filePath) : null),
+    [applied, filePath],
+  );
+
+  // ONE tokenizer pass over every rendered row, joined in display order, rather
+  // than one per row: a per-row pass restarts the grammar at every line, so a
+  // multi-line string or block comment loses its colour after its first line.
+  // The joined text is a plausible document, not an exact one — a hunk's `-`
+  // and `+` lines are alternatives, not consecutive source, and hunks are not
+  // contiguous. That trade buys line-aligned colour, and its worst case costs a
+  // colour on one row, never a row.
+  const source = useMemo(
+    () =>
+      budget.hunks
+        .flatMap((hunk) => hunk.lines.map((line) => line.text))
+        .join("\n"),
+    [budget],
+  );
+  const highlighted = useSyntaxLines(source, language);
+
+  // Where each hunk starts inside `highlighted`, so a row can find its own
+  // tokens without the renderer carrying a mutable counter through JSX.
+  const hunkOffsets = useMemo(() => {
+    const offsets: number[] = [];
+    let consumed = 0;
+    for (const hunk of budget.hunks) {
+      offsets.push(consumed);
+      consumed += hunk.lines.length;
+    }
+    return offsets;
+  }, [budget]);
+
+  if (diff.hunks.length === 0) return null;
 
   return (
     <div
@@ -95,7 +145,12 @@ export function TcFileDiff({
               </div>
             ) : null}
             {hunk.lines.map((line, lineIndex) => (
-              <DiffRow key={lineIndex} line={line} applied={applied} />
+              <DiffRow
+                key={lineIndex}
+                line={line}
+                applied={applied}
+                tokens={highlighted?.[(hunkOffsets[index] ?? 0) + lineIndex]}
+              />
             ))}
           </div>
         ))}
@@ -120,9 +175,12 @@ export function TcFileDiff({
 function DiffRow({
   line,
   applied,
+  tokens,
 }: {
   readonly line: DiffLine;
   readonly applied: boolean;
+  /** Syntax tokens for this row, or undefined while the grammar is cold. */
+  readonly tokens?: SyntaxLine;
 }): ReactElement {
   const sign = line.kind === "add" ? "+" : line.kind === "remove" ? "−" : " ";
   return (
@@ -132,10 +190,36 @@ function DiffRow({
       <span style={signStyle(line.kind, applied)} aria-hidden="true">
         {sign}
       </span>
-      {/* A leading space keeps an empty line from collapsing the row height. */}
-      <span style={textStyle}>{line.text === "" ? " " : line.text}</span>
+      {/* Token colour rides ON TOP of the row: only `color` is set per span, so
+          the add/remove background underneath is untouched and the change
+          signal still reads first. A leading space keeps an empty line from
+          collapsing the row height. */}
+      <span style={textStyle}>
+        {line.text === ""
+          ? " "
+          : tokens && tokens.length > 0
+            ? tokens.map((token, index) => (
+                <span key={index} style={tokenStyle(token)}>
+                  {token.content}
+                </span>
+              ))
+            : line.text}
+      </span>
     </div>
   );
+}
+
+/** Inline style for one token, or undefined when it adds nothing to the row. */
+function tokenStyle(token: SyntaxToken): CSSProperties | undefined {
+  if (!token.color && !token.italic && !token.bold && !token.underline) {
+    return undefined;
+  }
+  return {
+    ...(token.color ? { color: token.color } : {}),
+    ...(token.italic ? { fontStyle: "italic" as const } : {}),
+    ...(token.bold ? { fontWeight: 600 } : {}),
+    ...(token.underline ? { textDecoration: "underline" as const } : {}),
+  };
 }
 
 /** Hunks trimmed to `maxRows` total rows, plus how many rows were dropped. */

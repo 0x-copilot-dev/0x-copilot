@@ -10,7 +10,7 @@ import {
   activityCardStaticHeaderStyle,
   activityCardTileStyle,
 } from "../activity/ActivityCardChrome";
-import type { ToolCallEntry } from "./eventProjector";
+import type { ToolCallBlock, ToolCallEntry } from "./eventProjector";
 import { toolViewFor, type ToolView } from "./toolViews";
 
 /**
@@ -31,6 +31,11 @@ export interface ToolCallCardProps {
    * Same reasoning as `TcTodoList`'s `blocked`, and it applies to EVERY running
    * card rather than only the gated one: a call still in `running` while the
    * graph is interrupted is, by definition, not progressing.
+   *
+   * RUN-WIDE, and that is the limit this card also reads `toolCall.blockedBy`
+   * for: this flag says a decision is pending SOMEWHERE, so every open call
+   * wearing it reads the same. The card the decision is actually about is named
+   * by the projection, and only that one is told the reader owns it.
    */
   readonly parked?: boolean;
 }
@@ -49,9 +54,17 @@ export function ToolCallCard({
   // A file-change card opens itself. `defaultOpen` is uncontrolled on purpose —
   // it seeds the native <details> and the user's own toggle wins thereafter.
   const [detailsOpen, setDetailsOpen] = useState(view.defaultOpen);
+  const decision = pendingDecision(toolCall);
   // Only a call that is still running can be parked; a finished one is history.
-  const waiting = parked && toolCall.status === "running";
-  const header = renderHeader(toolCall, hasDetails, waiting, view);
+  // The gated call is parked on its own account, so it no longer depends on the
+  // host having threaded `parked` down to know it.
+  const waiting =
+    (parked || decision !== null) && toolCall.status === "running";
+  const header = renderHeader(toolCall, hasDetails, waiting, decision, view);
+  // Two stopped cards that look alike but want opposite things from the reader.
+  // Stamped at the card ROOT so a journey can assert which one is drawn without
+  // reading copy, the way `data-tool-status` already works.
+  const blocked = toolCall.blockedBy?.kind ?? null;
 
   if (!hasDetails) {
     return (
@@ -62,6 +75,7 @@ export function ToolCallCard({
         aria-label={`Tool: ${toolCall.title}`}
         data-tool-status={toolCall.status}
         data-tool-waiting={waiting ? "true" : "false"}
+        {...(blocked === null ? {} : { "data-tool-blocked": blocked })}
       >
         <style>{TOOL_CALL_CARD_CSS}</style>
         {header}
@@ -76,6 +90,7 @@ export function ToolCallCard({
       aria-label={`Tool: ${toolCall.title}`}
       data-tool-status={toolCall.status}
       data-tool-waiting={waiting ? "true" : "false"}
+      {...(blocked === null ? {} : { "data-tool-blocked": blocked })}
       // CONTROLLED, seeded from the view. A bare `open={true}` would be
       // re-applied on every render and the reader could never collapse the
       // card; driving it from state means `defaultOpen` only chooses the
@@ -100,10 +115,19 @@ function renderHeader(
   toolCall: ToolCallEntry,
   discloseable: boolean,
   waiting: boolean,
+  decision: PendingDecision | null,
   view: ToolView,
 ): ReactElement {
   const running = toolCall.status === "running" && !waiting;
-  const statusLabel = waiting ? "Waiting" : statusText(toolCall.status);
+  // "Waiting" alone was the bug. It is true of every open call while the graph
+  // is interrupted, so it reads as "waiting on the tool" — which is exactly the
+  // wrong thing to conclude about the one call that is waiting on the READER.
+  const statusLabel =
+    decision !== null
+      ? "Needs you"
+      : waiting
+        ? "Waiting"
+        : statusText(toolCall.status);
   // Derived from the call's own arguments, so it is available as soon as they
   // finish streaming — for a file tool this is the single most useful fact on
   // the row, and it used to be buried inside the raw JSON payload.
@@ -114,10 +138,17 @@ function renderHeader(
   // A declined capability carries its explanation on `safe_message` exactly
   // like a failure does — and that sentence is the whole value of the card,
   // since it says what to do instead. It renders in the neutral style below.
+  //
+  // A gated call has no such sentence yet, because nothing has gone wrong: its
+  // headline is the server's own question ("Allow writing to /a/b.csv?"), which
+  // is the closest thing on the wire to "what is being decided".
   const summary =
-    toolCall.status === "error" || toolCall.status === "unavailable"
-      ? (toolCall.errorMessage ?? toolCall.summary)
-      : toolCall.summary;
+    decision !== null
+      ? (decision.ask ?? DECISION_FALLBACK)
+      : toolCall.status === "error" || toolCall.status === "unavailable"
+        ? (toolCall.errorMessage ?? toolCall.summary)
+        : toolCall.summary;
+  const remedy = remedyFor(toolCall.blockedBy, decision);
 
   return (
     <div
@@ -148,18 +179,38 @@ function renderHeader(
         {summary !== undefined ? (
           <span
             style={
-              toolCall.status === "error"
-                ? errorSummaryTextStyle
-                : summaryTextStyle
+              decision !== null
+                ? waitingSummaryTextStyle
+                : toolCall.status === "error"
+                  ? errorSummaryTextStyle
+                  : summaryTextStyle
+            }
+            data-testid={
+              decision === null ? undefined : `tc-tool-card-ask-${toolCall.id}`
             }
           >
             {summary}
           </span>
         ) : null}
+        {/* The remedy, and it is the reason this row exists: the reason a card
+            gives ("permission denied for write on /random.csv") names the wall
+            and not the door. It sits in the COLLAPSED header on purpose — a
+            reader who has to open a disclosure to learn the run is waiting on
+            them has already concluded it is broken. */}
+        {remedy !== null ? (
+          <span
+            style={remedyTextStyle}
+            data-testid={`tc-tool-card-remedy-${toolCall.id}`}
+          >
+            {remedy}
+          </span>
+        ) : null}
       </span>
       <span
         style={statusGroupStyle}
-        aria-label={statusLabel}
+        // The label is clipped to the rail's width; the announcement is not, so
+        // it carries the whole fact rather than the abbreviation of it.
+        aria-label={decision !== null ? DECISION_STATUS_LABEL : statusLabel}
         data-testid={`tc-chat-tool-${toolCall.id}-status`}
       >
         <span
@@ -202,6 +253,7 @@ function renderHeader(
 
 function ToolCallDetails({ toolCall }: ToolCallCardProps): ReactElement {
   const source = sourceLabel(toolCall);
+  const decision = pendingDecision(toolCall);
   const Body = toolViewFor(toolCall.toolName).Body;
   const specialised = Body === null ? null : <Body toolCall={toolCall} />;
 
@@ -232,6 +284,19 @@ function ToolCallDetails({ toolCall }: ToolCallCardProps): ReactElement {
       data-testid={`tc-chat-tool-${toolCall.id}-details`}
     >
       {specialised}
+      {/* Named, not decided. The one ask card in this package is
+          `TcWriteGateRow`, reached through `renderApprovalItem`, and a second
+          approve control — even one deferred behind a disclosure — would put an
+          irreversible write one click from a surface whose testid scheme the
+          safety journeys do not police. What the row adds is the id, so the
+          decision on screen and the call it belongs to are joinable by eye. */}
+      {decision !== null ? (
+        <DetailRow
+          label="decision"
+          value={decision.approvalId}
+          testId={`tc-tool-card-decision-${toolCall.id}`}
+        />
+      ) : null}
       {toolCall.title !== toolCall.toolName ? (
         <DetailRow label="tool" value={toolCall.toolName} />
       ) : null}
@@ -299,13 +364,18 @@ function DetailRow({
   label,
   value,
   tone = "default",
+  testId,
 }: {
-  readonly label: "tool" | "source" | "error";
+  readonly label: "tool" | "source" | "error" | "decision";
   readonly value: string;
   readonly tone?: "default" | "error";
+  readonly testId?: string;
 }): ReactElement {
   return (
-    <div style={detailRowStyle}>
+    <div
+      style={detailRowStyle}
+      {...(testId === undefined ? {} : { "data-testid": testId })}
+    >
       <span style={detailLabelStyle}>{label}</span>
       <span style={tone === "error" ? errorValueStyle : detailValueStyle}>
         {value}
@@ -349,8 +419,52 @@ function hasToolDetails(toolCall: ToolCallEntry): boolean {
     toolCall.title !== toolCall.toolName ||
     toolCall.provenance !== undefined ||
     toolCall.errorMessage !== undefined ||
+    toolCall.blockedBy?.kind === "decision" ||
     (toolCall.subagentTaskIds?.length ?? 0) > 0
   );
+}
+
+/** The `decision` arm, narrowed once so the three readers agree by type rather
+ *  than by three copies of the same `kind ===` test. */
+type PendingDecision = Extract<ToolCallBlock, { kind: "decision" }>;
+
+function pendingDecision(toolCall: ToolCallEntry): PendingDecision | null {
+  const block = toolCall.blockedBy;
+  return block !== undefined && block.kind === "decision" ? block : null;
+}
+
+/** Said only when the wire gave the gate no question of its own. */
+const DECISION_FALLBACK = "This step is waiting for your decision.";
+
+/** What a screen reader hears where the rail shows the clipped "Needs you". */
+const DECISION_STATUS_LABEL = "Waiting for your approval";
+
+/**
+ * What the reader must DO — one line, and the point of the whole change.
+ *
+ * The gated line says the run is paused rather than pointing at a location:
+ * the ask card interleaves into the transcript below this one, but it is hidden
+ * while the transcript is scrubbed, and a card that promises a control that is
+ * not currently drawn is worse than one that only states the fact. Reachability
+ * itself already exists and is always on screen while anything is pending —
+ * `TcChat`'s pinned "N approvals waiting ↓", which scrolls to the ask.
+ *
+ * The denied lines name the authority that was withheld, because the coarsened
+ * refusal ("permission denied for write on /random.csv") names the wall only.
+ */
+function remedyFor(
+  block: ToolCallBlock | undefined,
+  decision: PendingDecision | null,
+): string | null {
+  if (decision !== null) {
+    return "Paused — the run continues once you approve or decline it.";
+  }
+  if (block?.kind !== "permission") {
+    return null;
+  }
+  return block.lane === "filesystem"
+    ? "Attach that folder to this chat to allow it."
+    : "Check this connector's access under Tools.";
 }
 
 function provenanceLabel(toolCall: ToolCallEntry): string | null {
@@ -534,6 +648,25 @@ const summaryTextStyle: CSSProperties = {
 const errorSummaryTextStyle: CSSProperties = {
   ...summaryTextStyle,
   color: "var(--color-danger)",
+};
+
+/** The gate's own question. Amber, not red — nothing has failed here, which is
+ *  the entire distinction this card exists to draw. */
+const waitingSummaryTextStyle: CSSProperties = {
+  ...summaryTextStyle,
+  color: "var(--color-warning, #e8b45e)",
+};
+
+/** The remedy sits UNDER the reason and quieter than it: the reason is the fact
+ *  and keeps its colour, this is the instruction. Wrapping is allowed — one
+ *  ellipsised half-sentence telling someone what to do is worse than two
+ *  lines — while the reason above stays clamped to one line. */
+const remedyTextStyle: CSSProperties = {
+  color: "var(--color-text-muted)",
+  fontFamily: "var(--font-sans)",
+  fontSize: "var(--font-size-2xs)",
+  lineHeight: "14px",
+  marginTop: 2,
 };
 
 const statusGroupStyle: CSSProperties = {

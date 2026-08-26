@@ -257,8 +257,11 @@ runtime_api.schemas.common:RuntimeApiEventType.mcp_auth_required :: key is emitt
 runtime_api.schemas.events:_Fields.grant_scope :: key is emitted to the client and the app tree mentions it only as a bare string, never reading it off the payload
 runtime_api.schemas.events:_Fields.spec_version :: key is emitted to the client and the app tree mentions it only as a bare string, never reading it off the payload
 runtime_api.schemas.events:_OperationFields.failure_code :: key is emitted to the client and the app tree mentions it only as a bare string, never reading it off the payload
+runtime_worker.handlers.approval:_Fields.batch_id :: key is emitted to the client and the app tree mentions it only as a bare string, never reading it off the payload
 runtime_worker.handlers.approval:_Fields.native_interrupt_id :: key is emitted to the client and the app tree mentions it only as a bare string, never reading it off the payload
 runtime_worker.handlers.run:_Fields.regenerate_from_message_id :: key is emitted to the client and the app tree mentions it only as a bare string, never reading it off the payload
+runtime_worker.stream_events:_Fields.batch_id :: key is emitted to the client and the app tree mentions it only as a bare string, never reading it off the payload
+runtime_worker.stream_events:_Fields.batch_index :: key is emitted to the client and the app tree mentions it only as a bare string, never reading it off the payload
 runtime_worker.stream_events:_Fields.grant_scope :: key is emitted to the client and the app tree mentions it only as a bare string, never reading it off the payload
 runtime_worker.stream_events:_Fields.native_interrupt_id :: key is emitted to the client and the app tree mentions it only as a bare string, never reading it off the payload
 runtime_worker.stream_messages:_Fields.api_event_type :: key is emitted to the client and the app tree mentions it only as a bare string, never reading it off the payload

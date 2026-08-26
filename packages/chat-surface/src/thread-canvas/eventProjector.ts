@@ -48,6 +48,10 @@ import type { RuntimeEventEnvelope, SurfaceSpec } from "@0x-copilot/api-types";
 
 // TODO(merge): replace import from "./_approvals-stub" with "@0x-copilot/api-types"
 import type { SurfaceHue } from "../surfaces/surfaceHue";
+// The SSOT for the parked-write id prefix. A VALUE import, and safe for the
+// same reason `TcChat`'s is: `approvalProjection` imports only `approvals/` +
+// `workspace/`, so the edge never runs back into `thread-canvas/`.
+import { WRITE_GATE_APPROVAL_PREFIX } from "../destinations/run/approvalProjection";
 import type { Approval, ApprovalState } from "./_approvals-stub";
 import { resolveToolArgs } from "./streamedToolArgs";
 
@@ -177,6 +181,49 @@ export interface ChatEntry {
 }
 
 /**
+ * Why a stopped tool call is stopped — and the whole point of the type is that
+ * the two arms are NOT flavours of one another.
+ *
+ * Both draw as a card that has stopped moving, and their remedies are opposite.
+ * Both were observed live on the same tool, one path apart:
+ *
+ * * `write_file("/random.csv")` — outside every attached folder, so
+ *   `HostFilesystemRules.build`'s rule 5 (`host_filesystem.py`) is
+ *   `mode: "deny"`. deepagents refuses in the tool layer and returns an ordinary
+ *   failed `tool_result` whose `output.content` reads
+ *   `"Error: permission denied for write on /random.csv"`. The call is OVER; the
+ *   remedy is to attach a writable folder.
+ * * `write_file(<inside an attached writable root>)` — rule 3 under the default
+ *   Manual bypass is `mode: "interrupt"`, so the SAME rule engine parks the run
+ *   on a LangGraph interrupt instead. There is NO `tool_result` at all; an
+ *   `approval_requested` lands beside the still-open call. The call has not
+ *   failed and never will until someone answers; the remedy is a click.
+ *
+ * That is the wire-level difference: a refusal TERMINATES the call, a gate
+ * leaves it open forever and emits an approval next to it. The card could not
+ * tell them apart, so a run that was simply waiting read as broken.
+ */
+export type ToolCallBlock =
+  | {
+      readonly kind: "decision";
+      /** The pending approval — the id `TcWriteGateRow` decides in this run. */
+      readonly approvalId: string;
+      /** The server's own question ("Allow writing to /a/b.csv?"); null when
+       *  the payload carried none, which no lane should but replay can. */
+      readonly ask: string | null;
+    }
+  | {
+      readonly kind: "permission";
+      /**
+       * Which authority was withheld, because that is what decides the remedy.
+       * Derived from what the runtime FACTUALLY supplies — `provenance` (only
+       * MCP calls carry it) and the deepagents tool name — never from the
+       * refusal prose, which is deliberately coarse (see `PdpReason`).
+       */
+      readonly lane: "filesystem" | "connector";
+    };
+
+/**
  * One MAIN-AGENT tool call, projected off the SINGLE run event stream for the
  * inline tool-call card in `TcChat`. Collapsed per `call_id`: the
  * `tool_call_started` frame seeds it (`running` + initial args); later
@@ -202,6 +249,12 @@ export interface ToolCallEntry {
   readonly summary?: string;
   /** Safe error message on a failed/timed-out/cancelled result. */
   readonly errorMessage?: string;
+  /**
+   * Why this call is stopped, when "stopped" is not the same as "broken".
+   * Absent for every ordinary call, including an ordinary failure — see
+   * `ToolCallBlock` for the two states it separates and why it must.
+   */
+  readonly blockedBy?: ToolCallBlock;
   /**
    * Factually supplied tool origin. Today the runtime emits only MCP origin;
    * absence means unknown and must not be inferred from the tool name.
@@ -457,6 +510,11 @@ export function projectToolCalls(
   const seen = new Set<string>();
   const byCall = new Map<string, MutableToolCall>();
   const order: string[] = [];
+  // Approvals ride the SAME array (FR-3.3 — one projection, one event source),
+  // so the gate that parked a call is already here; it was simply never read on
+  // this pass.
+  const asks: PendingAsk[] = [];
+  const settled = new Set<string>();
   for (const event of events) {
     if (seen.has(event.event_id)) {
       continue;
@@ -485,12 +543,153 @@ export function projectToolCalls(
       event.event_type === "tool_call_completed"
     ) {
       reduceToolResult(event, byCall, order);
+    } else if (event.event_type === "approval_requested") {
+      const ask = readPendingAsk(event);
+      if (ask !== null) {
+        asks.push(ask);
+      }
+    } else if (event.event_type === "approval_resolved") {
+      const approvalId = pickString(event.payload, "approval_id");
+      if (approvalId !== null) {
+        settled.add(approvalId);
+      }
     }
   }
   if (order.length === 0) {
     return EMPTY_TOOL_CALLS;
   }
+  // AFTER the reduce, never inside it. "Is this call still open?" is a verdict
+  // over the whole stream — a result frame later in the same array settles a
+  // call that was open when the approval was requested, and binding mid-loop
+  // would park a card the run has since moved past.
+  bindPendingDecisions(asks, settled, byCall);
   return order.map((key) => buildToolCall(byCall.get(key)!));
+}
+
+/** One `approval_requested` frame, reduced to what can bind it to a call. */
+interface PendingAsk {
+  readonly approvalId: string;
+  /** `payload.tool_name` — the filesystem lane's only handle on the call. */
+  readonly toolName: string | null;
+  readonly ask: string | null;
+}
+
+function readPendingAsk(event: RuntimeEventEnvelope): PendingAsk | null {
+  const approvalId =
+    pickString(event.payload, "approval_id") ??
+    pickString(event.payload, "action_id");
+  if (approvalId === null) {
+    return null;
+  }
+  return {
+    approvalId,
+    toolName: pickString(event.payload, "tool_name"),
+    // `message` is what both lanes spell ("Allow writing to /a/b.csv?");
+    // `question` is the write gate's copy of it, since a parked write rides the
+    // `ask_a_question` wire shape.
+    ask:
+      pickString(event.payload, "message") ??
+      pickString(event.payload, "question"),
+  };
+}
+
+/**
+ * Mark the call each still-pending approval is holding up.
+ *
+ * The run-wide "something is pending" signal already existed (`TcChat` passes
+ * `parked` to every card). What it cannot say is WHICH call the decision is
+ * about, so a gated call and a call merely stalled behind someone else's
+ * decision read identically. This is that missing per-call fact.
+ *
+ * Two joins, because the two lanes address the call differently:
+ *
+ * 1. **Exact.** `PolicyToolMiddleware._approval_id` parks a write on
+ *    `mcp_write:<run_id>:<tool_call_id>` (policy_tool.py), deterministically so
+ *    the id survives LangGraph's node replay. That trailing segment IS the
+ *    `call_id` this projection keys cards on, so the join is identity.
+ * 2. **By tool name, and only when unambiguous.** The filesystem lane's payload
+ *    (`_FilesystemApproval.payload`, `runtime_worker/stream_events.py`) carries
+ *    `tool_name`, `path` and `arguments` but NO call id at all, so the only
+ *    handle is "the open call to that tool". With two of them open we DECLINE
+ *    to guess and leave the card on the run-wide signal: naming the wrong call
+ *    as the one awaiting a decision is worse than naming none, because the
+ *    reader would approve believing it settles a different write.
+ *
+ * And the join that LOOKS available but is not, since the next reader will find
+ * it before they find this comment: `source_tool_call_id` is in the approval
+ * allow-list (`_approval_requested_payload`) and names a call exactly. It can
+ * never be set on a gate. `_source_tool_call_id_for_payload` reads it off a TOOL
+ * RESULT message, and a parked call has not produced one — that is the whole
+ * definition of parked. It is also stamped only on the explicit-payload branch,
+ * which neither lane above takes. Its real subject is `mcp_auth_required`, a
+ * result that asks for OAuth — a different stopped state, not this one.
+ */
+function bindPendingDecisions(
+  asks: readonly PendingAsk[],
+  settled: ReadonlySet<string>,
+  byCall: Map<string, MutableToolCall>,
+): void {
+  for (const ask of asks) {
+    if (settled.has(ask.approvalId)) {
+      continue;
+    }
+    const call = matchAskToCall(ask, byCall);
+    // Only an OPEN call can be parked on a decision; a settled one is history,
+    // exactly as `ToolCallCard` already reasons about `parked`.
+    if (call === undefined || call.status !== "running") {
+      continue;
+    }
+    if (call.blockedBy !== undefined) {
+      continue;
+    }
+    call.blockedBy = {
+      kind: "decision",
+      approvalId: ask.approvalId,
+      ask: ask.ask,
+    };
+  }
+}
+
+function matchAskToCall(
+  ask: PendingAsk,
+  byCall: Map<string, MutableToolCall>,
+): MutableToolCall | undefined {
+  const callId = writeGateCallId(ask.approvalId);
+  if (callId !== null) {
+    return byCall.get(callId);
+  }
+  if (ask.toolName === null) {
+    return undefined;
+  }
+  let match: MutableToolCall | undefined;
+  for (const call of byCall.values()) {
+    if (call.status !== "running" || call.toolName !== ask.toolName) {
+      continue;
+    }
+    if (match !== undefined) {
+      return undefined;
+    }
+    match = call;
+  }
+  return match;
+}
+
+/** The `tool_call_id` half of `mcp_write:<run_id>:<tool_call_id>`, or null.
+ *
+ *  Split on the FIRST colon after the prefix rather than the last: the run id
+ *  never contains one, but nothing promises that of LangChain's call id, and
+ *  `lastIndexOf` would silently truncate the key it is meant to reproduce. */
+function writeGateCallId(approvalId: string): string | null {
+  if (!approvalId.startsWith(WRITE_GATE_APPROVAL_PREFIX)) {
+    return null;
+  }
+  const afterPrefix = approvalId.slice(WRITE_GATE_APPROVAL_PREFIX.length);
+  const runIdEnd = afterPrefix.indexOf(":");
+  if (runIdEnd < 0) {
+    return null;
+  }
+  const callId = afterPrefix.slice(runIdEnd + 1);
+  return callId === "" ? null : callId;
 }
 
 /**
@@ -1148,6 +1347,13 @@ interface MutableToolCall {
   sequenceNo: number;
   runId: string | null;
   createdAtMs: number | null;
+  /**
+   * Set by `bindPendingDecisions` only, which runs once every tool frame has
+   * been reduced — which is why none of the three reducers below carries it
+   * forward. Nothing rebuilds this entry after the bind, so there is nothing
+   * for a `byCall.set` to overwrite.
+   */
+  blockedBy?: ToolCallBlock;
 }
 
 function reduceToolStarted(
@@ -1316,6 +1522,10 @@ function reduceToolResult(
 }
 
 function buildToolCall(m: MutableToolCall): ToolCallEntry {
+  // A decision is bound only to an OPEN call and a denial only to an errored
+  // one, so the two arms cannot both apply; the `??` states that rather than
+  // relying on it.
+  const blockedBy = m.blockedBy ?? permissionBlock(m);
   return {
     id: m.key,
     toolName: m.toolName,
@@ -1325,6 +1535,7 @@ function buildToolCall(m: MutableToolCall): ToolCallEntry {
     ...(m.result !== undefined ? { result: m.result } : {}),
     ...(m.summary !== undefined ? { summary: m.summary } : {}),
     ...(m.errorMessage !== undefined ? { errorMessage: m.errorMessage } : {}),
+    ...(blockedBy !== undefined ? { blockedBy } : {}),
     ...(m.provenance !== undefined ? { provenance: m.provenance } : {}),
     ...(m.accessMode !== undefined ? { accessMode: m.accessMode } : {}),
     ...(m.durationMs !== undefined ? { durationMs: m.durationMs } : {}),
@@ -1559,6 +1770,69 @@ function toolErrorMessage(error: Record<string, unknown>): string | undefined {
     undefined
   );
 }
+
+/** deepagents' built-in filesystem tools — the ONLY ones a `FilesystemPermission`
+ *  rule can refuse. Kept verbatim from the backend's own list
+ *  (`_FilesystemApproval.TOOL_OPERATIONS`, `runtime_worker/stream_events.py`);
+ *  a tool outside it that says "permission denied" was refused by something
+ *  else, and telling that reader to attach a folder would be a wrong answer
+ *  delivered confidently. */
+const DEEPAGENTS_FILESYSTEM_TOOLS: ReadonlySet<string> = new Set([
+  "ls",
+  "read_file",
+  "glob",
+  "grep",
+  "write_file",
+  "edit_file",
+]);
+
+/**
+ * A refusal-for-want-of-authority, told apart from an ordinary failure.
+ *
+ * The test is the PROSE, and that is a deliberate, narrow exception to this
+ * file's rule of reading declared fields. No typed field carries it: a
+ * deepagents `mode: "deny"` refusal is built by the library itself as
+ * `ToolMessage(content=f"Error: permission denied for write on {path}",
+ * status="error")` (`deepagents/middleware/filesystem.py`, the same literal in
+ * every read and write arm), so it reaches us as a plain failed `tool_result`
+ * whose `output.content` is one English sentence — the fixture in
+ * `plainToolError.test.ts` is transcribed from a real packaged run and has no
+ * `error_code` and no `safe_message`. The PDP then deliberately COARSENS every
+ * scope-miss, allowlist-miss and workspace BLOCK into the same two words
+ * (`PdpReason`, `capabilities/mcp/middleware/policy_tool.py`). So the two words
+ * are the signal the wire actually has.
+ *
+ * `error` only, never `unavailable`. A capability DECLINED by policy is already
+ * a well-formed answer carrying its own instruction ("Create an artifact or
+ * download instead"; `WorkspacePolicyAnswers`), and the runtime classifies it
+ * `unavailable` precisely to keep it out of the failure taxonomy. Appending a
+ * second, coarser remedy to a sentence that already has the right one would
+ * make the better copy read like a footnote to the worse.
+ *
+ * What is NOT guessed from prose is the remedy: `lane` comes from `provenance`
+ * (which only an MCP call carries) and the tool name. A denial we cannot place
+ * on a lane yields nothing, and the card keeps showing the reason alone —
+ * strictly what it does today.
+ */
+function permissionBlock(m: MutableToolCall): ToolCallBlock | undefined {
+  if (m.status !== "error" || m.errorMessage === undefined) {
+    return undefined;
+  }
+  if (!PERMISSION_DENIAL.test(m.errorMessage)) {
+    return undefined;
+  }
+  if (m.provenance !== undefined) {
+    return { kind: "permission", lane: "connector" };
+  }
+  if (DEEPAGENTS_FILESYSTEM_TOOLS.has(m.toolName)) {
+    return { kind: "permission", lane: "filesystem" };
+  }
+  return undefined;
+}
+
+/** No `g` flag: a global regex carries `lastIndex` between calls, so the same
+ *  message would match and then miss on the next card. */
+const PERMISSION_DENIAL = /permission denied/i;
 
 function readToolProvenance(value: unknown): ToolCallProvenance | undefined {
   const record = readRecord(value);

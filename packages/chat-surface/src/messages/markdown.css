@@ -295,6 +295,79 @@
   display: block;
 }
 
+/* ==========================================================================
+   Syntax highlighting — the token palette
+   --------------------------------------------------------------------------
+   `highlight/shikiHighlighter.ts` registers shiki's css-variables theme, so
+   every token's colour arrives as a `var(--syntax-…)` reference rather than a
+   hex out of `github-dark`. That is what lets ONE tokenizer pass serve dark,
+   light and slate: switching theme re-resolves the variable and repaints, with
+   no second highlight and no JS involved at all.
+
+   WHICH NAMES COME FROM DESIGN-SYSTEM TOKENS, AND WHICH DO NOT. Where a token
+   already means the same thing, it is used: a comment is the quietest text on
+   the surface (--color-text-subtle), an inserted/deleted/changed line in a
+   fenced ```diff is the same fact the file-diff card paints (--color-success /
+   --color-danger / --color-warning). The four syntax HUES have no honest
+   equivalent — the design system carries four semantic tones, not a syntax
+   scale, and painting a keyword with --color-warning would make a keyword read
+   as a warning. So they are authored here, drawn from the design's own accent
+   swatches (violet, lime, sky, gold at :root[data-accent]) so the palette stays
+   inside the v2 "quiet" family.
+
+   They are deliberately NOT var(--color-accent): the accent is user-swatchable
+   nine ways, and a reader who picks `lime` would watch functions and strings
+   collapse into one colour. Syntax hues have to stay fixed relative to each
+   other to carry meaning at all.
+   ========================================================================== */
+:root {
+  --syntax-foreground: var(--color-text-strong);
+  --syntax-token-comment: var(--color-text-subtle);
+  --syntax-token-punctuation: var(--color-text-muted);
+  --syntax-token-parameter: var(--color-text);
+  --syntax-token-link: var(--color-accent-strong);
+  --syntax-token-inserted: var(--color-success);
+  --syntax-token-deleted: var(--color-danger);
+  --syntax-token-changed: var(--color-warning);
+  /* Hues, dark ground. Values are the [data-accent] seeds: violet, lime, sky,
+     gold — tuned against a near-black ground by the design already. */
+  --syntax-token-keyword: #a78bd6;
+  --syntax-token-string: #a4c878;
+  --syntax-token-string-expression: #a4c878;
+  --syntax-token-function: #5fb2ec;
+  --syntax-token-constant: #d8b46a;
+}
+
+/* Slate is a dark ground, so it inherits the block above unchanged — the same
+   derivation the design system uses for --color-accent on slate. Only the light
+   ground needs its own hues: the seeds sit at roughly 2:1 on #ffffff and would
+   be unreadable as body-sized code. These are the same four hues carried down
+   in lightness, matching the sky #1f6fb0 the design itself used for light. */
+:root[data-theme="light"] {
+  --syntax-token-keyword: #6b46a8;
+  --syntax-token-string: #2f7a44;
+  --syntax-token-string-expression: #2f7a44;
+  --syntax-token-function: #1f6fb0;
+  --syntax-token-constant: #8a6116;
+}
+
+/* The consumer streamdown assumes exists — and the reason highlighting can be
+   computed and then thrown away.
+
+   `HighlightedCodeBlockBody` does not set `color` on a token span. It copies
+   the token's colour into the custom property `--sdm-c` and paints it with a
+   Tailwind arbitrary-value class (`text-[var(--sdm-c,inherit)]`). This app
+   ships no Tailwind, so that class matches no rule: without the declaration
+   below every token renders at the inherited foreground and the transcript
+   looks exactly as unhighlighted as it did before shiki existed.
+
+   The line wrappers are caught by the same selector and have no --sdm-c of
+   their own, so they resolve to `inherit` and keep the body's colour. */
+.assistant-markdown [data-streamdown="code-block-body"] code span,
+.reasoning-markdown [data-streamdown="code-block-body"] code span {
+  color: var(--sdm-c, inherit);
+}
+
 .assistant-markdown [data-streamdown="inline-code"],
 .reasoning-markdown [data-streamdown="inline-code"] {
   background: var(--color-surface-muted);

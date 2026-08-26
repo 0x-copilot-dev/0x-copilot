@@ -83,6 +83,16 @@ import {
   summariseGroup,
   type GroupSummary,
 } from "./groupActivity";
+// The mount bound. Nothing in this package windowed the transcript, and the
+// density work that looks like it did — `groupActivityStream` above — folds
+// cards into a `<details>` that still MOUNTS every child. So a 300-step run
+// mounted 300 tool cards, their diffs and their payloads at once. See
+// `renderBudget.ts` for why this is a budget rather than a virtualizer.
+import {
+  applyRenderBudget,
+  DEFAULT_RENDER_BUDGET,
+  type BudgetedEntry,
+} from "./renderBudget";
 import { InlineToolResultCard } from "./InlineToolResultCard";
 import { useSwimlaneScrub } from "./SwimlaneScrubContext";
 // The context-compaction boundary. Projected upstream off the same
@@ -922,6 +932,7 @@ export function TcChat(props: TcChatProps): ReactElement {
     >
       <MessageListBody
         state={state}
+        transcriptKey={conversationId}
         messages={filteredMessages}
         fleets={filteredFleets}
         subagentActivitiesByTask={subagentActivitiesByTask}
@@ -1536,6 +1547,17 @@ interface MessageListBodyProps {
   readonly compactionNotices?: readonly CompactionNoticeEntry[];
   /** Accepted mid-run steers, on the same seq order as every card. */
   readonly steerNotes?: readonly SteerNoteEntry[];
+  /**
+   * Which transcript this is, for the render budget's expand latch.
+   *
+   * The latch is sticky — a reader who asked for the withheld steps keeps them,
+   * because a transcript that re-hides what you deliberately opened is hostile
+   * (the same rule `ToolRunGroup` pins on). Sticky FOREVER would be a leak: the
+   * next conversation you open would mount unbounded on someone else's
+   * decision. Comparing against the key re-arms the budget on a change without
+   * an effect and without a reset — the latch simply stops matching.
+   */
+  readonly transcriptKey?: string;
 }
 
 function MessageListBody(props: MessageListBodyProps): ReactNode {
@@ -1561,7 +1583,14 @@ function MessageListBody(props: MessageListBodyProps): ReactNode {
     onOpenArtifactInStudio,
     compactionNotices = EMPTY_COMPACTION_NOTICES,
     steerNotes = EMPTY_STEER_NOTES,
+    transcriptKey = "",
   } = props;
+  // The render budget's expand latch. Held as the KEY it was set for rather
+  // than as a boolean, so switching transcripts re-arms the budget during
+  // render — no effect, no reset, nothing to forget to clear. Must sit above
+  // the early returns below: they are conditional, and a hook is not.
+  const [expandedFor, setExpandedFor] = useState<string | null>(null);
+  const expanded = expandedFor === transcriptKey;
   // The message-load notice never SUPPRESSES the live cards any more. It used
   // to be an early return, which was harmless while approvals lived in a strip
   // outside this component — inline, it meant a slow or failed message fetch
@@ -1618,6 +1647,19 @@ function MessageListBody(props: MessageListBodyProps): ReactNode {
     compactionNotices,
     steerNotes,
   );
+
+  // THE MOUNT BOUND, applied before the grouping fold rather than after: a
+  // group counts as one entry once it exists, so budgeting afterwards would
+  // measure 1 where the DOM holds 300.
+  //
+  // Expanding raises the budget to `Infinity`, which the fold's identity case
+  // turns into "every item rendered" — one code path, not a second branch that
+  // could drift from the first.
+  const budgeted = applyRenderBudget(items, {
+    budget: expanded ? Number.POSITIVE_INFINITY : DEFAULT_RENDER_BUDGET,
+    isElidable: isElidableItem,
+    weightOf: streamItemWeight,
+  });
 
   const renderItem = (item: StreamItem): ReactNode => {
     if (item.kind === "fleet") {
@@ -1741,20 +1783,31 @@ function MessageListBody(props: MessageListBodyProps): ReactNode {
     return renderMessage(item.message, markdownComponents);
   };
 
+  const renderEntry = (entry: BudgetedEntry<StreamItem>): ReactNode =>
+    entry.kind === "elided"
+      ? renderElidedRun(entry, () => setExpandedFor(transcriptKey))
+      : renderItem(entry.item);
+
   // PRD-03 — fold consecutive ACTIVITY into one collapsible group. Pure view
   // layer: `items` order is untouched, only its framing changes.
   //
   // Only tool + fleet opt in. Messages and approvals pass through, and so does
   // any kind added later — an approval buried inside a collapsed group would
-  // hide a parked run's only way out.
-  const grouped = groupActivityStream(items, {
-    isGroupable: (item) => item.kind === "tool" || item.kind === "fleet",
-    idOf: (item) =>
-      item.kind === "fleet"
-        ? `fleet-${item.fleet.fleetId}`
-        : item.kind === "tool"
-          ? item.toolCall.id
-          : "group",
+  // hide a parked run's only way out. An elision marker passes through on the
+  // same rule, which is what makes it a group BOUNDARY rather than a member,
+  // and is why `entry.members` below can only ever be rendered items.
+  const grouped = groupActivityStream(budgeted, {
+    isGroupable: (entry) =>
+      entry.kind === "rendered" &&
+      (entry.item.kind === "tool" || entry.item.kind === "fleet"),
+    idOf: (entry) =>
+      entry.kind !== "rendered"
+        ? `elided-${entry.id}`
+        : entry.item.kind === "fleet"
+          ? `fleet-${entry.item.fleet.fleetId}`
+          : entry.item.kind === "tool"
+            ? entry.item.toolCall.id
+            : "group",
   });
 
   return (
@@ -1763,10 +1816,13 @@ function MessageListBody(props: MessageListBodyProps): ReactNode {
       <ul style={ulStyle}>
         {grouped.map((entry) => {
           if (entry.kind !== "group") {
-            return renderItem(entry.item);
+            return renderEntry(entry.item);
           }
+          const members = entry.members.flatMap((m) =>
+            m.kind === "rendered" ? [m.item] : [],
+          );
           const summary = summariseGroup(
-            entry.members.map((m) =>
+            members.map((m) =>
               m.kind === "tool"
                 ? {
                     status: m.toolCall.status,
@@ -1794,7 +1850,7 @@ function MessageListBody(props: MessageListBodyProps): ReactNode {
                 }
                 compact={compact}
               >
-                {entry.members.map(renderItem)}
+                {members.map(renderItem)}
               </ToolRunGroup>
             </li>
           );
@@ -1815,6 +1871,117 @@ function MessageListBody(props: MessageListBodyProps): ReactNode {
         {terminalBeat}
       </ul>
     </>
+  );
+}
+
+/**
+ * What the render budget may withhold. OPT-IN, on the same rule and for the
+ * same reason `groupActivityStream`'s predicate is: the boundary set grows, and
+ * a fold that enumerated boundaries would swallow the next kind somebody adds.
+ *
+ * THE LINE IS PROCESS VS PRODUCT, and it is drawn where it is on purpose:
+ *
+ * - **Activity and reasoning are withheld.** They are the run's working, they
+ *   are the only family in this transcript with no upper bound (a message costs
+ *   a human typing; a tool call costs the model deciding), and nothing on them
+ *   is a decision — a `ToolCallCard`'s disclosure and an `InlineToolResultCard`
+ *   are both things you open to read, not things a run is waiting on.
+ * - **Messages, artifacts, compaction dividers and steer notes are not.** They
+ *   are what the reader scrolled back for. Hiding the answer behind "247
+ *   earlier steps" while keeping the process would invert exactly what PRD-03's
+ *   density work set out to fix, and it would hide the user's OWN words.
+ * - **Approvals are not, and this is a safety property, not a taste one.** A
+ *   pending ask is a parked run's only way out. The whole file already refuses
+ *   to let a load notice early-return past one or a collapsed group absorb one;
+ *   an elision that dropped one from the DOM entirely would be strictly worse
+ *   than either, because the seven fs journeys that press Approve by testid
+ *   query at DOCUMENT level and a withheld card is not in the document.
+ *
+ * The bound this buys is therefore O(messages) + the budget, not O(1) — and
+ * that is the deliberate trade. A conversation is bounded by how often a person
+ * typed; a run is not bounded by anything.
+ *
+ * ── The one thing this DOES cost, stated rather than buried ────────────────
+ *
+ * `scrollChatToCitation` finds its target by querying the live DOM for
+ * `.citation-chip[data-citation-id=…]`, so a chip that lives in an
+ * `InlineToolResultCard` inside a withheld run stops being reachable from the
+ * Sources surface, and that helper's failure mode is a SILENT no-op — the
+ * reader clicks a source and nothing happens.
+ *
+ * It is a real regression and it is accepted here for a specific reason: it
+ * degrades to the state that helper already documents and already handles
+ * ("off-screen, archived, not yet replayed"), and expanding restores it. The
+ * approval path deliberately does NOT rely on that argument — `scrollChatToEvent`
+ * has the same silent no-op, which is exactly why approvals are on the
+ * never-withheld side of the line above rather than trusted to an escape hatch.
+ * If the citation jump is ever made load-bearing, the fix is for a missed
+ * lookup to raise the budget, not to widen what may be withheld.
+ */
+function isElidableItem(item: StreamItem): boolean {
+  // A call parked on a live DECISION is not process — it is the thing the run
+  // is waiting on, and eliding it hides which call the reader owes an answer
+  // about. The ask card and the "N waiting" strip both survive the budget, so
+  // this is not a safety loss; what it loses is WHICH call, in exactly the long
+  // runs the budget exists for.
+  //
+  // The permission arm stays elidable on purpose: a DENIED call is history.
+  if (item.kind === "tool") return item.toolCall.blockedBy?.kind !== "decision";
+  if (item.kind === "fleet") return true;
+  if (item.kind === "part") return item.part.type === "reasoning";
+  return false;
+}
+
+/**
+ * Rows one stream item mounts.
+ *
+ * One entry is not one row: `absorbThoughtActivity` folds the tools a thought
+ * ran INTO the reasoning part, and `renderMessagePartItem` renders them inside
+ * it. A budget counting entries would score a thought that made 40 calls as 1
+ * and let the thing it exists to bound straight through.
+ */
+function streamItemWeight(item: StreamItem): number {
+  return item.kind === "part" ? 1 + (item.activity?.length ?? 0) : 1;
+}
+
+/**
+ * The withheld work, as one row.
+ *
+ * A rule rather than a card, on the same distinction `TcCompactionDivider`
+ * draws: every card in this transcript is something you act on or open, and
+ * this is a statement ABOUT the transcript — "there is more of this above". The
+ * one thing it must be is reachable, so the rule itself is the button.
+ *
+ * Inline styles, like everything else in this file. `tc-compaction`'s rules
+ * live in `review-surfaces.css` because that component is mounted standalone
+ * too; this row is only ever drawn from here, and inline is the one form no
+ * host stylesheet can shadow (PR #459).
+ */
+function renderElidedRun(
+  entry: Extract<BudgetedEntry<StreamItem>, { kind: "elided" }>,
+  onExpand: () => void,
+): ReactNode {
+  const label =
+    entry.weight === 1 ? "1 earlier step" : `${entry.weight} earlier steps`;
+  return (
+    <li
+      key={`elided-item-${entry.id}`}
+      style={elidedItemStyle}
+      data-testid={`tc-chat-elided-item-${entry.id}`}
+    >
+      <button
+        type="button"
+        data-testid="tc-chat-elided-steps"
+        data-elided-count={entry.weight}
+        aria-label={`Show ${label}`}
+        style={elidedRowStyle}
+        onClick={onExpand}
+      >
+        <span aria-hidden="true" style={elidedRuleStyle} />
+        <span style={elidedLabelStyle}>{label}</span>
+        <span aria-hidden="true" style={elidedRuleStyle} />
+      </button>
+    </li>
   );
 }
 
@@ -2418,6 +2585,13 @@ const messageListStyle = (ghost: boolean): CSSProperties => ({
   // (code, tables) scroll inside their own box; the column itself never does.
   overflowX: "hidden",
   overflowY: "auto",
+  // The browser default, written down because something now DEPENDS on it. The
+  // render budget is the only thing in this transcript that removes content
+  // from ABOVE the reader, and scroll anchoring is what absorbs that: it holds
+  // the node in view still while the box above it shrinks. Someone adding
+  // `overflow-anchor: none` here to stop some other jump would silently turn
+  // every budget snap into a scroll jump instead, with nothing to point at.
+  overflowAnchor: "auto",
   display: "flex",
   flexDirection: "column",
   gap: 8,
@@ -2545,6 +2719,43 @@ const approvalItemStyle: CSSProperties = {
   listStyle: "none",
   margin: "8px 0",
   padding: 0,
+};
+
+/** The render budget's summary row — a rule, not a card (see `renderElidedRun`). */
+const elidedItemStyle: CSSProperties = {
+  listStyle: "none",
+  padding: 0,
+};
+
+const elidedRowStyle: CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 10,
+  width: "100%",
+  padding: "2px 0",
+  background: "none",
+  border: "none",
+  color: "var(--color-text-subtle)",
+  cursor: "pointer",
+  font: "inherit",
+  fontFamily: "var(--font-mono)",
+  fontSize: "var(--font-size-2xs)",
+  letterSpacing: 0.3,
+  textAlign: "left",
+};
+
+const elidedRuleStyle: CSSProperties = {
+  flex: 1,
+  height: 1,
+  background: "var(--color-border)",
+};
+
+const elidedLabelStyle: CSSProperties = {
+  // `flex: none` on purpose: the rules are the shrinkable halves of this row.
+  // The label is the only thing on it that says anything, and a row whose
+  // sentence ellipsised into "247 earli…" would be a control nobody can read.
+  flex: "none",
+  whiteSpace: "nowrap",
 };
 
 /** The pinned strip's replacement: chrome, not cards. */

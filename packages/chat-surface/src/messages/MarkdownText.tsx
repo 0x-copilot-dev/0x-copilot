@@ -2,6 +2,7 @@ import { useMemo, type ComponentProps, type ReactElement } from "react";
 import { Streamdown, defaultRemarkPlugins } from "streamdown";
 
 import { createRemarkCitations } from "./citationRemarkPlugin";
+import { codeHighlighterPlugins } from "./highlight/codeHighlighterPlugin";
 import { streamingCursorProps } from "./streamingCursor";
 import type { TextMessagePartProps } from "./types";
 
@@ -54,10 +55,15 @@ export function MarkdownText({
   // mode/isAnimating/animated triple. Any future streaming-text surface
   // (tool output, subagent transcript, …) imports the same helper rather
   // than re-deriving the toggle.
+  // `plugins.code` is streamdown's syntax-highlighting seam, and it ships
+  // nothing in it — an unfilled hole is why every fenced block in the app
+  // rendered as flat grey text. The constant is module-scope because
+  // streamdown memoises its plugin context on the object's identity.
   return (
     <Streamdown
       {...streamingCursorProps(status)}
       components={components}
+      plugins={codeHighlighterPlugins}
       remarkPlugins={remarkPlugins}
     >
       {text}
