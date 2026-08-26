@@ -143,6 +143,35 @@ class TestModelDisplayName:
     def test_catalog_delegates_to_deriver(self) -> None:
         assert ModelCatalog.display_name("gpt-5.6") == "GPT-5.6"
 
+    def test_drops_a_trailing_release_date_stamp(self) -> None:
+        # A vendor snapshot id carries a YYYYMMDD tail. Without a rule for it,
+        # ``_collapse_trailing_version`` swallowed the date into the version and
+        # the picker read "Claude Haiku 4.5.20251001".
+        assert ModelDisplayName.derive("claude-haiku-4-5-20251001") == (
+            "Claude Haiku 4.5"
+        )
+        assert ModelDisplayName.derive("claude-opus-4-5-20251101") == "Claude Opus 4.5"
+        assert ModelDisplayName.derive("claude-3-haiku-20240307") == "Claude 3 Haiku"
+
+    def test_does_not_mistake_a_version_for_a_date(self) -> None:
+        # The rule is deliberately strict — 8 digits AND a real 20xx date — so
+        # an 8-digit build number survives. ``12345678`` has month 56.
+        assert ModelDisplayName.derive("some-model-12345678") == ("Some Model 12345678")
+
+    def test_strips_a_provider_namespace_prefix(self) -> None:
+        # The ``/`` survived the ``-`` split, so it both leaked the namespace
+        # and blocked the title-case pass — hence the lower-case "claude".
+        assert ModelDisplayName.derive("anthropic/claude-haiku-4.5") == (
+            "Claude Haiku 4.5"
+        )
+        assert ModelDisplayName.derive("meta-llama/llama-3.3-70b") == ("Llama 3.3 70b")
+
+    def test_degrades_rather_than_rendering_an_empty_label(self) -> None:
+        # A pathological id must not collapse to "" — a nameless row is worse
+        # than an ugly one.
+        assert ModelDisplayName.derive("anthropic/") == "Anthropic/"
+        assert ModelDisplayName.derive("20251001") == "20251001"
+
 
 class TestLitellmModelSource:
     """Generic discovery and enrichment from an injected ``model_cost`` map."""
@@ -271,6 +300,64 @@ class TestModelCatalogBuild:
             if n > 1
         }
         assert duplicates == {}
+
+    def test_one_model_family_is_one_row(self) -> None:
+        # A vendor catalog carries the same model plain and date-stamped. Once
+        # the deriver stopped rendering the stamp both derive the SAME label, so
+        # without a collapse the picker shows a column of identical rows — which
+        # is how it came to offer five Haiku rows for one family.
+        records = (
+            CatalogModelRecord(
+                provider="anthropic",
+                model_id="claude-haiku-4-5",
+                display_name="Claude Haiku 4.5",
+            ),
+            CatalogModelRecord(
+                provider="anthropic",
+                model_id="claude-haiku-4-5-20251001",
+                display_name="Claude Haiku 4.5",
+            ),
+        )
+        ModelCatalog.configure_source(_FakeSource(records))
+        items = ModelCatalog.build(_settings())
+
+        haiku = [item for item in items if "haiku" in item.id]
+        assert [item.id for item in haiku] == ["claude-haiku-4-5"], (
+            "the plain id is the canonical one; the dated alias is the duplicate"
+        )
+
+    def test_a_model_without_a_plain_twin_is_never_dropped(self) -> None:
+        # The narrow rule's whole point. An earlier by-display-name collapse
+        # removed ``claude-opus-4-8`` from a real-table build; a dated id is now
+        # only ever dropped when the identical id WITHOUT the stamp is present.
+        records = (
+            CatalogModelRecord(
+                provider="anthropic",
+                model_id="claude-3-haiku-20240307",
+                display_name="Claude 3 Haiku",
+            ),
+        )
+        ModelCatalog.configure_source(_FakeSource(records))
+        items = ModelCatalog.build(_settings())
+        assert any(item.id == "claude-3-haiku-20240307" for item in items)
+
+    def test_a_dated_twin_of_another_provider_is_kept(self) -> None:
+        # The plain id must belong to the SAME provider to count as the twin.
+        records = (
+            CatalogModelRecord(
+                provider="anthropic",
+                model_id="claude-haiku-4-5",
+                display_name="Claude Haiku 4.5",
+            ),
+            CatalogModelRecord(
+                provider="openrouter",
+                model_id="claude-haiku-4-5-20251001",
+                display_name="Claude Haiku 4.5 (OpenRouter)",
+            ),
+        )
+        ModelCatalog.configure_source(_FakeSource(records))
+        ids = {item.id for item in ModelCatalog.build(_settings())}
+        assert "claude-haiku-4-5-20251001" in ids
 
     def test_supports_provider_filters_out_of_allowlist_records(self) -> None:
         # groq/xai are outside the run path's ``ModelConfigResolver`` allowlist;

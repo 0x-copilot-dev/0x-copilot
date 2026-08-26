@@ -81,12 +81,26 @@ class ModelDisplayName:
     * ``gpt-5.6``         -> ``"GPT-5.6"``
     * ``gemini-2.5-pro``  -> ``"Gemini 2.5 Pro"``
 
-    Rules: split on ``-`` (``_`` normalised to ``-`` first); collapse a trailing
-    run of bare-integer parts into one dotted version (``…-4-8`` -> ``4.8``);
-    upper-case known acronyms (``gpt``); title-case plain words; keep numeric /
-    dotted-numeric parts verbatim as version tokens. A version token that
-    immediately follows an acronym joins with a hyphen (``GPT-5.6``, matching the
-    vendor's own branding); every other boundary is a space.
+    Rules: drop a ``provider/`` namespace prefix; drop a trailing ``YYYYMMDD``
+    snapshot stamp; split on ``-`` (``_`` normalised to ``-`` first); collapse a
+    trailing run of bare-integer parts into one dotted version (``…-4-8`` ->
+    ``4.8``); upper-case known acronyms (``gpt``); title-case plain words; keep
+    numeric / dotted-numeric parts verbatim as version tokens. A version token
+    that immediately follows an acronym joins with a hyphen (``GPT-5.6``,
+    matching the vendor's own branding); every other boundary is a space.
+
+    The prefix and date rules exist because a vendor catalog carries the same
+    model under several ids, and without them the picker showed **five Haiku
+    rows for one family**::
+
+        claude-haiku-4-5-20251001  ->  "Claude Haiku 4.5.20251001"
+        anthropic/claude-haiku-4.5 ->  "Anthropic/claude Haiku 4.5"
+
+    The first is the date being swallowed by :meth:`_collapse_trailing_version`,
+    which cannot tell a snapshot stamp from another version segment. The second
+    is the ``/`` surviving the split, which also blocks the title-case pass and
+    is why ``claude`` rendered lower-case. Both now resolve to
+    ``"Claude Haiku 4.5"``.
     """
 
     # Slug fragments that render fully upper-cased rather than title-cased.
@@ -99,12 +113,50 @@ class ModelDisplayName:
 
     @classmethod
     def derive(cls, model_id: str) -> str:
-        parts = [part for part in model_id.replace("_", "-").split("-") if part]
+        slug = cls._strip_namespace(model_id)
+        parts = [part for part in slug.replace("_", "-").split("-") if part]
+        parts = cls._drop_snapshot_stamp(parts)
         if not parts:
             return model_id
         parts = cls._collapse_trailing_version(parts)
         tokens = [cls._classify(part) for part in parts]
         return cls._join(tokens)
+
+    @staticmethod
+    def _strip_namespace(model_id: str) -> str:
+        """Drop a ``provider/`` prefix, keeping the last path segment.
+
+        Every catalog that namespaces ids does it this way — ``anthropic/…``,
+        ``openrouter/…``, ``meta-llama/…`` — and the namespace is never part of
+        the model's name. Returns the input unchanged when the split would leave
+        nothing, so a pathological ``"anthropic/"`` degrades to the raw id
+        rather than to an empty label.
+        """
+
+        leaf = model_id.rsplit("/", maxsplit=1)[-1].strip()
+        return leaf or model_id
+
+    @staticmethod
+    def _drop_snapshot_stamp(parts: list[str]) -> list[str]:
+        """Drop a trailing ``YYYYMMDD`` release stamp.
+
+        Deliberately strict — 8 digits, a ``20xx`` year, a real month and a real
+        day — because the whole point is to distinguish a date from a version
+        segment, and a loose "8 digits" rule would silently eat one. Only a
+        *trailing* part is considered, and only when something survives it, so
+        an id that is nothing but a date keeps its digits rather than rendering
+        as an empty string.
+        """
+
+        if len(parts) < 2:
+            return parts
+        tail = parts[-1]
+        if len(tail) != 8 or not tail.isdigit():
+            return parts
+        year, month, day = int(tail[:4]), int(tail[4:6]), int(tail[6:])
+        if 2000 <= year <= 2099 and 1 <= month <= 12 and 1 <= day <= 31:
+            return parts[:-1]
+        return parts
 
     @classmethod
     def _collapse_trailing_version(cls, parts: list[str]) -> list[str]:

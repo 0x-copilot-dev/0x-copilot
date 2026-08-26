@@ -284,7 +284,16 @@ feature; the second is an afternoon and stops the fourth reader.
 **Skip cost:** a fourth person writes a fourth reader against a silent event,
 and every live cost readout in the program keeps saying zero.
 
-### 13. The model picker shows raw ids, dates, and dead models — `days`
+### 13. The model picker shows raw ids, dates, and dead models — ⚠️ **half fixed**
+
+**Fixed:** the two naming defects and the duplicate row. `ModelDisplayName`
+now strips a `provider/` namespace and a trailing `YYYYMMDD` stamp, and the
+catalog drops `<id>-YYYYMMDD` when plain `<id>` exists for the same provider.
+
+**Still open:** the catalog offers models the vendor has retired, and the 404
+they produce is classified `external_service_error` — _retryable_ — so the copy
+invites a retry that can never work. That is a separate change to error
+classification, not to naming.
 
 Found while pinning a cheap model for the heavy arms. The picker offers **five
 Haiku rows for one model family**:
