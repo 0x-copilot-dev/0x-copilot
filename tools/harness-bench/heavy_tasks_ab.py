@@ -65,34 +65,42 @@ Four constraints, each of which killed a more interesting design:
    fails if any single tool name is planned at or above the budget.
 4. **The filesystem grants nothing by default.** See below.
 
-Which tasks need a granted folder, and which do not
----------------------------------------------------
-**H1-H5 need no grant.** They work in ``/memories/``, a real mounted route on
-the desktop file store (``FileMemoryBackendFactory``), writable through the
-model's ordinary ``write_file`` / ``read_file`` / ``edit_file`` and persisted at
-``<userData>/agent-data/v1/memory/`` where ``rescore.py`` can inspect the finish
-state offline, for free.
+Six of seven tasks need nothing at all
+--------------------------------------
+**H1-H6 need no grant and no connector.** They work in ``/memories/``, a real
+mounted route on the desktop file store (``FileMemoryBackendFactory``), writable
+through the model's ordinary ``write_file`` / ``read_file`` / ``edit_file`` and
+persisted at ``<userData>/agent-data/v1/memory/`` where ``rescore.py`` can
+inspect the finish state offline, for free. Only H7 (MCP namespacing) needs
+something this process cannot arrange.
 
-Two traps that shaped those prompts, both structural rather than stylistic:
+Three structural traps shaped those prompts. None is stylistic:
 
 * A **host-absolute** path (``/bench/part-01.md`` — anything whose first segment
   is not one of ``HostPathClassifier.VIRTUAL_ROOTS``) is claimed by the
   workspace backend and *refused* without a grant. A prompt that names one
-  measures a refusal, not a chain. Hence every grant-free prompt addresses
+  measures a refusal, not a chain. Hence every prompt addresses
   ``/memories/<flat-name>``, and the design test asserts it.
 * ``FileMemoryBackend.grep`` and ``.glob`` return **empty results, not errors**.
   A prompt that says "search /memories/" gets a green empty answer — the exact
   empty-success shape that produced the ``ls ~/Downloads`` defect. The prompts
   therefore say ``ls`` and ``read``, never grep or glob, and the design test
   asserts that too.
+* ``FileMemoryBackend.read`` **accepts ``offset`` and ``limit`` and uses
+  neither** — it returns the whole document every time. So a prompt that says
+  "page through it with the offset argument" measures nothing on this route, and
+  ``reads.default_line_limit`` (2000) is simply unreachable here. H6 used to
+  claim paging; it no longer does, and FINDINGS.md §5 records that as newly
+  unmeasured rather than dropping it.
 
-**H6 needs a granted folder** and says so. Its fixture is a 2,600-row CSV this
-file writes to a temp dir — free to produce, unlike making the model type one —
-and it is the only task that can push ``reads.default_line_limit`` (2000) and
-the tool-result cap. The grant is arranged in ``setup`` through the app's REAL
-native picker (``_workspace_lib.attach_folder``, macOS AppleScript). If the host
-denies Accessibility the picker cannot be driven, and H6 records **skipped**
-with that reason rather than running a smaller task under the same name.
+**H6 is the task that reaches the tool-result cap**, and it builds its own
+fixture to get there: eight seed lines, then four chained ``edit_file``
+expansions that grow the file to ~64KB, then two reads that straddle
+``INLINE_TOKEN_BUDGET``. It used to read a 2,600-row host CSV behind a folder
+grant instead — a lane this machine could never mint, because the grant comes
+only from a NATIVE picker and Accessibility is denied here, so in every arm ever
+run H6 recorded ``skipped`` and the cap stayed unmeasured. Writing its own
+fixture is also what makes H6 the one task in the set that is valid pinned alone.
 
 PRECONDITION: the stage must be built from the tree under test (README §1b in
 tools/desktop-journeys/). A stale stage inverts every number here into nonsense.
@@ -106,10 +114,9 @@ import json
 import os
 import re
 import sys
-import tempfile
 import time
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 
@@ -125,10 +132,7 @@ from _lib import (  # noqa: E402
     wait_for_conversation_id,
     wait_for_new_run,
 )
-from _workspace_lib import (  # noqa: E402
-    assistant_text,
-    attach_folder,
-)
+from _workspace_lib import assistant_text  # noqa: E402
 
 OUT_DIR = Path(__file__).resolve().parent / "runs"
 
@@ -137,6 +141,42 @@ OUT_DIR = Path(__file__).resolve().parent / "runs"
 #: component imports another's source), and asserted against the shipped
 #: hyperparameter document by the design test so the two cannot drift.
 TOOL_CALL_BUDGET = 10
+
+#: ``ToolResultAdmissionAdapter.DEFAULT_INLINE_TOKEN_BUDGET`` — the number of
+#: ESTIMATED tokens a single tool result may carry into model context before
+#: ``ContextPayloadManager.prepare_tool_output`` offloads it to
+#: ``/large_tool_results/<sha256>`` and hands the model a bounded stub instead.
+#: Copied, not imported, for the same reason as ``TOOL_CALL_BUDGET``, and pinned
+#: against the shipped adapter by a gate test.
+#:
+#: **It is 8,000, not the 8,192 §5 and §8 of FINDINGS.md quote.** 8,192 is
+#: ``context.model_result_preview_bytes``, which is read in exactly one place —
+#: ``runtime_worker/mcp_operation_storage.py`` — and never touches a
+#: ``read_file`` result. Sizing a fixture against 8,192 *bytes* rather than
+#: 8,000 *tokens* is a 4x error that lands an intended-inline read on the wrong
+#: side of the threshold, so the two numbers are worth keeping apart by name.
+INLINE_TOKEN_BUDGET = 8_000
+
+#: ``TokenBudgetEvaluator.CHARS_PER_TOKEN_ESTIMATE``. The budget above is
+#: measured in these, not in real tokenizer tokens: the estimate is
+#: ``ceil(len(text) / 4)``, so 8,000 tokens is exactly 32,000 characters. Blind
+#: spot worth stating: a result whose real tokenization differs from 4 chars per
+#: token (dense CJK, base64) crosses the cap at a different true size than this
+#: arithmetic suggests — which is fine for a fixture built out of ASCII, and
+#: wrong for one that is not.
+CHARS_PER_TOKEN_ESTIMATE = 4
+
+#: ``FilesystemMiddleware.tool_token_limit_before_evict`` — deepagents' OWN read
+#: truncation, at 4 chars/token, i.e. 80,000 characters. H6 stays under it on
+#: purpose: a fixture past this point measures *their* truncation wearing our
+#: cap's name.
+#:
+#: BLIND SPOT, and it is a real one: this lives in a site-package, not in this
+#: repo, so unlike ``TOOL_CALL_BUDGET`` and ``INLINE_TOKEN_BUDGET`` no offline
+#: gate here can verify it. A deepagents bump that lowered it below H6's second
+#: read would silently change what H6 measures, and the only warning would be
+#: the pinned-version tests in the ai-backend suite.
+DEEPAGENTS_READ_EVICT_TOKENS = 20_000
 
 #: ``HostPathClassifier.VIRTUAL_ROOTS`` — the POSIX-absolute first segments that
 #: stay inside this process. Anything else with a leading ``/`` is host-shaped,
@@ -163,12 +203,21 @@ class Needs(StrEnum):
     name, never be quietly dropped and never be replaced by an easier task that
     happens to run. That is how a set of six tasks becomes a set of four while
     still printing six rows.
+
+    There WAS a third member, ``HOST_GRANT``, for a task whose fixture lived on
+    the host filesystem behind a folder grant. It is gone: the grant can only be
+    minted through the app's own NATIVE picker, this host denies the controlling
+    process Accessibility, and so in the whole life of the harness that lane
+    never once succeeded — it produced a ``skipped`` row and nothing else. H6 is
+    now built on ``/memories/`` like the rest. Bringing the lane back costs the
+    enum member, a ``fixture_keys`` field on :class:`HeavyTask`, the
+    substitution branch in :meth:`Arm.run_task`, and the
+    ``_workspace_lib.attach_folder`` call — all of which are in this file's
+    history — plus a host that grants Accessibility.
     """
 
     #: Runs on a virgin profile with a provider key and nothing else.
     NOTHING = "nothing"
-    #: Needs a folder grant minted through the app's own native picker.
-    HOST_GRANT = "host_grant"
     #: Needs a REAL connected MCP server — impossible for a journey to arrange
     #: (the driver suppresses the OAuth browser handoff), so this is a
     #: precondition of the profile, never a step.
@@ -188,7 +237,12 @@ class HeavyTask:
 
     task_id: str
     needs: Needs
-    #: ``str.format``-ready; ``{ledger}`` is substituted with the fixture path.
+    #: Sent VERBATIM. There is no substitution step any more, and that is a
+    #: deliberate simplification rather than an omission: the one task that
+    #: needed a run-time fixture path is now self-contained, so keeping a
+    #: ``str.format`` pass would leave a branch nothing takes — and the first
+    #: regex quantifier someone writes into a prompt (``\d{2}``) would then
+    #: raise a ``KeyError`` from it, mid-arm, after the money is spent.
     prompt: str
     #: Planned calls per tool NAME. Read by the design test against
     #: ``TOOL_CALL_BUDGET``; a plan at or above it measures the budget, not the
@@ -198,8 +252,6 @@ class HeavyTask:
     expect: re.Pattern[str]
     #: The claim this task exists to reach. One line, in the report.
     claim: str
-    #: Substituted into ``prompt``; filled at run time for HOST_GRANT tasks.
-    fixture_keys: tuple[str, ...] = field(default=())
 
 
 #: The corpus every grant-free task works over. Held here, not in the prompt
@@ -221,6 +273,117 @@ def _corpus_table() -> str:
     return "\n".join(
         f"  /memories/bench-part-{part}.md  ->  part-{part} owner={owner} hours={hours}"
         for part, owner, hours in CORPUS
+    )
+
+
+# ── the H6 fixture: built BY THE AGENT, because it cannot be seeded ──────────
+# H6 has to hand the model a tool result big enough to cross
+# ``INLINE_TOKEN_BUDGET``. Seeding that file from this process is not an option:
+# a memory document lives at ``<root>/memory/<safe_key(scope)>/<safe_key(path)>``
+# with BOTH segments hashed, so writing one from here means copying a hashing
+# scheme out of a service's ``src`` — the precise coupling CLAUDE.md forbids and
+# the precise coupling that goes stale silently. So the agent writes it, and
+# building it is part of the task.
+#
+# The construction is four chained expansions rather than one repeated doubling,
+# and the reason is a measured hazard, not neatness. Haiku batched twelve tool
+# calls into a single assistant turn in the §8 arms, and
+# ``FileMemoryBackend.edit`` is an unlocked read-modify-write: four ``X -> XX``
+# calls issued together would all read the same base, all write 2x, and all
+# report SUCCESS — a file one-eighth the intended size under a green tick, which
+# is this program's signature defect. Chaining the markers makes step k+1's
+# ``old_string`` nonexistent until step k has committed, so a batched or
+# reordered edit gets ``"old_string was not found in the memory file."`` — a
+# loud error the model can retry, with six spare ``edit_file`` calls under the
+# budget to retry into. Do not "simplify" this back to one marker.
+WIDE_PATH = "/memories/bench-wide.md"
+
+#: The marker's payload is a fixed 26-letter run with no repeated character, so
+#: the model copies it and never has to count anything. Every step's marker is
+#: the same length, which is what makes the sizes below pure arithmetic.
+WIDE_ALPHABET = "abcdefghijklmnopqrstuvwxyz"
+
+
+def wide_marker(step: int) -> str:
+    return f"[w{step}:{WIDE_ALPHABET}]"
+
+
+#: Eight rows, one per seed line. Deliberately NOT ``CORPUS``: H6 is the only
+#: task in the set that is valid pinned alone (it writes its own fixture), and
+#: sharing the corpus would quietly make it depend on H1 having run.
+WIDE_ROWS: tuple[tuple[str, str, int], ...] = (
+    ("01", "ada", 7),
+    ("02", "lin", 3),
+    ("03", "ada", 8),
+    ("04", "omar", 9),
+    ("05", "lin", 2),
+    ("06", "omar", 4),
+    ("07", "ada", 6),
+    ("08", "lin", 5),
+)
+
+WIDE_HOURS = sum(hours for _, _, hours in WIDE_ROWS)  # 44
+#: Copies of the next marker each expansion writes per marker it consumes.
+WIDE_FACTOR = 4
+#: How many expansions the prompt asks for.
+WIDE_EXPANSIONS = 4
+#: Which expansion the FIRST read follows. The two reads straddle the cap: this
+#: one lands inline, the one after the last expansion is offloaded.
+WIDE_READ_AFTER = 3
+
+
+def wide_seed() -> str:
+    """The eight lines the agent is told to write, verbatim."""
+
+    return (
+        "\n".join(
+            f"part-{part} owner={owner} hours={hours} {wide_marker(1)}"
+            for part, owner, hours in WIDE_ROWS
+        )
+        + "\n"
+    )
+
+
+def wide_content(steps: int) -> str:
+    """The file after ``steps`` expansions — by APPLYING them, not predicting.
+
+    This performs the same ``str.replace`` the model's ``edit_file`` calls
+    perform, so the expected sizes below are derived from the operation rather
+    than typed from one observed run.
+    """
+
+    text = wide_seed()
+    for step in range(1, steps + 1):
+        text = text.replace(wide_marker(step), wide_marker(step + 1) * WIDE_FACTOR)
+    return text
+
+
+def wide_tokens(steps: int) -> int:
+    """Estimated tokens the admission adapter would charge for that file.
+
+    BLIND SPOT, and the gate depends on knowing it: this measures the RAW file.
+    What the adapter actually weighs is deepagents'
+    ``format_content_with_line_numbers`` render of it — a gutter per line, plus
+    a continuation row every ``MAX_LINE_LENGTH`` characters — which only ever
+    ADDS characters. So this is a lower bound, and the sizing gate asserts
+    headroom on both sides rather than asserting an exact measured number.
+    Measured against the real renderer and the real adapter, the overhead is
+    23 chars at ``WIDE_READ_AFTER`` and 87 at ``WIDE_EXPANSIONS`` — far inside
+    the margins the gate requires.
+    """
+
+    return -(-len(wide_content(steps)) // CHARS_PER_TOKEN_ESTIMATE)
+
+
+def _wide_seed_block() -> str:
+    return "\n".join(f"  {line}" for line in wide_seed().splitlines())
+
+
+def _wide_edit_block() -> str:
+    return "\n".join(
+        f"  call {step}:  old_string={wide_marker(step)}\n"
+        f"           new_string={wide_marker(step + 1) * WIDE_FACTOR}"
+        for step in range(1, WIDE_EXPANSIONS + 1)
     )
 
 
@@ -303,22 +466,86 @@ TASKS: tuple[HeavyTask, ...] = (
         expect=re.compile(r"CHAIN DONE 12"),
         claim="a 12-round chain spans the old ceiling of 25 super-steps",
     ),
+    # H6 is the ONLY task that crosses ``INLINE_TOKEN_BUDGET``, and the two arms
+    # in §8 could not run it at all: it used to read a host CSV behind a folder
+    # grant this machine cannot mint, so both arms recorded a peak tool result of
+    # 68 tokens against a cap of 8,000 and the claim stayed unmeasured. Rebased
+    # on ``/memories/`` it needs nothing, and because it writes its own fixture
+    # it is the one task in the set that is valid PINNED ALONE.
+    #
+    # Measured offline against the shipped ``ToolResultAdmissionAdapter`` and
+    # deepagents' real renderer — the straddle is the whole design:
+    #
+    #     after edit 3:  16,113 rendered chars =  4,029 est tokens ( 50% of cap)
+    #                    -> INLINE: all eight rows reach the model, HOURS=44
+    #                       is answerable
+    #     after edit 4:  63,793 rendered chars = 15,949 est tokens (199% of cap)
+    #                    -> OFFLOAD: a 2,233-char stub carrying a
+    #                       /large_tool_results/<sha256> reference and a preview
+    #                       clipped to 2,000 chars — which is part of LINE ONE,
+    #                       so the same question is NOT answerable from it
+    #
+    # 63,793 also sits ~20% under ``DEEPAGENTS_READ_EVICT_TOKENS`` (80,000
+    # chars), so the cap this measures is OURS and not the library's.
+    #
+    # TWO BLIND SPOTS, both of which make ``outcome_ok`` the wrong instrument
+    # for the cap claim:
+    #
+    # * The agent AUTHORED the fixture, so it can emit ``HOURS=44`` from its own
+    #   memory of the seed without either read reaching it. A green H6 is
+    #   therefore consistent with the big result never entering context. The
+    #   columns that answer the claim are ``offloaded_results`` (the cap firing)
+    #   and the on-disk memory-document size (the payload it bound) — both in
+    #   ``rescore.py``, both offline, both free.
+    # * ``SECOND=FULL`` has THREE causes and the answer text cannot tell them
+    #   apart: (a) the staged runtime has no admission wiring and handed back
+    #   63KB inline — a runtime finding, not a model failure; (b) the model
+    #   mis-transcribed an expansion (three copies instead of four leaves the
+    #   file at ~20KB, comfortably inline, and every call still reports
+    #   success); (c) the model simply answered wrongly. ``rescore.py``
+    #   separates them: ``offloaded_results`` says whether the cap fired at all,
+    #   and the on-disk memory-document size says whether the fixture was ever
+    #   built to size. Read both before concluding anything from this column.
     HeavyTask(
         task_id="h6-bigread",
-        needs=Needs.HOST_GRANT,
+        needs=Needs.NOTHING,
         prompt=(
-            "Read the file {ledger} and answer from its contents only. It has a "
-            "header row and 2600 data rows. Reply with exactly one line of the "
-            "form:\n"
-            "  EMEA=<sum of the amount column over rows whose region is EMEA>\n"
-            "Read that exact path directly — do not list the directory and do not "
-            "guess. The file is longer than one read returns, so page through it "
-            "with the offset argument until you have seen every row."
+            "Build one large memory file, then read it twice. Every literal you "
+            "need is written out below — copy them exactly and work nothing out.\n"
+            f"1. Use write_file to create {WIDE_PATH} containing exactly these "
+            "eight lines and nothing else — no heading, no commentary:\n"
+            f"{_wide_seed_block()}\n"
+            f"2. Then make exactly {WIDE_EXPANSIONS} edit_file calls on that same "
+            "file, IN THIS ORDER, each with replace_all set to true. Each call's "
+            "old_string does not exist in the file until the call before it has "
+            "finished, so issue them one at a time and never batch them:\n"
+            f"{_wide_edit_block()}\n"
+            f"3. After the {WIDE_READ_AFTER}rd edit_file call, read the whole "
+            f"file with read_file. After the {WIDE_EXPANSIONS}th, read it with "
+            "read_file again. Do not use grep or glob — they return empty "
+            "results on this route, which is not the same as there being nothing "
+            "there.\n"
+            "Then reply with exactly one line of the form:\n"
+            "  HOURS=<sum of the eight hours values, read off the FIRST read> "
+            "SECOND=<PREVIEW if the second read came back as a short preview "
+            "plus a reference to a stored result instead of the file itself, "
+            "otherwise FULL>"
         ),
-        planned_calls={"read_file": 4},
-        expect=re.compile(r"EMEA\s*=\s*{emea}"),
-        claim="a >2000-line read pages correctly and pushes the tool-result cap",
-        fixture_keys=("ledger", "emea"),
+        planned_calls={
+            "write_file": 1,
+            # Four planned against a budget of 10 on purpose: a batched or
+            # reordered edit ERRORS rather than corrupting the fixture, and the
+            # six spare calls are the room to retry it.
+            "edit_file": WIDE_EXPANSIONS,
+            "read_file": 2,
+        },
+        # ``re.S`` because this is the only task asking for TWO facts on one
+        # line, and a model that wraps between them would otherwise fail on
+        # formatting rather than on the measurement.
+        expect=re.compile(
+            rf"HOURS\s*=\s*{WIDE_HOURS}\b.*SECOND\s*=\s*PREVIEW\b", re.I | re.S
+        ),
+        claim="the pre-model tool-result cap: one result inline, the next offloaded",
     ),
     HeavyTask(
         task_id="h7-mcp-namespace",
@@ -374,37 +601,6 @@ def selected_tasks() -> tuple[HeavyTask, ...]:
             f"does not declare. Known ids: {', '.join(t.task_id for t in TASKS)}"
         )
     return kept
-
-
-# ── the H6 fixture ───────────────────────────────────────────────────────────
-#: 2,600 data rows: comfortably over ``reads.default_line_limit`` (2000), so a
-#: single read cannot see the file and the model has to page. Generated from a
-#: fixed arithmetic rule rather than a random seed, so the expected answer is
-#: derived here and is identical on every machine and in every arm.
-LEDGER_ROWS = 2_600
-LEDGER_REGIONS = ("EMEA", "AMER", "APAC", "EMEA")
-
-
-def ledger_lines() -> list[str]:
-    lines = ["row,region,amount"]
-    for index in range(LEDGER_ROWS):
-        region = LEDGER_REGIONS[index % len(LEDGER_REGIONS)]
-        lines.append(f"{index + 1},{region},{index % 97}")
-    return lines
-
-
-def ledger_emea_total() -> int:
-    return sum(
-        index % 97
-        for index in range(LEDGER_ROWS)
-        if LEDGER_REGIONS[index % len(LEDGER_REGIONS)] == "EMEA"
-    )
-
-
-def write_ledger(root: Path) -> Path:
-    path = root / "ledger.csv"
-    path.write_text("\n".join(ledger_lines()) + "\n", encoding="utf-8")
-    return path
 
 
 def recorded_pattern(pattern: re.Pattern[str]) -> str:
@@ -508,8 +704,6 @@ class Arm:
         self.limit = limit
         self.results: list[dict] = []
         self.conversation_id: str | None = None
-        #: Substitutions available to a task's prompt, filled by ``setup``.
-        self.fixtures: dict[str, str] = {}
         #: Prerequisites ``setup`` POSITIVELY confirmed. Fail-closed on purpose:
         #: a prerequisite is present only when something checked and said so.
         #: Deriving it from the absence of a ``blocked`` entry instead means a
@@ -518,7 +712,7 @@ class Arm:
         #: MCP namespacing on a profile with no connectors and reports it.
         self.available: set[Needs] = set()
         #: Why a prerequisite is absent, keyed by ``Needs``. Recorded rather
-        #: than raised: an absent grant must cost H6 and nothing else.
+        #: than raised: an absent connector must cost H7 and nothing else.
         self.blocked: dict[Needs, str] = {}
 
     def prerequisite(self, task: HeavyTask) -> str | None:
@@ -530,9 +724,6 @@ class Arm:
             return self.blocked.get(
                 task.needs, f"{task.needs} was never confirmed present"
             )
-        missing = [key for key in task.fixture_keys if key not in self.fixtures]
-        if missing:
-            return f"fixture keys absent: {', '.join(missing)}"
         return None
 
     def send(self, prompt: str) -> str:
@@ -565,16 +756,12 @@ class Arm:
             log(f"  {task.task_id}: {row['status']} — {reason}")
             return row
 
-        # Substituted ONLY for a task that declares fixture keys. Formatting
-        # every prompt would work today and break the first time someone writes
-        # a regex quantifier like ``\d{2}`` — ``str.format`` reads that as a
-        # field name and raises, in a paid run, after the money is spent.
+        # Sent verbatim. Every task's fixture is now either stated in the prompt
+        # or built by the agent, so there is nothing to substitute — and the
+        # ``str.format`` pass that used to live here is gone rather than kept
+        # "just in case", because a branch nothing takes is a branch nobody
+        # notices breaking.
         prompt, pattern = task.prompt, task.expect
-        if task.fixture_keys:
-            prompt = prompt.format(**self.fixtures)
-            pattern = re.compile(
-                task.expect.pattern.format(**self.fixtures), task.expect.flags
-            )
         run_id = self.send(prompt)
         record = terminal_run(self.session, run_id)
         answer = assistant_text(self.session, run_id) or ""
@@ -637,48 +824,25 @@ class Arm:
         )
 
 
-def sign_in_key_and_grant(arm: Arm, tasks: tuple[HeavyTask, ...] = TASKS) -> None:
-    """Sign in, add the BYOK key, and arrange the H6 folder grant.
+def sign_in_and_key(arm: Arm) -> None:
+    """Sign in and add the BYOK key. That is the whole of setup now.
 
-    The grant is attempted, never assumed. Attaching is the ONLY way in and it
-    is a NATIVE dialog: when the host denies the controlling process
-    Accessibility, no keystroke can reach that sheet. That records against H6
-    and costs nothing else.
+    It used to also arrange a folder grant for H6 through the app's REAL native
+    picker. That is gone with ``Needs.HOST_GRANT``: on this host Accessibility is
+    denied to the controlling process, so no keystroke ever reached that sheet,
+    and in every arm the harness has run the lane produced a ``skipped`` row and
+    nothing else. H6 now builds its fixture in ``/memories/`` itself.
 
-    **Only attempted when a selected task actually needs it.** Five of the seven
-    tasks declare ``Needs.NOTHING``, so a run pinned to those was opening a
-    native macOS folder picker, failing to drive it, and printing a BLOCKED line
-    for a claim nothing in the run was measuring — noise that reads like a
-    broken harness. ``tasks`` is the already-resolved pin, so the question is
-    answered from the same list the arm is about to execute rather than from the
-    full set.
+    What was lost with it is worth naming rather than leaving to be rediscovered:
+    the grant lane was the only path to a HOST file, so nothing here exercises
+    ``HostPathClassifier`` or a workspace-backend read any more. That is a
+    reduction in coverage, not a cleanup, and it is recorded in FINDINGS.md §5.
     """
 
-    session = arm.session
     provider, key = byok_provider()
     log(f"provider={provider} key_len={len(key)} (value withheld)")
-    session.sign_in_local()
-    session.ftue_add_key(provider, key)
-
-    if not any(task.needs is Needs.HOST_GRANT for task in tasks):
-        return
-
-    fixture_root = Path(tempfile.mkdtemp(prefix="heavy-bench-")).resolve()
-    ledger = write_ledger(fixture_root)
-    try:
-        grant_id = attach_folder(
-            session, fixture_root, mode="read_only", label="harness-bench heavy"
-        )
-    except Exception as exc:  # noqa: BLE001 — an absent grant is a verdict
-        arm.blocked[Needs.HOST_GRANT] = (
-            f"the native folder picker could not be driven: {exc!r}"[:300]
-        )
-        log(f"  folder grant BLOCKED: {arm.blocked[Needs.HOST_GRANT]}")
-        return
-    log(f"  folder grant {grant_id[:8]}… over {fixture_root}")
-    arm.fixtures["ledger"] = str(ledger)
-    arm.fixtures["emea"] = str(ledger_emea_total())
-    arm.available.add(Needs.HOST_GRANT)
+    arm.session.sign_in_local()
+    arm.session.ftue_add_key(provider, key)
 
 
 #: ``McpAuthState.AUTHENTICATED`` / ``AUTH_SKIPPED`` — the two states in which a
@@ -736,9 +900,9 @@ def run_arm(limit: str) -> int:
 
     def setup(_: DriverSession) -> None:
         arm = holder["arm"]
-        sign_in_key_and_grant(arm, pinned)
-        # Same rule as the folder grant: do not report a claim blocked when
-        # nothing in this run measures it.
+        sign_in_and_key(arm)
+        # Do not report a claim blocked when nothing in this run measures it:
+        # a BLOCKED line for an unselected task reads as a broken harness.
         if not any(task.needs is Needs.CONNECTED_MCP for task in pinned):
             return
         servers = connected_mcp_servers(arm.session)
@@ -788,10 +952,10 @@ def _fresh() -> bool:
 def plan_only() -> int:
     """Print the task plan and its design constraints. No app, no model, free."""
 
-    print(f"\n{'task':<18}{'needs':<14}{'planned calls':<34}claim")
+    print(f"\n{'task':<18}{'needs':<14}{'planned calls':<40}claim")
     for task in TASKS:
         calls = ", ".join(f"{n}x{c}" for n, c in task.planned_calls.items())
-        print(f"{task.task_id:<18}{str(task.needs):<14}{calls:<34}{task.claim}")
+        print(f"{task.task_id:<18}{str(task.needs):<14}{calls:<40}{task.claim}")
     worst = max(
         ((n, c) for t in TASKS for n, c in t.planned_calls.items()),
         key=lambda pair: pair[1],
@@ -800,13 +964,32 @@ def plan_only() -> int:
         f"\n  heaviest single tool name: {worst[0]} x{worst[1]} "
         f"(per-run budget is {TOOL_CALL_BUDGET})"
     )
-    print(f"  H6 ledger: {LEDGER_ROWS} data rows, EMEA total {ledger_emea_total()}")
+    # H6's whole design is a size, so print the size. This is the free proof
+    # that the declared straddle is real BEFORE any arm is paid for: one read
+    # under the cap, the next over it, and both under deepagents' own limit.
+    print(
+        f"\n  H6 fixture ({WIDE_PATH}, agent-built): "
+        f"{len(wide_seed())} chars seeded, then {WIDE_EXPANSIONS} chained "
+        f"x{WIDE_FACTOR} expansions"
+    )
+    for steps in (WIDE_READ_AFTER, WIDE_EXPANSIONS):
+        tokens = wide_tokens(steps)
+        verdict = "INLINE" if tokens <= INLINE_TOKEN_BUDGET else "OFFLOAD"
+        print(
+            f"    read after edit {steps}: {len(wide_content(steps)):>7} chars "
+            f"= {tokens:>6} est tokens "
+            f"({tokens / INLINE_TOKEN_BUDGET:6.1%} of the {INLINE_TOKEN_BUDGET} "
+            f"cap)  -> {verdict}"
+        )
+    print(
+        f"    (both under deepagents' own {DEEPAGENTS_READ_EVICT_TOKENS}-token "
+        "read truncation, so the cap H6 measures is OURS)"
+    )
     grantless = sum(1 for t in TASKS if t.needs is Needs.NOTHING)
     print(
-        f"  {grantless}/{len(TASKS)} tasks need NO grant and NO connector; "
-        f"{sum(1 for t in TASKS if t.needs is Needs.HOST_GRANT)} need a folder "
-        f"grant; {sum(1 for t in TASKS if t.needs is Needs.CONNECTED_MCP)} need "
-        "a hand-connected MCP profile."
+        f"\n  {grantless}/{len(TASKS)} tasks need NO grant and NO connector; "
+        f"{sum(1 for t in TASKS if t.needs is Needs.CONNECTED_MCP)} needs a "
+        "hand-connected MCP profile."
     )
     return 0
 
@@ -821,6 +1004,14 @@ def compare() -> int:
         return 2
 
     keys = sorted(arms)
+    # Matched by task ID, never by list position. A report holds only the tasks
+    # its arm actually ran, and `HEAVY_TASKS` makes a one-row report ordinary —
+    # `HEAVY_TASKS=h6-bigread` is exactly how H6 should be validated cheaply.
+    # Indexing by position printed that single row under `h1-corpus`: every
+    # column populated, every column attributed to the wrong task.
+    by_id = {
+        key: {str(row.get("task")): row for row in arms[key]["tasks"]} for key in keys
+    }
     print(f"\n{'task':<18} " + " ".join(f"{('limit=' + k):<30}" for k in keys))
     print(
         f"{'':<18} " + " ".join(f"{'status    ok  llm tool     s':<30}" for _ in keys)
@@ -828,11 +1019,10 @@ def compare() -> int:
     done: dict[str, int] = {k: 0 for k in keys}
     correct: dict[str, int] = {k: 0 for k in keys}
     ran: dict[str, int] = {k: 0 for k in keys}
-    for index, task in enumerate(TASKS):
+    for task in TASKS:
         cells = []
         for key in keys:
-            rows = arms[key]["tasks"]
-            row = rows[index] if index < len(rows) else {}
+            row = by_id[key].get(task.task_id, {})
             if row.get("run_id"):
                 ran[key] += 1
             if row.get("status") == "completed":
@@ -840,7 +1030,10 @@ def compare() -> int:
             if row.get("outcome_ok"):
                 correct[key] += 1
             cells.append(
-                f"{str(row.get('status'))[:9]:<10}"
+                # "absent", not "None": this arm's report has no row for the
+                # task at all, which is what `HEAVY_TASKS` produces and is a
+                # different fact from a row that ran and reported nothing.
+                f"{(str(row.get('status')) if row else 'absent')[:9]:<10}"
                 f"{('Y' if row.get('outcome_ok') else '-' if row.get('run_id') else ' '):<3}"
                 f"{row.get('llm_calls', '-'):>4}{row.get('tool_calls', '-'):>5}"
                 f"{row.get('seconds', '-'):>7}"

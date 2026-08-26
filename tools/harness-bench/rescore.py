@@ -71,10 +71,34 @@ namespaced_tools        a connector tool DROPPED at load time for colliding
                         it. Zero namespaced tools with one connector attached
                         is therefore consistent with both "namespacing is
                         absent" and "no collision occurred".
-peak_result_tokens      a result that was OFFLOADED before assembly: it enters
-                        context as a small pointer, so the ledger sees the
-                        pointer and not the payload. A low peak can mean the
-                        cap held OR that offloading fired first.
+peak_result_tokens      a result that was OFFLOADED before assembly. An
+                        offloaded result is labelled `…context:offload_stub`,
+                        NOT `…conversation:tool_result`, so it is not in this
+                        max at all — `offloaded_results` is the companion that
+                        counts exactly those. This column is `None`, never 0,
+                        when no inline tool result was observed: a run with no
+                        tool result and a run whose results were all tiny are
+                        different facts and must not print the same number.
+offloaded_results       the PAYLOAD. The stub it counts is the bounded
+                        preview plus a `/large_tool_results/<sha256>`
+                        reference — the ledger records that the cap fired and
+                        cannot say how big the thing it caught was.
+                        `largest_offloaded_blob` is where the size lives.
+peak_stub_tokens        the same blind spot, one level down: it is the size of
+                        the STUB, which is bounded by construction, so it says
+                        nothing about what was offloaded.
+largest_offloaded_blob  which RUN wrote it. The object store is per-PROFILE,
+                        not per-run, so this is attributable to an arm only
+                        because each arm boots a fresh profile
+                        (`BENCH_REUSE_PROFILE=1` breaks that). It is also blind
+                        to a payload written by anything other than a tool
+                        offload that happens to share the store.
+memory_files            content. It reports each document's path and BYTE SIZE;
+                        the path segments are `safe_key` hashes, so size is the
+                        only legible signal — which is exactly what makes it
+                        H6's construction check. A file the agent grew to ~64KB
+                        and a file it under-grew to ~20KB are one `stat` apart,
+                        and no answer text can forge that.
 budget_notes            which tool exhausted, unless the segment label says.
 super_steps_estimate    everything a fit is blind to. It is
                         `6 + 4 * tool_invocations` from the measured fit in
@@ -127,6 +151,18 @@ TERMINAL_TOOL_STATUSES = frozenset({"completed", "failed", "cancelled"})
 #: budget middleware injects when a tool name is exhausted.
 TOOL_RESULT_LABEL = "agent_runtime.conversation:tool_result"
 BUDGET_NOTE_LABEL = "agent_runtime.capabilities:tool_budget_note"
+
+#: ``MessageContextOrigins.OFFLOAD_STUB`` — what a tool result becomes once
+#: ``ToolResultAdmissionAdapter`` decides it is too big to admit inline.
+#:
+#: This is a DIFFERENT label from ``TOOL_RESULT_LABEL``, and that is the whole
+#: reason this constant exists. `occupancy_shape` used to filter on the
+#: tool_result label alone, so the one event that proves the cap fired was
+#: invisible to it: a run whose big read was offloaded reported the peak of its
+#: remaining SMALL results and nothing else — a real number, correctly
+#: computed, answering a question nobody asked. H6 exists to cross this cap, so
+#: a scorer that cannot see the crossing makes the task pointless.
+OFFLOAD_STUB_LABEL = "agent_runtime.context:offload_stub"
 
 #: The measured super-step fit for THIS graph (RuntimeControlMiddleware + a
 #: subagent), from the comment on `ExecutionHyperparameters.recursion_limit`.
@@ -471,26 +507,47 @@ def occupancy_shape(rows: list[dict]) -> dict:
     occupancy row is written when the prompt is ASSEMBLED, so a model call that
     went on to emit a tool call the run never finished is still counted here.
     That is the exact case ``tool_rounds`` cannot see.
+
+    **The peaks start at ``None``, not 0.** A run that admitted no inline tool
+    result at all used to report ``peak_result_tokens: 0``, which is
+    indistinguishable from a run whose largest result was genuinely tiny — the
+    third appearance in this program of the defect its method notes open with,
+    and visible right now in ``runs/arm-500.json``, where every task carries a
+    peak of 0. A number that cannot be observed is returned as ``None`` and
+    printed as ``-``.
     """
 
-    peak_tokens = peak_bytes = 0
+    peak_tokens: int | None = None
+    peak_bytes: int | None = None
+    peak_stub: int | None = None
+    offloaded = 0
     budget_notes = 0
     for row in rows:
         for segment in (row.get("segments_json") or {}).get("segments", []):
             if not isinstance(segment, dict):
                 continue
             label = str(segment.get("label") or "")
+            tokens = int(segment.get("estimated_tokens") or 0)
             if label == TOOL_RESULT_LABEL:
-                peak_tokens = max(
-                    peak_tokens, int(segment.get("estimated_tokens") or 0)
-                )
-                peak_bytes = max(peak_bytes, int(segment.get("byte_count") or 0))
+                peak_tokens = max(peak_tokens or 0, tokens)
+                peak_bytes = max(peak_bytes or 0, int(segment.get("byte_count") or 0))
+            elif label == OFFLOAD_STUB_LABEL:
+                # The cap FIRED here. Counted separately from the inline peak
+                # because it answers a different question: not "how big did a
+                # result get" but "how often was one too big to admit".
+                offloaded += 1
+                peak_stub = max(peak_stub or 0, tokens)
             elif label == BUDGET_NOTE_LABEL:
                 budget_notes += 1
     return {
         "model_calls": len(rows),
         "peak_result_tokens": peak_tokens,
         "peak_result_bytes": peak_bytes,
+        # The load-bearing column for H6's claim. `outcome_ok` cannot carry it:
+        # H6's agent authors its own fixture, so it can answer the question from
+        # memory without the oversized read ever reaching it.
+        "offloaded_results": offloaded,
+        "peak_stub_tokens": peak_stub,
         # A run stopped by the per-tool-name budget and a run stopped by the
         # step ceiling both end early with work undone. Only this column and
         # `terminal_code` together tell them apart.
@@ -498,20 +555,55 @@ def occupancy_shape(rows: list[dict]) -> dict:
     }
 
 
-def memory_files(directory: Path) -> list[str]:
-    """What the agent left in ``/memories/`` — the finish state, checkable free.
+def memory_files(directory: Path) -> dict[str, int]:
+    """What the agent left in ``/memories/``, path → BYTE SIZE.
 
-    The grant-free heavy tasks write here, so this is how a completed run's
-    claim to have done the work is checked WITHOUT re-reading the transcript
-    and without another paid run.
+    The heavy tasks all write here, so this is how a completed run's claim to
+    have done the work is checked WITHOUT re-reading the transcript and without
+    another paid run.
+
+    Sizes, not just names, because of H6. Both path segments are ``safe_key``
+    hashes, so the names carry no information at all — but the size does, and it
+    is the ONE thing about H6 the model cannot forge. H6 asks the agent to grow
+    one document to roughly 64KB through four chained expansions; a document
+    that came out at ~20KB means an expansion was mis-transcribed and every
+    ``edit_file`` call still reported success. No answer text distinguishes
+    those two runs. One ``stat`` does.
     """
 
     root = directory / "agent-data" / "v1" / "memory"
     if not root.is_dir():
-        return []
-    return sorted(
-        path.relative_to(root).as_posix() for path in root.rglob("*") if path.is_file()
-    )
+        return {}
+    return {
+        path.relative_to(root).as_posix(): path.stat().st_size
+        for path in sorted(root.rglob("*"))
+        if path.is_file()
+    }
+
+
+def largest_offloaded_blob(directory: Path) -> int | None:
+    """Bytes of the biggest object in the content-addressed store, or ``None``.
+
+    ``FileStoreLayout.objects_dir`` is ``<root>/objects/sha256/<aa>/<sha>``, and
+    it is where an offloaded tool result's payload actually lands. The occupancy
+    ledger records only the STUB that replaced it, so without this the harness
+    can say the cap fired and cannot say what size tripped it.
+
+    ``None`` rather than 0 when the store is absent or empty, for the same
+    reason as the peaks above: "no object store on disk" and "an object store
+    holding a zero-byte file" are different facts.
+
+    Blind spot, stated because it decides how the number may be read: this is
+    per-PROFILE, not per-run. Attributing it to an arm is only valid because
+    each arm boots a fresh profile — ``BENCH_REUSE_PROFILE=1`` breaks that, and
+    so would any second run against the same userData dir.
+    """
+
+    root = directory / "agent-data" / "v1" / "objects" / "sha256"
+    if not root.is_dir():
+        return None
+    sizes = [path.stat().st_size for path in root.rglob("*") if path.is_file()]
+    return max(sizes) if sizes else None
 
 
 def score(arm: str) -> dict | None:
@@ -590,6 +682,7 @@ def score(arm: str) -> dict | None:
             )
     report["session_dir"] = str(directory)
     report["memory_files"] = memory_files(directory)
+    report["largest_offloaded_blob"] = largest_offloaded_blob(directory)
     # Trailing newline: these reports are committed as evidence, and without it
     # `end-of-file-fixer` and `prettier` rewrite the file on every commit — so
     # each rescore lands a diff that is pure whitespace churn over real numbers.
@@ -612,15 +705,24 @@ def main() -> int:
     print(
         f"\n{'arm':<8}{'task':<18}{'status':<11}{'ok':<4}{'calls':>6}{'orph':>5}"
         f"{'par':>4}{'dlg':>4}{'mdl':>5}{'~steps':>7}{'in':>9}{'cached':>9}"
-        f"{'out':>7}{'peakres':>8}  failures"
+        f"{'out':>7}{'peakres':>8}{'offl':>6}  failures"
     )
-    peak_rounds = peak_steps = peak_result = 0
+    peak_rounds = peak_steps = 0
+    #: ``None`` until an inline tool result is actually seen. Starting at 0 would
+    #: print a peak of 0 for a set in which every result was OFFLOADED — the cap
+    #: firing on every read, reported as no result ever arriving.
+    peak_result: int | None = None
+    offloaded_total = 0
     for report in scored:
         arm = report["recursion_limit"]
         for task in scored_tasks(report):
             peak_rounds = max(peak_rounds, task["tool_rounds"])
             peak_steps = max(peak_steps, task["super_steps_estimate"])
-            peak_result = max(peak_result, task["peak_result_tokens"])
+            task_peak = task["peak_result_tokens"]
+            if task_peak is not None:
+                peak_result = max(peak_result or 0, task_peak)
+            offloaded_total += task.get("offloaded_results") or 0
+            ok = task.get("outcome_ok")
             print(
                 f"{arm:<8}{task['task']:<18}{str(task['status']):<11}"
                 f"{ok_cell(task.get('outcome_ok')):<4}"
@@ -628,7 +730,10 @@ def main() -> int:
                 f"{task['peak_parallel']:>4}{task['delegated_rounds']:>4}"
                 f"{task['model_calls']:>5}{task['super_steps_estimate']:>7}"
                 f"{task['input_tokens']:>9}{task['cached_input_tokens']:>9}"
-                f"{task['output_tokens']:>7}{task['peak_result_tokens']:>8}  "
+                f"{task['output_tokens']:>7}"
+                # `-`, never `0`: this column has no observation to report.
+                f"{('-' if task_peak is None else task_peak):>8}"
+                f"{task.get('offloaded_results', 0):>6}  "
                 f"{','.join(task['tool_failures']) or '-'}"
             )
 
@@ -668,7 +773,29 @@ def main() -> int:
         f"  peak ESTIMATED super-steps in any task:  {peak_steps}  "
         f"(fit: {SUPER_STEP_BASE} + {SUPER_STEP_PER_ROUND}/round)"
     )
-    print(f"  peak tool result entering context:       {peak_result} tokens")
+    print(
+        "  peak tool result entering context:       "
+        + (
+            "not observed (no inline tool result in any scored run)"
+            if peak_result is None
+            else f"{peak_result} tokens"
+        )
+    )
+    print(
+        f"  results OFFLOADED before the model saw them: {offloaded_total}"
+        + (
+            "  → the pre-model cap never fired; nothing here measures it"
+            if offloaded_total == 0
+            else "  → the pre-model cap FIRED. The peak above is the largest"
+            " result that got THROUGH it, not the largest produced."
+        )
+    )
+    for report in scored:
+        blob = report.get("largest_offloaded_blob")
+        print(
+            f"    limit={report['recursion_limit']}: largest object in the store "
+            + ("none written" if blob is None else f"{blob} bytes")
+        )
 
     orphans = [
         (r["recursion_limit"], t["task"], t["orphaned_rounds"])

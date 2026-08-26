@@ -14,15 +14,26 @@ Three classes of check:
    tool name than ``execution.tool_call_budget`` measures the budget cutting it
    off. All three produce a run that completes, spends money, and answers a
    different question than the one asked.
+   A fourth, added with the rebased ``h6-bigread``: a fixture the AGENT builds
+   has to be sized so the thing it is supposed to cross is actually crossed. H6
+   makes two reads straddle the pre-model tool-result cap — one admitted inline,
+   the next offloaded — and if either lands on the wrong side the task runs, the
+   money is spent, and the cap is measured from one direction only.
 2. **The scorer sees what it says it sees.** The store writes one row per state
    TRANSITION, so counting rows is not counting calls; a call closed by the
-   blanket reconciler is terminal with an empty ``result_summary``; and
-   ``run_id``-less rows must never be filled with zeros. Each is checked against
-   a synthetic store here rather than against a real one, so the check does not
-   depend on a session directory existing.
-3. **The literals held here still match the service.** ``TOOL_CALL_BUDGET`` and
-   the super-step fit are copied into the harness because a tool must not import
-   a service's ``src``. Copies drift; this asserts they have not.
+   blanket reconciler is terminal with an empty ``result_summary``; an OFFLOADED
+   result carries a different label and used to be dropped entirely; and
+   ``run_id``-less rows must never be filled with zeros — nor must an
+   unobservable peak, which is now ``None``. Each is checked against a synthetic
+   store here rather than against a real one, so the check does not depend on a
+   session directory existing.
+3. **The literals held here still match the service.** ``TOOL_CALL_BUDGET``,
+   ``INLINE_TOKEN_BUDGET``, ``CHARS_PER_TOKEN_ESTIMATE`` and the super-step fit
+   are copied into the harness because a tool must not import a service's
+   ``src``. Copies drift; this asserts they have not. The one constant that
+   CANNOT be pinned here is ``DEEPAGENTS_READ_EVICT_TOKENS``: it lives in a
+   site-package, so a deepagents bump could move it under H6's second read and
+   quietly make the library's truncation the thing H6 measures.
 
 Run with the repo-gates set:
 
@@ -185,37 +196,150 @@ def test_the_expected_answers_are_derived_from_the_corpus_not_typed(heavy):
     )
 
 
-def test_the_h6_ledger_is_long_enough_to_force_paging(heavy):
-    """Under `reads.default_line_limit` the file fits in one read and proves nothing."""
+def test_h6_is_grant_free_and_lives_on_the_memory_route(heavy):
+    """H6 must need NOTHING, or it goes back to never being measured.
 
-    assert heavy.LEDGER_ROWS > 2000
-    lines = heavy.ledger_lines()
-    assert len(lines) == heavy.LEDGER_ROWS + 1, "header row missing"
-    expected = sum(
-        int(line.split(",")[2]) for line in lines[1:] if line.split(",")[1] == "EMEA"
+    Its predecessor read a host CSV behind a folder grant that can only be minted
+    through a native picker. On a host that denies Accessibility that lane cannot
+    be driven at all, so every arm ever run recorded `skipped` for H6 and the
+    tool-result cap stayed unmeasured while a `peak 68 of 8,000` sat in the
+    report looking like a measurement.
+
+    The three structural traps are checked together here because H6 is the task
+    that would trip all three: it must address `/memories/`, it must not ask for
+    grep or glob there (both answer EMPTY on that backend), and it must keep
+    every tool name under the per-name budget.
+    """
+
+    task = next(t for t in heavy.TASKS if t.task_id == "h6-bigread")
+    assert task.needs is heavy.Needs.NOTHING, (
+        "h6 declares a prerequisite again; it will record `skipped` and the cap "
+        "will go back to being unmeasured"
     )
-    assert heavy.ledger_emea_total() == expected
+    assert heavy.WIDE_PATH.split("/")[1] in heavy.VIRTUAL_ROOTS
+    assert heavy.WIDE_PATH in task.prompt
+
+    # Every absolute path the prompt names has to be a virtual root. A
+    # host-shaped one is refused ungranted, which is a refusal wearing the cap's
+    # name.
+    for path in re.findall(
+        r"(?<![\w/]) /[A-Za-z0-9_.-]+", task.prompt.replace(" /", "  /")
+    ):
+        head = path.strip().lstrip("/").split("/")[0]
+        assert head in heavy.VIRTUAL_ROOTS, f"h6 names host-absolute {path.strip()}"
+
+    assert "do not use grep or glob" in task.prompt.lower(), (
+        "h6 reads a large file; without this line a model may reach for grep, "
+        "which returns an EMPTY RESULT on FileMemoryBackend rather than an error"
+    )
+    for name, count in task.planned_calls.items():
+        assert count < heavy.TOOL_CALL_BUDGET, (
+            f"h6 plans {name} x{count} against a budget of "
+            f"{heavy.TOOL_CALL_BUDGET}; it would measure the budget, not the cap"
+        )
+
+
+def test_the_wide_fixture_straddles_the_inline_budget(heavy):
+    """One read under the cap, the next over it — or H6 measures one side only.
+
+    Asserted as HEADROOM rather than as the measured numbers. What the admission
+    adapter actually weighs is deepagents' line-numbered RENDER of the file, not
+    the raw file `wide_content` returns, and the render only ever adds characters
+    (a gutter per line, a continuation row per 5,000 chars). Pinning the exact
+    measured token count would turn this gate into a transcription of one run
+    that reds on any rendering change; pinning generous margins keeps it a
+    statement about the design.
+    """
+
+    under = heavy.wide_tokens(heavy.WIDE_READ_AFTER)
+    over = heavy.wide_tokens(heavy.WIDE_EXPANSIONS)
+
+    assert under <= 0.6 * heavy.INLINE_TOKEN_BUDGET, (
+        f"the first read is {under} est tokens against a cap of "
+        f"{heavy.INLINE_TOKEN_BUDGET}; too close to offload once the "
+        "line-number render adds to it, and H6 would then measure two "
+        "offloads rather than a straddle"
+    )
+    assert over >= 1.5 * heavy.INLINE_TOKEN_BUDGET, (
+        f"the second read is only {over} est tokens; it must clear the cap by "
+        "a margin no rendering difference can close"
+    )
+    # And the cap under test must be OURS. Past deepagents' own read truncation
+    # the model gets a clipped result for a reason that has nothing to do with
+    # `ToolResultAdmissionAdapter`, and H6 would silently measure the library.
+    assert over < heavy.DEEPAGENTS_READ_EVICT_TOKENS, (
+        f"the second read is {over} est tokens, at or past deepagents' own "
+        f"{heavy.DEEPAGENTS_READ_EVICT_TOKENS}-token read truncation"
+    )
+    # The declared answer must be derivable from the rows, not typed.
+    assert heavy.WIDE_HOURS == sum(hours for _, _, hours in heavy.WIDE_ROWS)
+    assert heavy.wide_seed().count(heavy.wide_marker(1)) == len(heavy.WIDE_ROWS)
+
+
+def test_the_marker_chain_refuses_an_out_of_order_edit(heavy):
+    """The one property that stops a batched edit from silently under-growing.
+
+    Haiku batched twelve tool calls into a single assistant turn in the §8 arms,
+    and `FileMemoryBackend.edit` is an unlocked read-modify-write. Four `X -> XX`
+    calls issued together would all read the same base, all write 2x, and all
+    report SUCCESS — leaving a file one-eighth the intended size under four green
+    tool cards, which is precisely the empty-success shape this suite exists to
+    catch.
+
+    Chaining the markers makes step k+1's `old_string` absent until step k has
+    committed, so the backend answers `"old_string was not found in the memory
+    file."` — loud, and retryable within the six spare `edit_file` calls the
+    budget leaves. This asserts the property the defence rests on.
+    """
+
+    seed = heavy.wide_seed()
+    for step in range(2, heavy.WIDE_EXPANSIONS + 2):
+        assert heavy.wide_marker(step) not in seed, (
+            f"marker {step} is already present in the seed, so edit {step} could "
+            "run out of order and the chain no longer forces serialisation"
+        )
+    # Each step must consume the previous marker entirely and leave only the next.
+    for step in range(1, heavy.WIDE_EXPANSIONS + 1):
+        after = heavy.wide_content(step)
+        assert heavy.wide_marker(step) not in after
+        assert (
+            after.count(heavy.wide_marker(step + 1))
+            == len(heavy.WIDE_ROWS) * heavy.WIDE_FACTOR**step
+        )
+    # Growth is a real multiplication, not a rounding artefact of the estimate.
+    assert heavy.wide_tokens(heavy.WIDE_EXPANSIONS) > heavy.wide_tokens(
+        heavy.WIDE_READ_AFTER
+    ) * (heavy.WIDE_FACTOR - 1)
 
 
 def test_a_task_needing_a_prerequisite_never_silently_becomes_a_pass(heavy):
-    """An absent grant/connector must record under the task's OWN id.
+    """An absent connector must record under the task's OWN id.
 
-    A set of seven tasks that prints five rows has quietly changed what it
+    A set of seven tasks that prints six rows has quietly changed what it
     measured. `Arm.run_task` returns a row either way, and the row must not be
     scoreable as a completed run.
+
+    Only `CONNECTED_MCP` remains gated: H6 was rebased off the folder grant and
+    `Needs.HOST_GRANT` is gone with it. That makes this the LAST gated lane in
+    the set, which is a reason to guard it harder, not a reason to relax — the
+    fail-closed rule below is the one that stops H7 from measuring MCP
+    namespacing on a profile with no connectors and reporting a number.
     """
 
     arm = heavy.Arm.__new__(heavy.Arm)
-    arm.fixtures = {}
     arm.available = set()
-    arm.blocked = {heavy.Needs.HOST_GRANT: "no accessibility permission"}
-    grant_task = next(t for t in heavy.TASKS if t.needs is heavy.Needs.HOST_GRANT)
+    arm.blocked = {}
     mcp_task = next(t for t in heavy.TASKS if t.needs is heavy.Needs.CONNECTED_MCP)
-    assert arm.prerequisite(grant_task) == "no accessibility permission"
     # No blocked entry and nothing confirmed: the MCP task still cannot run and
     # must SAY so. Deriving availability from the absence of a blocked entry
     # would promote it to runnable whenever setup did not reach its check.
-    assert arm.prerequisite(mcp_task) is not None
+    reason = arm.prerequisite(mcp_task)
+    assert reason is not None and "never confirmed present" in reason
+
+    # A recorded reason is reported verbatim rather than replaced by the generic.
+    arm.blocked[heavy.Needs.CONNECTED_MCP] = "this profile has 0"
+    assert arm.prerequisite(mcp_task) == "this profile has 0"
+
     plain = next(t for t in heavy.TASKS if t.needs is heavy.Needs.NOTHING)
     assert arm.prerequisite(plain) is None
 
@@ -223,37 +347,27 @@ def test_a_task_needing_a_prerequisite_never_silently_becomes_a_pass(heavy):
     # reachable, or the guard has merely disabled the measurement.
     arm.available.add(heavy.Needs.CONNECTED_MCP)
     assert arm.prerequisite(mcp_task) is None
-    arm.available.add(heavy.Needs.HOST_GRANT)
-    assert "fixture keys absent" in str(arm.prerequisite(grant_task))
-    arm.fixtures = {key: "x" for key in grant_task.fixture_keys}
-    assert arm.prerequisite(grant_task) is None
 
 
-def test_the_fixture_substitution_survives_both_prompt_and_expectation(heavy):
-    """The one code path that only executes in a PAID run, exercised offline.
+def test_no_prompt_is_run_through_str_format(heavy):
+    """The substitution step is GONE, and no prompt may quietly need it back.
 
-    `h6-bigread` is the only task carrying `{ledger}` / `{emea}` placeholders,
-    and they are substituted mid-arm — after the boot, after the key, after the
-    grant, after money has been spent. A `KeyError` or a stray brace there fails
-    at the worst possible moment, so it is checked here for free.
+    `h6-bigread` used to carry `{ledger}` / `{emea}` placeholders substituted
+    mid-arm, after the boot, after the key, after money had been spent. H6 now
+    builds its own fixture, so no task needs a run-time value and `Arm.run_task`
+    sends `task.prompt` verbatim.
+
+    That removal is what this asserts: a prompt reintroducing a brace pair would
+    be sent literally to the model rather than substituted — a silent wrong
+    prompt in a paid run, not a crash.
     """
 
-    task = next(t for t in heavy.TASKS if t.fixture_keys)
-    fixtures = {"ledger": "/tmp/heavy-bench-x/ledger.csv", "emea": "62078"}
-    prompt = task.prompt.format(**fixtures)
-    assert "{" not in prompt, "an unsubstituted placeholder survived into the prompt"
-    assert fixtures["ledger"] in prompt
-    pattern = re.compile(task.expect.pattern.format(**fixtures), task.expect.flags)
-    assert pattern.search("EMEA=62078")
-    assert not pattern.search("EMEA=1")
-
-    # And the tasks that declare NO fixture keys must never be run through
-    # `.format` — a future regex quantifier like `\\d{2}` would raise there.
-    for other in heavy.TASKS:
-        if not other.fixture_keys:
-            assert "{" not in other.prompt or "}" not in other.prompt, (
-                f"{other.task_id} carries braces but declares no fixture keys"
-            )
+    assert not hasattr(heavy.HeavyTask, "fixture_keys")
+    for task in heavy.TASKS:
+        assert "{" not in task.prompt and "}" not in task.prompt, (
+            f"{task.task_id} carries braces, but nothing substitutes them any "
+            "more — it would reach the model with the braces intact"
+        )
 
 
 def test_pinning_an_unknown_task_id_fails_loudly(heavy, monkeypatch):
@@ -428,6 +542,87 @@ def test_occupancy_reports_model_calls_result_peak_and_budget_notes(rescore):
     assert shape["peak_result_tokens"] == 1581
     assert shape["peak_result_bytes"] == 4722
     assert shape["budget_notes"] == 1
+    assert shape["offloaded_results"] == 0, "nothing here crossed the cap"
+
+
+def test_an_offloaded_result_is_reported_not_read_as_a_small_one(rescore):
+    """The cap firing carries a DIFFERENT label, and used to be invisible here.
+
+    `ToolResultAdmissionAdapter` replaces an oversized result with a bounded stub
+    labelled `agent_runtime.context:offload_stub`, not
+    `agent_runtime.conversation:tool_result`. `occupancy_shape` filtered on the
+    tool_result label alone, so the single event proving the cap fired was
+    dropped and the run reported the peak of its remaining small results — a
+    real number, correctly computed, answering a question nobody asked. h6-bigread
+    exists to cross this cap, so a scorer blind to the crossing makes it
+    pointless.
+    """
+
+    rows = [
+        {
+            "segments_json": {
+                "segments": [
+                    {
+                        "label": rescore.TOOL_RESULT_LABEL,
+                        "estimated_tokens": 4029,
+                        "byte_count": 16113,
+                    }
+                ]
+            }
+        },
+        {
+            "segments_json": {
+                "segments": [
+                    {
+                        "label": rescore.OFFLOAD_STUB_LABEL,
+                        "estimated_tokens": 558,
+                        "byte_count": 2233,
+                    }
+                ]
+            }
+        },
+    ]
+    shape = rescore.occupancy_shape(rows)
+    assert shape["offloaded_results"] == 1, "the cap fired and must be counted"
+    assert shape["peak_stub_tokens"] == 558
+    # The stub must NOT enter the inline peak: it would report 558 tokens for a
+    # result that was really ~15,949, which understates the very thing it is
+    # supposed to bound.
+    assert shape["peak_result_tokens"] == 4029
+
+
+def test_an_unobserved_result_peak_is_none_and_never_zero(rescore):
+    """The third instance of "0 means not measured" in this program.
+
+    A run with no inline tool result segment used to report
+    `peak_result_tokens: 0`, indistinguishable from a run whose largest result
+    was genuinely tiny — and `runs/arm-500.json` carries exactly that zero on
+    every task today. Worse after this change: a run whose every result was
+    OFFLOADED would report a peak of 0, i.e. the cap firing on every single read
+    rendered as no result ever arriving.
+    """
+
+    empty = rescore.occupancy_shape([{"segments_json": {"segments": []}}])
+    assert empty["peak_result_tokens"] is None
+    assert empty["peak_result_bytes"] is None
+    assert empty["peak_stub_tokens"] is None
+    assert empty["model_calls"] == 1, "the model call itself WAS observed"
+
+    only_offloaded = rescore.occupancy_shape(
+        [
+            {
+                "segments_json": {
+                    "segments": [
+                        {"label": rescore.OFFLOAD_STUB_LABEL, "estimated_tokens": 558}
+                    ]
+                }
+            }
+        ]
+    )
+    assert only_offloaded["peak_result_tokens"] is None, (
+        "every result was offloaded; reporting 0 would read as 'no results'"
+    )
+    assert only_offloaded["offloaded_results"] == 1
 
 
 def test_a_task_that_never_ran_is_excluded_rather_than_zeroed(rescore):
@@ -457,6 +652,58 @@ def test_tool_call_budget_literal_matches_the_shipped_hyperparameter(heavy):
         f"heavy_tasks_ab.TOOL_CALL_BUDGET is {heavy.TOOL_CALL_BUDGET} but the "
         f"service ships {shipped}; the planned-calls guard is now wrong"
     )
+
+
+def test_the_inline_token_budget_literal_matches_the_shipped_adapter(heavy):
+    """H6's whole design is a size, so the number it is sized against must be real.
+
+    Read as TEXT, never imported — a tool must not import a service's `src`, and
+    importing would also drag the whole runtime into a suite that is meant to be
+    stdlib-only and instant.
+
+    This exists because the number was already wrong in prose. FINDINGS.md §5 and
+    §8 both quote the tool-result cap as **8,192**, which is
+    `context.model_result_preview_bytes` — a different constant, in bytes, read
+    only by `runtime_worker/mcp_operation_storage.py`, never on a `read_file`
+    path. The cap that actually bounds a result before the model sees it is 8,000
+    ESTIMATED tokens at 4 chars each, i.e. 32,000 characters. Sizing a fixture
+    against 8,192 bytes instead would be off by 4x and would land H6's intended
+    inline read on the wrong side of the threshold.
+    """
+
+    admission = (
+        REPO_ROOT
+        / "services"
+        / "ai-backend"
+        / "src"
+        / "agent_runtime"
+        / "context"
+        / "tool_result_admission.py"
+    ).read_text(encoding="utf-8")
+    assert (
+        f"DEFAULT_INLINE_TOKEN_BUDGET = {heavy.INLINE_TOKEN_BUDGET:_}" in admission
+    ), (
+        f"heavy_tasks_ab.INLINE_TOKEN_BUDGET is {heavy.INLINE_TOKEN_BUDGET}, but "
+        "ToolResultAdmissionAdapter no longer ships that value; h6-bigread's "
+        "fixture is now sized against a cap that does not exist"
+    )
+
+    budget = (
+        REPO_ROOT
+        / "services"
+        / "ai-backend"
+        / "src"
+        / "agent_runtime"
+        / "context"
+        / "memory"
+        / "token_budget.py"
+    ).read_text(encoding="utf-8")
+    assert f"CHARS_PER_TOKEN_ESTIMATE = {heavy.CHARS_PER_TOKEN_ESTIMATE}" in budget, (
+        "the chars-per-token estimate the fixture sizing depends on has moved"
+    )
+
+    # The number the docs got wrong must not creep back in as the cap.
+    assert heavy.INLINE_TOKEN_BUDGET != 8192
 
 
 def test_the_recursion_limit_the_arms_move_is_the_shipped_default(heavy):

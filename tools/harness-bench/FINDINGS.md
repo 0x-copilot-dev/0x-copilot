@@ -166,7 +166,7 @@ how far short they fall:
 ```
 peak COMPLETED tool rounds in any task: 3      (4 invocations)
 peak ESTIMATED super-steps in any task: 22     (fit: 6 + 4/round, ceiling 25)
-peak tool result entering context:      122 tokens   (the cap is 8,192)
+peak tool result entering context:      122 tokens   (the cap is 8,000)
 delegated rounds, in any task:          0
 peak parallel tool calls, in any task:  1
 MCP tool names with an mcp__ prefix:    0
@@ -180,11 +180,11 @@ prediction, and it is the reason the fit is worth carrying.
 So **delegation, parallel execution, the tool-result cap and MCP namespacing are
 all still unmeasured** — not because they failed, but because nothing in the set
 touches them. `heavy_tasks_ab.py` is the task set built to reach them: seven
-tasks, five of which need no folder grant and no connector, each declaring what
+tasks, six of which need no folder grant and no connector, each declaring what
 it needs from the machine, what it plans to spend per tool _name_, and a regex
 its final answer must match. `--plan` prints all of that for free.
 
-Two design constraints came out of reading the runtime rather than guessing:
+Three design constraints came out of reading the runtime rather than guessing:
 
 - `execution.tool_call_budget` is **10 calls of one tool name per run**. A task
   planning more measures the budget cutting the chain off, which looks identical
@@ -195,6 +195,42 @@ Two design constraints came out of reading the runtime rather than guessing:
   `FileMemoryBackend` answers both with an **empty result, not an error**, which
   is the same green-tick-over-nothing shape as the original `ls ~/Downloads`
   defect.
+- **`FileMemoryBackend.read` accepts `offset` and `limit` and uses neither.**
+  It returns the whole document on every call
+  (`runtime_adapters/file/agent_state_store.py`, the params are bound and never
+  referenced). So on the `/memories/` route there is no paging to measure and
+  `reads.default_line_limit` (2000) is unreachable. A prompt that says "page
+  through it with the offset argument" is asking for something that cannot
+  happen, and would grade the model down for it.
+
+#### One claim was LOST when `h6-bigread` moved to `/memories/`, and it is not being dropped quietly
+
+H6 used to claim two things: "a >2000-line read pages correctly **and** pushes
+the tool-result cap". Rebased on `/memories/` so it needs no folder grant, it
+buys the cap and loses the paging half — to the constraint immediately above.
+So:
+
+| claim                               | status                                                                     |
+| ----------------------------------- | -------------------------------------------------------------------------- |
+| pre-model tool-result cap           | now reachable, grant-free — see §8                                         |
+| `reads.default_line_limit` paging   | **newly unmeasured**: the memory backend ignores `offset`/`limit` entirely |
+| host-path refusal / workspace reads | **newly unmeasured**: nothing in the set touches a host path any more      |
+
+Recording it rather than deleting the row is the point. A set of seven tasks
+that silently stops claiming something it used to claim is the same pathology
+`Needs` exists to prevent — it just moves from the row count to the claim
+column. Measuring paging again needs a route whose `read` honours `offset`,
+which the workspace backend does and the memory backend does not.
+
+**The `Needs.HOST_GRANT` lane was removed with it.** Its grant could only be
+minted through the app's own NATIVE folder picker, this host denies the
+controlling process Accessibility, and so across every arm the harness has run
+that lane produced a `skipped` row and never once a measurement. Bringing it
+back costs the enum member, a `fixture_keys` field on `HeavyTask`, the
+substitution branch in `Arm.run_task`, the `_workspace_lib.attach_folder` call —
+all four are in this file's git history — plus a host that grants Accessibility.
+It is not free to restore, and it was not free to keep: a mechanism nothing
+exercises is a mechanism nobody knows still works.
 
 ### The scorer re-derived finding 2 without being told it
 
@@ -654,9 +690,12 @@ and then recorded that no arm had ever been driven. Both arms are now run.
 `claude-haiku-4-5` via `COPILOT_JOURNEY_MODEL` — the earlier passes silently used
 whatever the app defaulted to, which was `claude-opus-4-5`, the most expensive
 model in the catalog, for a benchmark that writes six files. Task set pinned to
-the five that declare `Needs.NOTHING`, because `h6-bigread` needs a folder grant
-that cannot be driven on this host and `h7-mcp-namespace` needs two hand-connected
-MCP servers. Both arms: same model, same tasks, same order, own process.
+the five that declared `Needs.NOTHING` **at the time of this run** — `h6-bigread`
+then needed a folder grant that cannot be driven on this host, and
+`h7-mcp-namespace` needs two hand-connected MCP servers. Both arms: same model,
+same tasks, same order, own process. (H6 has since been rebased onto
+`/memories/` and needs nothing; the arms below predate that, which is exactly
+why their tool-result-cap row is empty.)
 
 ```
 arm 25 : 5/5 completed, 4/5 correct, 81,330 listed input, $0.0119
@@ -697,12 +736,85 @@ this set, the ceiling raise §1 paid for is not the constraint that matters.
 | per-tool-name budget | unmeasured    | **binds** — 6 `tool_budget_exceeded` rows |
 | delegation           | 0 in any task | **6 → 21** delegated rounds (`h4`)        |
 | parallel execution   | peak 1        | **peak 12** parallel calls                |
-| tool-result cap      | unmeasured    | still unmeasured — peak 68 of 8,192       |
+| tool-result cap      | unmeasured    | reachable but NOT YET RUN — see below     |
 | MCP namespacing      | unmeasured    | still unmeasured — 0 servers connected    |
 
 The two that remain unmeasured are the two whose tasks were excluded, and the
 scorer says so itself rather than reporting a zero: _"zero namespaced names on a
 profile with no connected server is NOT evidence either way."_
+
+#### The tool-result cap: the number in this table's first draft was the wrong constant
+
+That row originally read _"still unmeasured — peak 68 of 8,192"_. Two things
+were wrong with it and both are worth writing down.
+
+**8,192 is not the cap.** It is `context.model_result_preview_bytes`, in bytes,
+read in exactly one place — `runtime_worker/mcp_operation_storage.py` — and it
+never touches a `read_file` result. The cap that actually bounds a tool result
+before the model sees it is `ToolResultAdmissionAdapter.DEFAULT_INLINE_TOKEN_BUDGET`
+= **8,000 estimated tokens** at `ceil(len/4)` chars each, i.e. 32,000 characters,
+applied by `ToolBudgetGuard.admit_model_visible_result` via
+`RuntimeToolControlMiddleware`, wired on the run path in
+`runtime_worker/handlers/run.py`. Sizing a fixture against 8,192 _bytes_ rather
+than 8,000 _tokens_ is a 4x error — enough to land an intended-inline read on the
+wrong side of the threshold and invert what the task measures. `heavy_tasks_ab.py`
+now holds `INLINE_TOKEN_BUDGET` with the confusion written on it, and a gate test
+reads the literal out of the shipped adapter as text.
+
+**"peak 68" was a number from a task that never ran.** `h6-bigread` needed a
+folder grant this host cannot mint, so it recorded `skipped` in both arms; 68 is
+the largest result of the five _other_ tasks, and the cap was never approached by
+anything. H6 is now rebased on `/memories/` and needs nothing — it writes its own
+fixture, which also makes it the one task in the set valid pinned alone
+(`HEAVY_TASKS=h6-bigread`).
+
+Measured offline against the shipped adapter and deepagents' real
+`format_content_with_line_numbers`, the two reads straddle the cap:
+
+```
+after edit 3:  16,113 rendered chars =  4,029 est tokens ( 50% of 8,000) -> INLINE   16,113 chars reach the model
+after edit 4:  63,793 rendered chars = 15,949 est tokens (199% of 8,000) -> OFFLOAD   2,233-char stub
+```
+
+The inline read carries all eight `part-NN owner=X hours=N` rows, so `HOURS=44`
+is answerable from it. The offloaded read returns the header _"Oversized tool
+result offloaded before model admission."_, a `/large_tool_results/<sha256>`
+reference and a preview clipped to 2,000 characters — which is part of **line
+one** — so the same question is not answerable from it. One task, both sides.
+63,793 also sits ~20% under deepagents' own 80,000-char read truncation, so the
+cap under test is ours and not the library's.
+
+**Two things `outcome_ok` cannot tell you about this task**, both now in its
+docstring and both answered by columns instead:
+
+- The agent **authors** the fixture, so it can emit `HOURS=44` from memory
+  without either read reaching it. A green H6 is consistent with the big result
+  never entering context. `offloaded_results` (new in `rescore.py`) is what says
+  the cap fired.
+- `SECOND=FULL` has three causes the answer text cannot separate: the staged
+  runtime has no admission wiring, the model mis-transcribed an expansion (three
+  copies instead of four leaves the file inline at ~20KB with every call
+  reporting success), or the model simply answered wrongly. The on-disk memory
+  document's **byte size** separates the middle one from the other two, which is
+  why `memory_files` now reports sizes.
+
+`rescore.py` needed the offload column for any of this to be visible: an
+offloaded result is labelled `agent_runtime.context:offload_stub`, **not**
+`agent_runtime.conversation:tool_result`, and `occupancy_shape` filtered on the
+latter alone. Shipped as-is, H6's cap-crossing read would have been dropped and
+the report would have shown the peak of the remaining small results — a real
+number, correctly computed, answering a question nobody asked.
+
+While fixing that, the same function's `peak_tokens = peak_bytes = 0` was
+corrected to `None`. A run with no inline tool result reported `0`,
+indistinguishable from one whose results were genuinely tiny — the **third**
+appearance of the defect these method notes open with, and still visible in
+`runs/arm-500.json`, where every task carries a peak of 0.
+
+**Not yet run against a model.** The design is verified offline — `--plan` prints
+the straddle for free, and 24 gate tests cover it, each mutation-checked. Per §5's
+own rule: re-stage from the tree under test, validate with
+`HEAVY_TASKS=h6-bigread` (one task, well under a minute), then pay for the arms.
 
 ### What this does NOT establish
 
