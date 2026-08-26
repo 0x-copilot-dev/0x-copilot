@@ -450,6 +450,18 @@ export function ThreadCanvas(props: ThreadCanvasProps): ReactElement {
     () => (surfacesV2On ? (provenanceById.get(activeUri) ?? null) : null),
     [surfacesV2On, activeUri, provenanceById],
   );
+  // Same identity, same lookup: a surface's tab URI IS its `surface_id`, which
+  // is the key the projector folds `surface_spec_requested` under. Read off the
+  // ALREADY-COMPUTED `projection.state` rather than calling `project(events)`
+  // again — a second pass over the same envelopes is the one thing this
+  // module's header forbids.
+  const activeSpecGeneration = useMemo(
+    () =>
+      surfacesV2On
+        ? (projection.state.surfaceSpecGeneration.get(activeUri) ?? null)
+        : null,
+    [surfacesV2On, activeUri, projection.state],
+  );
   // Is the active tab a ledger surface at all? The strip also carries artifact,
   // receipt, effect-stage and legacy-replay URIs, and the two v2-only controls
   // below (tier toggle, "Suggest a shape") must not offer themselves over one.
@@ -484,6 +496,19 @@ export function ThreadCanvas(props: ThreadCanvasProps): ReactElement {
   // React reconciliation NEVER unmounts the underlying components.
   // - Studio: surface + chat + swimlanes + mini-timeline
   // - Focus:  chat (with focus-tabs view) + mini-timeline; surface is hidden
+  //
+  // THESE TWO ARE FOCUS'S IDENTITY, NOT A SUBTRACTION — and the distinction is
+  // the whole reason Focus was reported as "I can't see anything". Dropping the
+  // surface column and the swimlanes is what MAKES Focus the single-column
+  // reading mode: the run's work is meant to arrive in the transcript instead
+  // (inline artifact cards, the tool card's own file-diff body), not to
+  // disappear. So the rule is a one-way street: a COLUMN may be mode-gated
+  // here, transcript CONTENT may not — `TcChat`'s `MessageListBody` no longer
+  // receives `mode` at all, precisely so a future gate cannot be added quietly.
+  //
+  // Restoring either flag to Focus would not fix an empty-looking Focus; it
+  // would just make Focus into Studio with extra steps, which is the state the
+  // mode switch already exists to leave.
   const showSurfaceColumn = mode === "studio";
   const showSwimlanes = mode === "studio" && runId !== null;
   // The mini-timeline is PERMANENT chrome in both modes — never gate it.
@@ -568,6 +593,7 @@ export function ThreadCanvas(props: ThreadCanvasProps): ReactElement {
               <TcSurfaceFrame
                 provenance={activeProvenance}
                 rawPayload={surfaceState}
+                specGeneration={activeSpecGeneration}
                 onCopyText={onCopyText}
                 onSaveFile={onSaveFile}
               >

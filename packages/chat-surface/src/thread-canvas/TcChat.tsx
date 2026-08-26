@@ -869,9 +869,14 @@ export function TcChat(props: TcChatProps): ReactElement {
   const filteredToolCalls = filterToolCallsByScrub(toolCalls, scrub.scrubbedTo);
 
   // Focus and Studio render the SAME transcript + composer (single-mount,
-  // FR-3.9): the streamed reply, the ghost banner, the approvals and the
-  // composer are all shared. The only thing left that the mode changes here is
-  // the wrapper — Focus centers the column.
+  // FR-3.9): the streamed reply, the ghost banner, the approvals, the tool
+  // cards AND their results are all shared. The only thing the mode changes
+  // here is the wrapper — Focus centers the column.
+  //
+  // That sentence was aspirational until the inline tool result stopped being
+  // gated to Studio (see `renderToolCard`); `mode` no longer reaches
+  // `MessageListBody` at all, so it is now enforced by the types rather than by
+  // this comment.
   const ghostBanner =
     ghost && ghostLabel !== null ? (
       <div
@@ -925,7 +930,6 @@ export function TcChat(props: TcChatProps): ReactElement {
         approvals={visibleApprovals}
         approvalHandlers={approvalHandlers}
         parked={oldestPending !== null}
-        mode={mode}
         markdownComponents={markdownComponents}
         terminalBeat={terminalBeat}
         runFailed={runFailed}
@@ -1488,7 +1492,10 @@ interface MessageListBodyProps {
    * stopped.
    */
   readonly parked: boolean;
-  readonly mode: TcChatMode;
+  // NO `mode`. The transcript body deliberately cannot tell which mode it is
+  // rendering into — that is the property that stops Focus drifting back into
+  // "Studio minus things". `TcChat` still knows (it picks the wrapper); nothing
+  // below this line does.
   readonly markdownComponents?: MarkdownTextProps["components"];
   readonly terminalBeat?: ReactNode;
   /** PRD-03 D-3.5 — the RUN's terminal failure keeps its group open. */
@@ -1542,7 +1549,6 @@ function MessageListBody(props: MessageListBodyProps): ReactNode {
     approvals,
     approvalHandlers,
     parked,
-    mode,
     markdownComponents,
     terminalBeat,
     runFailed = false,
@@ -1618,13 +1624,13 @@ function MessageListBody(props: MessageListBodyProps): ReactNode {
       return renderFleetCard(item.fleet, subagentActivitiesByTask);
     }
     if (item.kind === "tool") {
-      return renderToolCard(item.toolCall, mode, toolCallCitations, parked);
+      return renderToolCard(item.toolCall, toolCallCitations, parked);
     }
     if (item.kind === "part") {
       // The absorbed cards are rendered HERE, not inside `renderPart`, because
       // this is the only scope holding what a card needs to draw itself
-      // (mode, citations, parked, the subagent activity map). The thinking
-      // block frames them; it never learns about any of that.
+      // (citations, parked, the subagent activity map). The thinking block
+      // frames them; it never learns about any of that.
       const absorbed = item.activity ?? [];
       return renderMessagePartItem(
         item.message,
@@ -1636,7 +1642,7 @@ function MessageListBody(props: MessageListBodyProps): ReactNode {
           : {
               cards: absorbed.map((a) =>
                 a.kind === "tool"
-                  ? renderToolCard(a.toolCall, mode, toolCallCitations, parked)
+                  ? renderToolCard(a.toolCall, toolCallCitations, parked)
                   : renderFleetCard(a.fleet, subagentActivitiesByTask),
               ),
               summary: summariseGroup(
@@ -1965,9 +1971,26 @@ function renderFleetCard(
 // Workstream D — the compact inline tool-call card. The reusable card owns the
 // visual disclosure target and its bounded payload/detail treatment; TcChat
 // only owns transcript ordering and the list-item anchor.
+//
+// NO `mode` PARAMETER, for the same reason `renderApprovalItem` has none: a
+// tool call is a fact about the run, and a fact does not change with the view
+// it is read in.
+//
+// BE PRECISE ABOUT WHAT THIS CHANGED, because the obvious reading is wrong and
+// the next person hunting "Focus shows nothing" will land here. `InlineToolResultCard`
+// was gated to `mode === "studio"`, and that card renders exactly ONE thing: a
+// CSV summary (`readCsvSummary` returns null for everything else, and its
+// sources card was removed earlier). `ToolCallCard` — the header AND its
+// disclosure body, which since 2c4a2461 carries the real file diff for
+// edit_file/write_file — has never been mode-aware. So the behavioural delta
+// here is narrow: a CSV summary now also appears in Focus.
+//
+// The rule is the load-bearing part, not the delta: the transcript renders the
+// same content in both modes, and the mode chooses only the wrapper (Focus
+// centers the column). What actually made Focus feel empty is the surface
+// column and the swimlanes, which Focus still deliberately omits.
 function renderToolCard(
   toolCall: ToolCallEntry,
-  mode: TcChatMode,
   citations: readonly CitationSourceRef[],
   parked: boolean,
 ): ReactNode {
@@ -1979,9 +2002,7 @@ function renderToolCard(
       data-tool-status={toolCall.status}
     >
       <ToolCallCard toolCall={toolCall} parked={parked} />
-      {mode === "studio" ? (
-        <InlineToolResultCard toolCall={toolCall} citations={citations} />
-      ) : null}
+      <InlineToolResultCard toolCall={toolCall} citations={citations} />
     </li>
   );
 }

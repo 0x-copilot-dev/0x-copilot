@@ -48,10 +48,13 @@ from agent_runtime.capabilities.surfaces.spec_models import (
 )
 from agent_runtime.capabilities.surfaces.store import InMemorySurfaceSpecStore
 from agent_runtime.execution.contracts import AgentRuntimeContext, ModelConfig
+from runtime_api.schemas import RuntimeApiEventType
 
 _SERVER = "customsvc"
 _TOOL = "list_things"
 _DESCRIPTOR = GenToolDescriptor(name=_TOOL, description="List things.")
+_REQUESTED = RuntimeApiEventType.SURFACE_SPEC_REQUESTED
+_GENERATED = RuntimeApiEventType.SURFACE_SPEC_GENERATED
 
 # A payload no curated spec covers, chosen so rung 0 produces a spec with
 # obvious room for improvement: it keeps the internal ``id``, keeps the raw
@@ -169,10 +172,10 @@ class _PipelineMixin(_CompletionMixin):
         def __init__(self, completion: object) -> None:
             self.store = InMemorySurfaceSpecStore()
             self.scheduled: list[Coroutine[Any, Any, None]] = []
-            self.emitted: list[dict[str, object]] = []
+            self.emitted: list[tuple[object, dict[str, object]]] = []
 
-            async def _emit(payload: Mapping[str, object]) -> None:
-                self.emitted.append(dict(payload))
+            async def _emit(event_type: object, payload: Mapping[str, object]) -> None:
+                self.emitted.append((event_type, dict(payload)))
 
             self.scheduler = SurfaceGenerationScheduler(
                 generator=SurfaceSpecGenerator(completion=completion),  # type: ignore[arg-type]
@@ -200,6 +203,18 @@ class _PipelineMixin(_CompletionMixin):
             for coro in self.scheduled:
                 await coro
             self.scheduled.clear()
+
+        def payloads(self, event_type: object) -> list[dict[str, object]]:
+            """Payloads emitted under one event type, in order.
+
+            Generation emits a PAIR (``surface_spec_requested`` on the way in,
+            ``surface_spec_generated`` on the way out), so a bare count of
+            ``emitted`` no longer means "one upgrade landed".
+            """
+
+            return [
+                payload for emitted, payload in self.emitted if emitted is event_type
+            ]
 
 
 class _CredentialMixin:
@@ -230,7 +245,9 @@ class _CredentialMixin:
             factory,
         )
 
-        async def _emit(payload: Mapping[str, object]) -> None:  # pragma: no cover
+        async def _emit(  # pragma: no cover
+            _event_type: object, _payload: Mapping[str, object]
+        ) -> None:
             return None
 
         scheduler = build_surface_generation_scheduler(
@@ -392,6 +409,9 @@ class TestInPlaceUpgrade(_PipelineMixin):
         assert envelope.state.spec is not None
         # Scheduled, not awaited: nothing about the render waited on a model.
         assert len(harness.scheduled) == 1
+        # Neither half of the pair has fired: the ``surface_spec_requested``
+        # progress signal belongs to the scheduled TASK, not to scheduling, so
+        # it can never put an await on the tool-call path.
         assert harness.emitted == []
         await harness.drain()
 
@@ -402,8 +422,9 @@ class TestInPlaceUpgrade(_PipelineMixin):
 
         await harness.drain()
 
-        assert len(harness.emitted) == 1
-        payload = harness.emitted[0]
+        generated = harness.payloads(_GENERATED)
+        assert len(generated) == 1
+        payload = generated[0]
         # Same URI ⇒ the client merges over the table already on screen. A
         # different URI would render a second surface instead of upgrading one.
         assert payload["surface_uri"] == envelope.surface_uri
@@ -447,7 +468,9 @@ class TestNoCredentialStillRenders(_PipelineMixin):
         # The REAL path with no credential: ``SURFACE_SPEC_MODEL`` is pinned, so
         # a model id resolves, and the OpenAI client refuses to construct
         # without a key. That must be "refinement is off", not an exception.
-        async def _emit(payload: Mapping[str, object]) -> None:  # pragma: no cover
+        async def _emit(  # pragma: no cover
+            _event_type: object, _payload: Mapping[str, object]
+        ) -> None:
             return None
 
         with caplog.at_level(logging.WARNING):
@@ -478,7 +501,9 @@ class TestNoCredentialStillRenders(_PipelineMixin):
         # The line used to carry the model id alone, and it read as a bad model
         # id when the cause was a credential that never reached the builder —
         # a wrong diagnosis that cost real time. It must name the CLASS.
-        async def _emit(payload: Mapping[str, object]) -> None:  # pragma: no cover
+        async def _emit(  # pragma: no cover
+            _event_type: object, _payload: Mapping[str, object]
+        ) -> None:
             return None
 
         with caplog.at_level(logging.WARNING):
@@ -501,7 +526,9 @@ class TestNoCredentialStillRenders(_PipelineMixin):
     def test_the_floor_renders_with_no_scheduler_at_all(self) -> None:
         # The honest desktop shape: SURFACES_V2 on, no BYOK provider ⇒ no
         # shaping model resolves ⇒ no scheduler. The surface is unaffected.
-        async def _emit(payload: Mapping[str, object]) -> None:  # pragma: no cover
+        async def _emit(  # pragma: no cover
+            _event_type: object, _payload: Mapping[str, object]
+        ) -> None:
             return None
 
         scheduler = build_surface_generation_scheduler(
@@ -520,9 +547,9 @@ class TestNoCredentialStillRenders(_PipelineMixin):
         assert envelope.state.spec.columns is not None
         assert len(envelope.state.spec.columns) >= 3
 
-    async def test_a_failing_model_emits_nothing_and_raises_nothing(self) -> None:
+    async def test_a_failing_model_emits_no_upgrade_and_raises_nothing(self) -> None:
         # A credential that exists but does not work fails at INVOKE time. The
-        # rendered surface must be untouched and nothing may reach the user.
+        # rendered surface must be untouched and no upgrade may reach the user.
         completion = self.FailingCompletion()
         harness = self.Harness(completion)
 
@@ -532,7 +559,10 @@ class TestNoCredentialStillRenders(_PipelineMixin):
         assert envelope is not None
         assert envelope.state.spec is not None
         assert completion.calls > 0
-        assert harness.emitted == []
+        assert harness.payloads(_GENERATED) == []
+        # The attempt is still announced — the model call did start, and the
+        # progress signal describes the attempt, not its outcome.
+        assert len(harness.payloads(_REQUESTED)) == 1
 
 
 class TestByokCredentialThreading(_CredentialMixin):

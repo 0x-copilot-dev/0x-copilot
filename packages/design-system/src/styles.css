@@ -6,7 +6,14 @@
  * ./fonts, latin + latin-ext split by unicode-range so latin-ext downloads
  * only when a glyph needs it; font-display: swap). The Space Grotesk and
  * Instrument Sans @font-face rules were removed with the v2 token adoption;
- * the woff2 assets remain vendored but unreferenced. This at-rule carries no
+ * their six woff2 files stay vendored under ./fonts. No stylesheet requests
+ * them, and esbuild's dataurl loader inlines only what a url() names, so they
+ * reach no bundle — but that is NOT a licence to rm them. design-parity's
+ * render-live-surface-language and render-live-generative-surfaces-v3
+ * harnesses copyFileSync all eight files BY NAME in beforeAll, so removing the
+ * six reds both suites with ENOENT before a single test body runs. Their five
+ * sibling harnesses already copy just the two jetbrains-mono files; trim those
+ * two stale lists to match, then the assets can go. This at-rule carries no
  * cascade/order dependency on :root. */
 @font-face {
   font-family: "JetBrains Mono";

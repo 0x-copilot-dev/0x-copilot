@@ -131,6 +131,15 @@ class _Fields:
     GENERATOR_MODEL = "generator_model"
     SKILL_VERSION = "skill_version"
     SURFACE_PREPARED_TITLE = "Prepared a view"
+    # Studio surfaces — surface_spec_requested payload keys + title. The subject
+    # is spelled ``surface_id`` here and ``surface_uri`` two lines up on purpose:
+    # they name the same identity, and ``surface_id`` is the v2 canvas/ledger
+    # spelling every newer consumer keys on (``surfaces_v2.content`` documents
+    # ``surface_uri`` as the v1 alias kept for replay). A progress signal added
+    # now is written in the current vocabulary rather than inheriting the alias.
+    SURFACE_ID = "surface_id"
+    MODEL_ID = "model_id"
+    SURFACE_PREPARING_TITLE = "Preparing a view"
     # Generative Surfaces v2 (PRD-D2, FR-C3) — write.applied display microcopy.
     # ``applied`` is the FR-C3 requirement string (verbatim); Phase-2 polishes
     # the ``failed`` wording. Single-use titles inlined here (matches
@@ -609,6 +618,8 @@ class RuntimeEventPresentationProjector:
             return cls._sources_ingested_payload(payload)
         if event_type is RuntimeApiEventType.CITATION_MADE:
             return cls._citation_made_payload(payload)
+        if event_type is RuntimeApiEventType.SURFACE_SPEC_REQUESTED:
+            return cls._surface_spec_requested_payload(payload)
         if event_type is RuntimeApiEventType.SURFACE_SPEC_GENERATED:
             return cls._surface_spec_generated_payload(payload)
         if event_type is RuntimeApiEventType.USAGE_RECORDED:
@@ -805,10 +816,16 @@ class RuntimeEventPresentationProjector:
             # a ``write_todos`` frame), and the source fallback would route it
             # into the tool bucket, which is the very rendering this replaces.
             return RuntimeActivityKind.EVENT
-        if event_type is RuntimeApiEventType.SURFACE_SPEC_GENERATED:
+        if event_type in {
+            RuntimeApiEventType.SURFACE_SPEC_REQUESTED,
+            RuntimeApiEventType.SURFACE_SPEC_GENERATED,
+        }:
             # Generative-UI (PRD-01) — an out-of-band "prepared a view" note.
             # Explicit so a TOOL-sourced emit can't reroute it into the tool
             # bucket; the FE consumes it as a surface-state merge, not a card.
+            # The Studio progress signal shares the bucket for the same reason:
+            # a pending spinner is state on the surface it names, and a run that
+            # shapes five surfaces must not put five rows on the timeline.
             return RuntimeActivityKind.EVENT
         if event_type is RuntimeApiEventType.USAGE_RECORDED:
             # Generative Surfaces v2 (PRD-A2) — a metering ledger event, not a
@@ -1123,6 +1140,11 @@ class RuntimeEventPresentationProjector:
                 tokens_saved=tokens_saved,
                 tool_name=cls._text(payload.get(Keys.Field.TOOL_NAME)),
             )
+        if event_type is RuntimeApiEventType.SURFACE_SPEC_REQUESTED:
+            # The present-tense half of the pair below, so a replayed ledger
+            # reads "Preparing a view" → "Prepared a view" rather than leaving
+            # the reader to infer the start from the end.
+            return _Fields.SURFACE_PREPARING_TITLE
         if event_type is RuntimeApiEventType.SURFACE_SPEC_GENERATED:
             # Generative-UI (PRD-01). The user-facing message class lives in
             # ``agent_runtime.api.constants`` (out of this PR's scope); the
@@ -1367,6 +1389,23 @@ class RuntimeEventPresentationProjector:
             if isinstance(value, int) and value >= 0:
                 safe_link[offset_key] = value
         return {_Fields.LINK: safe_link}
+
+    @classmethod
+    def _surface_spec_requested_payload(cls, payload: JsonObject) -> JsonObject:
+        """Project ``surface_spec_requested`` through the frozen two-key contract.
+
+        Unlike every allow-list beside it, this one always emits BOTH keys, with
+        ``None`` for anything that is not a non-empty string. The contract is
+        ``{surface_id: string|null, model_id: string|null}`` and a progress
+        signal is read by a client that has nothing else to go on: an absent key
+        and an explicit null are the same fact, so emitting the key is what lets
+        the client tell "not known" from "this build predates the field".
+        """
+
+        return {
+            _Fields.SURFACE_ID: cls._text(payload.get(_Fields.SURFACE_ID)),
+            _Fields.MODEL_ID: cls._text(payload.get(_Fields.MODEL_ID)),
+        }
 
     @classmethod
     def _surface_spec_generated_payload(cls, payload: JsonObject) -> JsonObject:

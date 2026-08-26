@@ -1380,6 +1380,7 @@ export {
   type TcProvenanceFooterProps,
   type TcSurfaceSkeletonProps,
   type TcSurfaceFrameProps,
+  type SurfaceSpecGeneration,
   type TcStatusStripProps,
 } from "./thread-canvas";
 export {

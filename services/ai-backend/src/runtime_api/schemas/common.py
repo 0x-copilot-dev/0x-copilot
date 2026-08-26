@@ -233,6 +233,19 @@ class RuntimeApiEventType(StrEnum):
     # tier-3 to the archetype view (plan D4). No emitter/renderer yet — PRD-01
     # freezes the contract only.
     SURFACE_SPEC_GENERATED = "surface_spec_generated"
+    # Studio surfaces — the progress half of the pair above. Shaping a surface
+    # costs a SECOND model call that the scheduler awaits to completion, and
+    # until this event existed the runtime said nothing until it finished: the
+    # client had no state to tie a spinner to, so the user read dead air for the
+    # whole generation. Emitted immediately before that call, carrying
+    # ``surface_id`` / ``model_id``, and projecting to ``RuntimeActivityKind.EVENT``
+    # like its terminal sibling (a surface-state merge, not a timeline card).
+    #
+    # It is a PROGRESS signal, not a lifecycle boundary: ``surface_spec_generated``
+    # still ends the operation, and nothing may depend on this arriving. A run
+    # that never emits it (generation disabled, emit raised, an older persisted
+    # run replayed) must behave exactly as it did before.
+    SURFACE_SPEC_REQUESTED = "surface_spec_requested"
     # Generative Surfaces v2 (PRD-A2, SDR §5). One per usage-bearing LLM call
     # whose store purpose maps to a ledger purpose (run / subagent /
     # view_shaping / shape_request). The wire value is the SDR §5 ledger

@@ -709,10 +709,19 @@ function toolCall(overrides: Partial<ToolCallEntry> = {}): ToolCallEntry {
 }
 
 describe("TcChat — inline tool-call card (Workstream D)", () => {
-  it("shows fact-bound inline results in Studio but not Focus", async () => {
+  it("shows fact-bound inline results in Focus as well as Studio", async () => {
+    // This test used to assert the opposite. Read it as a PIN on the rule —
+    // the transcript renders the same content in both modes — not as proof
+    // that Focus was empty before: `InlineToolResultCard` renders only a CSV
+    // summary, and `ToolCallCard` (header + disclosure body + file diff) was
+    // never mode-aware, so the gate only ever hid a CSV card. Focus subtracts
+    // the surface COLUMN and the swimlanes, which is what makes it
+    // single-column and what "I can't see anything" was mostly describing; it
+    // must not also subtract from the transcript.
+    //
     // Uses CSV facts, not sources: the inline SOURCES card was removed from the
     // transcript (sources live in the Sources rail now), so the CSV summary is
-    // what remains of `InlineToolResultCard` and it still must be Studio-only.
+    // what remains of `InlineToolResultCard`.
     const { transport } = makeTransport(() => Promise.resolve(SAMPLE_RESPONSE));
     const csvCall = toolCall({
       status: "complete",
@@ -725,9 +734,9 @@ describe("TcChat — inline tool-call card (Workstream D)", () => {
         <TcChat conversationId="c" mode="studio" toolCalls={[csvCall]} />,
       ),
     );
-    expect(
-      await screen.findByTestId("tc-inline-csv-summary-card"),
-    ).toBeInTheDocument();
+    const studio = await screen.findByTestId("tc-inline-csv-summary-card");
+    expect(studio).toHaveTextContent("forecast.csv");
+    const studioHtml = studio.outerHTML;
 
     rerender(
       withTransport(
@@ -735,9 +744,60 @@ describe("TcChat — inline tool-call card (Workstream D)", () => {
         <TcChat conversationId="c" mode="focus" toolCalls={[csvCall]} />,
       ),
     );
+    // Byte-identical, on the same principle the approvals card is pinned by:
+    // comparing markup is what stops a mode-conditional attribute, class or
+    // ordering growing back — not just the ones someone thought to name.
+    expect(screen.getByTestId("tc-inline-csv-summary-card").outerHTML).toBe(
+      studioHtml,
+    );
+  });
+
+  it("reaches an edit_file diff inside the tool card in Focus", async () => {
+    // The file-diff view (2c4a2461) is the richest thing the transcript can
+    // show, and Focus is the mode with no surface column to fall back on — so
+    // if it were not reachable here it would not be reachable at all without
+    // switching modes. jsdom performs no layout, so being in the DOM proves
+    // nothing about a collapsed <details>: the disclosure is actually opened.
+    const { transport } = makeTransport(() => Promise.resolve(SAMPLE_RESPONSE));
+    render(
+      withTransport(
+        transport,
+        <TcChat
+          conversationId="c"
+          mode="focus"
+          toolCalls={[
+            toolCall({
+              id: "call-edit",
+              toolName: "edit_file",
+              title: "Edit a file",
+              status: "complete",
+              args: {
+                file_path: "/tmp/report.md",
+                old_string: "old line",
+                new_string: "new line",
+              },
+              result: { content: "Updated /tmp/report.md" },
+            }),
+          ]}
+        />,
+      ),
+    );
+    const item = await screen.findByTestId("tc-chat-tool-call-edit");
+    const card = item.querySelector("details");
+    expect(card).not.toBeNull();
+    fireEvent.click(card!.querySelector("summary")!);
+    expect(card!).toHaveAttribute("open");
+
+    const diff = within(card!).getByTestId("tc-tool-edit-diff");
     expect(
-      screen.queryByTestId("tc-inline-csv-summary-card"),
-    ).not.toBeInTheDocument();
+      within(diff).getByTestId("tc-tool-edit-diff-path"),
+    ).toHaveTextContent("/tmp/report.md");
+    expect(
+      within(diff).getByTestId("tc-tool-edit-diff-counts"),
+    ).toHaveTextContent("+1−1");
+    // The specialised view is a READING of the call; the JSON stays the record,
+    // demoted behind its own disclosure. Both must survive in Focus.
+    expect(within(card!).getByText("raw payload")).toBeInTheDocument();
   });
 
   it("no longer renders a sources card under a completed web search", async () => {

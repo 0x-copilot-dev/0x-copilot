@@ -60,6 +60,10 @@ export {
 // Pure selector over the single canonical run stream — surface-tab strip data
 // for the Run cockpit. No second subscription / projector (FR-3.3).
 export { projectSurfaceTabs, type SurfaceTab } from "./eventProjector";
+// The in-flight spec-generation signal a surface frame reads. Exported because
+// a host adapter cannot name `TcSurfaceFrame`'s `specGeneration` prop without
+// it — the prop was unreachable outside this package until it was.
+export { type SurfaceSpecGeneration } from "./eventProjector";
 // === end PRD-04 (genui) ===
 
 // === Inline tool-call cards (Workstream D) ===

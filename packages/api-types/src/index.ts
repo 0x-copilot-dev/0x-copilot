@@ -771,6 +771,7 @@ export type RuntimeApiEventType =
   | "subagent_paused"
   | "subagent_resumed"
   | "adapter_generated"
+  | "surface_spec_requested"
   | "surface_spec_generated"
   | "usage.recorded"
   | "action.classified"
@@ -864,6 +865,7 @@ export const RUNTIME_API_EVENT_TYPES = [
   "subagent_paused",
   "subagent_resumed",
   "adapter_generated",
+  "surface_spec_requested",
   "surface_spec_generated",
   "usage.recorded",
   "action.classified",
@@ -3983,6 +3985,11 @@ export interface RuntimeEventPayloadByType
    * `{userData}/adapters/{scheme}-v{schema_version}.js`, and hands it to
    * the local quality gate (6D). */
   adapter_generated: AdapterGeneratedPayload;
+  /** Generative-UI — emitted immediately BEFORE the spec-generation model call
+   * starts, so a surface can say a layout is being chosen instead of shimmering
+   * at nothing. A pure progress signal: `surface_spec_generated` below remains
+   * the terminal event, and nothing may depend on this one arriving. */
+  surface_spec_requested: SurfaceSpecRequestedPayload;
   /** Generative-UI (PRD-01) — emitted when the async spec generator produces a
    * validated `SurfaceSpec` for a `(server, tool, output_shape)`. The projector
    * merges `spec` into `surfaceState[surface_uri]` so the next render upgrades
@@ -4368,6 +4375,19 @@ export interface SurfaceEnvelope {
   archetype: SurfaceArchetype;
   state: SurfaceState;
   diff?: SurfaceDiff;
+}
+
+/** Payload of the `surface_spec_requested` run event. Mirrors the projector
+ * allow-list in `runtime_api/schemas/events.py`, which always emits both keys
+ * and writes `null` rather than omitting when the runtime named neither.
+ *
+ * `surface_id` carries the same value `surface_spec_generated` calls
+ * `surface_uri`, so the two events collide on one surface identity. `model_id`
+ * is display-only — it is echoed to the reader, never matched against a catalog.
+ */
+export interface SurfaceSpecRequestedPayload {
+  surface_id: string | null;
+  model_id: string | null;
 }
 
 /** Payload of the `surface_spec_generated` run event. Mirrors the projector
