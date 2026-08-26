@@ -30,7 +30,10 @@
       "peak_result_bytes": 0,
       "budget_notes": 0,
       "super_steps_estimate": 6,
-      "terminal_code": "run_completed"
+      "terminal_code": "run_completed",
+      "answer_head": "ready.",
+      "answer_tail": "ready.",
+      "outcome_reason": "this arm declared no expected answer"
     },
     {
       "task": "t2-three-steps",
@@ -61,7 +64,10 @@
       "peak_result_bytes": 0,
       "budget_notes": 0,
       "super_steps_estimate": 6,
-      "terminal_code": "run_completed"
+      "terminal_code": "run_completed",
+      "answer_head": "**Step 1:** Red, Yellow, Blue\n\n**Step 2:**\n- Red \u2192 Apple\n- Yellow \u2192 Banana\n- Blue \u2192 Blueberry\n\n**Step 3:** Red-Apple, Yellow-Banana, Blue-Blueberry",
+      "answer_tail": "**Step 3:** Red-Apple, Yellow-Banana, Blue-Blueberry",
+      "outcome_reason": "this arm declared no expected answer"
     },
     {
       "task": "t3-todo-driven",
@@ -92,7 +98,10 @@
       "peak_result_bytes": 0,
       "budget_notes": 0,
       "super_steps_estimate": 6,
-      "terminal_code": "run_completed"
+      "terminal_code": "run_completed",
+      "answer_head": "## Checklist\n- [ ] Pick three European capitals\n- [ ] Identify the country of each\n- [ ] Identify one river in each country\n- [ ] Build final table\n\n**Step 1 \u2014 Capitals:** Paris, Rome, Berlin \u2705 done\n\n",
+      "answer_tail": "| Berlin  | Germany | Rhine  |",
+      "outcome_reason": "this arm declared no expected answer"
     },
     {
       "task": "t4-long-chain",
@@ -123,7 +132,10 @@
       "peak_result_bytes": 0,
       "budget_notes": 0,
       "super_steps_estimate": 6,
-      "terminal_code": "run_completed"
+      "terminal_code": "run_completed",
+      "answer_head": "**1:** Not prime \u2014 1 has only one divisor (itself), so it doesn't meet the definition of prime.",
+      "answer_tail": "**1:** Not prime \u2014 1 has only one divisor (itself), so it doesn't meet the definition of prime.",
+      "outcome_reason": "this arm declared no expected answer"
     }
   ],
   "session_dir": "/Users/parthpahwa/Library/Application Support/0xCopilot/journey-bench-recursion-500-1786697962716726000",

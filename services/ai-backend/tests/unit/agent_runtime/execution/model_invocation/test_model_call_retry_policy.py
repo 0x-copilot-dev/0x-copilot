@@ -438,3 +438,24 @@ class TestTheScheduleItself:
         )
 
         assert decision.should_retry is False
+
+    def test_a_model_the_provider_will_not_serve_is_never_re_dispatched(self) -> None:
+        # ``RETRYABLE_CLASSES`` is an allow-set, so omission is the whole
+        # mechanism — asserted rather than assumed, because a later edit that
+        # "completes" the set would spend the full backoff ladder collecting
+        # identical 404s.
+        policy = ModelCallRetryPolicy()
+
+        decision = policy.decide(
+            failure=ModelFailureClass.MODEL_NOT_FOUND,
+            lifecycle=ProviderAttemptLifecycle(),
+            attempt=1,
+            error=_headers_error(404, None, qualname="NotFoundError"),
+            now=_NOW,
+            random_value=0.0,
+        )
+
+        assert decision.should_retry is False
+        assert ModelFailureClass.MODEL_NOT_FOUND not in (
+            ModelCallRetryPolicy.RETRYABLE_CLASSES
+        )

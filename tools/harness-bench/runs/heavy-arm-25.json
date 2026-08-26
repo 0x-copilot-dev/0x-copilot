@@ -36,7 +36,9 @@
       "peak_result_bytes": 39,
       "budget_notes": 0,
       "super_steps_estimate": 30,
-      "terminal_code": "run_completed"
+      "terminal_code": "run_completed",
+      "offloaded_results": 0,
+      "peak_stub_tokens": null
     },
     {
       "task": "h2-crossref",
@@ -71,7 +73,9 @@
       "peak_result_bytes": 180,
       "budget_notes": 0,
       "super_steps_estimate": 34,
-      "terminal_code": "run_completed"
+      "terminal_code": "run_completed",
+      "offloaded_results": 0,
+      "peak_stub_tokens": null
     },
     {
       "task": "h3-transform",
@@ -106,7 +110,9 @@
       "peak_result_bytes": 81,
       "budget_notes": 0,
       "super_steps_estimate": 18,
-      "terminal_code": "run_completed"
+      "terminal_code": "run_completed",
+      "offloaded_results": 0,
+      "peak_stub_tokens": null
     },
     {
       "task": "h4-delegate",
@@ -143,7 +149,9 @@
       "peak_result_bytes": 38,
       "budget_notes": 0,
       "super_steps_estimate": 30,
-      "terminal_code": "run_completed"
+      "terminal_code": "run_completed",
+      "offloaded_results": 0,
+      "peak_stub_tokens": null
     },
     {
       "task": "h5-longchain",
@@ -178,22 +186,25 @@
       "peak_result_bytes": 38,
       "budget_notes": 0,
       "super_steps_estimate": 10,
-      "terminal_code": "run_completed"
+      "terminal_code": "run_completed",
+      "offloaded_results": 0,
+      "peak_stub_tokens": null
     }
   ],
   "session_dir": "/Users/parthpahwa/Library/Application Support/0xCopilot/journey-bench-heavy-25-1787734102602505000",
-  "memory_files": [
-    "ec98e6e5c01cacfe9b048e9eee2d29503daea959a51349d24431ebe857c3a20a/5a7c1f8c2b43cdb48d9172f8bf5fe2f8e8676afc540bf0c9e90693167c9a5680.json",
-    "ec98e6e5c01cacfe9b048e9eee2d29503daea959a51349d24431ebe857c3a20a/5a7c1f8c2b43cdb48d9172f8bf5fe2f8e8676afc540bf0c9e90693167c9a5680.md",
-    "ec98e6e5c01cacfe9b048e9eee2d29503daea959a51349d24431ebe857c3a20a/6b44adaa5acf7a9ae8f39cbfe6c79b972a8c51c33a19b124ef540571cb02e469.json",
-    "ec98e6e5c01cacfe9b048e9eee2d29503daea959a51349d24431ebe857c3a20a/6b44adaa5acf7a9ae8f39cbfe6c79b972a8c51c33a19b124ef540571cb02e469.md",
-    "ec98e6e5c01cacfe9b048e9eee2d29503daea959a51349d24431ebe857c3a20a/96d44732e6cee082d28e8631589103b25d8d01c4a63a96cda3f72104468fe31a.json",
-    "ec98e6e5c01cacfe9b048e9eee2d29503daea959a51349d24431ebe857c3a20a/96d44732e6cee082d28e8631589103b25d8d01c4a63a96cda3f72104468fe31a.md",
-    "ec98e6e5c01cacfe9b048e9eee2d29503daea959a51349d24431ebe857c3a20a/981c06b43d7611e51edd482142b2ce94792cb13119c03695272f01cbbb4e82a9.json",
-    "ec98e6e5c01cacfe9b048e9eee2d29503daea959a51349d24431ebe857c3a20a/981c06b43d7611e51edd482142b2ce94792cb13119c03695272f01cbbb4e82a9.md",
-    "ec98e6e5c01cacfe9b048e9eee2d29503daea959a51349d24431ebe857c3a20a/d320baa938fff8a603d50400849f6bbf97809ae16109e74c50067ac7044062e6.json",
-    "ec98e6e5c01cacfe9b048e9eee2d29503daea959a51349d24431ebe857c3a20a/d320baa938fff8a603d50400849f6bbf97809ae16109e74c50067ac7044062e6.md",
-    "ec98e6e5c01cacfe9b048e9eee2d29503daea959a51349d24431ebe857c3a20a/fee0608457f92af12ed0a89ebeb94983dbabd1a081c18d3c4f99e34b5459b95f.json",
-    "ec98e6e5c01cacfe9b048e9eee2d29503daea959a51349d24431ebe857c3a20a/fee0608457f92af12ed0a89ebeb94983dbabd1a081c18d3c4f99e34b5459b95f.md"
-  ]
+  "memory_files": {
+    "ec98e6e5c01cacfe9b048e9eee2d29503daea959a51349d24431ebe857c3a20a/5a7c1f8c2b43cdb48d9172f8bf5fe2f8e8676afc540bf0c9e90693167c9a5680.json": 349,
+    "ec98e6e5c01cacfe9b048e9eee2d29503daea959a51349d24431ebe857c3a20a/5a7c1f8c2b43cdb48d9172f8bf5fe2f8e8676afc540bf0c9e90693167c9a5680.md": 153,
+    "ec98e6e5c01cacfe9b048e9eee2d29503daea959a51349d24431ebe857c3a20a/6b44adaa5acf7a9ae8f39cbfe6c79b972a8c51c33a19b124ef540571cb02e469.json": 349,
+    "ec98e6e5c01cacfe9b048e9eee2d29503daea959a51349d24431ebe857c3a20a/6b44adaa5acf7a9ae8f39cbfe6c79b972a8c51c33a19b124ef540571cb02e469.md": 153,
+    "ec98e6e5c01cacfe9b048e9eee2d29503daea959a51349d24431ebe857c3a20a/96d44732e6cee082d28e8631589103b25d8d01c4a63a96cda3f72104468fe31a.json": 339,
+    "ec98e6e5c01cacfe9b048e9eee2d29503daea959a51349d24431ebe857c3a20a/96d44732e6cee082d28e8631589103b25d8d01c4a63a96cda3f72104468fe31a.md": 143,
+    "ec98e6e5c01cacfe9b048e9eee2d29503daea959a51349d24431ebe857c3a20a/981c06b43d7611e51edd482142b2ce94792cb13119c03695272f01cbbb4e82a9.json": 339,
+    "ec98e6e5c01cacfe9b048e9eee2d29503daea959a51349d24431ebe857c3a20a/981c06b43d7611e51edd482142b2ce94792cb13119c03695272f01cbbb4e82a9.md": 143,
+    "ec98e6e5c01cacfe9b048e9eee2d29503daea959a51349d24431ebe857c3a20a/d320baa938fff8a603d50400849f6bbf97809ae16109e74c50067ac7044062e6.json": 340,
+    "ec98e6e5c01cacfe9b048e9eee2d29503daea959a51349d24431ebe857c3a20a/d320baa938fff8a603d50400849f6bbf97809ae16109e74c50067ac7044062e6.md": 144,
+    "ec98e6e5c01cacfe9b048e9eee2d29503daea959a51349d24431ebe857c3a20a/fee0608457f92af12ed0a89ebeb94983dbabd1a081c18d3c4f99e34b5459b95f.json": 350,
+    "ec98e6e5c01cacfe9b048e9eee2d29503daea959a51349d24431ebe857c3a20a/fee0608457f92af12ed0a89ebeb94983dbabd1a081c18d3c4f99e34b5459b95f.md": 154
+  },
+  "largest_offloaded_blob": null
 }
