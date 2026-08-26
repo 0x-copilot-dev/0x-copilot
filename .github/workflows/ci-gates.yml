@@ -90,7 +90,8 @@ jobs:
             tools/test_apply_branch_protection.py \
             tools/test_cli_release.py \
             tools/test_desktop_journey_ci.py \
-            tools/test_harness_bench_heavy_tasks.py
+            tools/test_harness_bench_heavy_tasks.py \
+            tools/test_harness_bench_recursion_answers.py
 
       - name: Dark capabilities
         run: python tools/check_dark_capabilities.py

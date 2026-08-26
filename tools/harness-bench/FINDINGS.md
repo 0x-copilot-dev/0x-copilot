@@ -34,6 +34,11 @@ limit=25 reads `"code": "recursion_limit_exceeded"` — the run was stopped by t
 ceiling, not by anything it was doing wrong. This is, so far, the only measured
 outcome win in the harness program.
 
+The finding stands as stated, because a run the ceiling stopped is a run that
+did not finish and that is what these columns are about. But **the word
+"completed" in this table means terminated, not answered** — §6.1 shows two runs
+counted here that completed and answered the wrong question.
+
 ### How the first pass got this exactly backwards
 
 The first scorer inferred "did the ceiling bind?" from the count of **completed**
@@ -115,7 +120,7 @@ the _cold_ prompt is the lever; anything that only helps warm runs is not.
 
 Unmeasured and worth measuring next: what fraction of real runs hit a cold cache.
 
-## Method notes — two instrument failures, both worth not repeating
+## Method notes — three instrument failures, all worth not repeating
 
 1. The first scorer counted `usage.recorded` events off the events API and
    returned **0 tokens for every task**. A broken instrument reporting zero is
@@ -126,10 +131,30 @@ Unmeasured and worth measuring next: what fraction of real runs hit a cold cache
    failure mode under test** (finding 1). A proxy metric must be checked against
    the thing it proxies before any conclusion rests on it — especially a
    negative conclusion, which is the kind that stops further investigation.
+3. **A completion-rate metric cannot see a wrong answer**, and until now nothing
+   in `recursion_ceiling_ab.py` could. §6.1 has the evidence: two runs that
+   terminated `completed`, counted toward the completion column every published
+   cost number is quoted beside, and answered something other than what was
+   asked. Termination and correctness are separate axes and neither substitutes
+   for the other, so `outcome_ok` is now scored alongside `status` — with the
+   three-valued discipline note 1 earned: `None` means NOT MEASURED, never
+   wrong, because a fabricated negative stops an investigation that a
+   fabricated zero would at least have invited.
 
 `tool_rounds` still counts COMPLETED tool invocations and is still a lower bound
 on super-step spend. It is retained as a rough cost signal only; the ceiling
 question is now answered by `terminal_code`.
+
+Note 1 has a second, still-live instance that the correctness work surfaced. The
+live `llm_calls` column in both committed recursion reports reads **0 on all
+eight rows** while the store records 8 model calls over the same runs, because
+`usage.recorded` does not fire on the ordinary run path at all — the event
+appears zero times in those sessions' `events.jsonl`. The live counter now
+returns `None`; the zeros already in `runs/` are a dead instrument's and should
+be read as `model_calls`. `compare()` had in turn been printing _"the old ceiling
+of 25 was NEVER reached by this task set, so raising it bought nothing"_ off
+that zero — a conclusion finding 1 above had already falsified from the same
+directory.
 
 ## 5. The four short prompts cannot reach most of the remaining claims
 
@@ -250,3 +275,55 @@ waits), `grep` 539 (deepagents). The named next lever is **lossless JSON-schema
 slimming**: pydantic emits a `"title"` for every field, ~15–20% of every args
 schema with zero semantic loss, applying to third-party tools too and requiring
 no model behaviour change at all.
+
+### 6.1 The completion column is not a correctness column
+
+Every number in the table above is a cost or a termination count. Nothing in it
+looks at the answer, so a trim that made the model cheaper **and worse** would
+have read as pure win. That is not a hypothetical about future trims — it is
+already true of the arms those numbers came from:
+
+- **limit=500, `t4-long-chain`** (run `733191036bb64fdb858006d0b5f8b934`):
+  `status: completed`, `terminal_code: run_completed`, 1 model call, 0 tool
+  invocations, 94 output tokens. Its entire final answer:
+  _"**1:** Not prime — 1 has only one divisor (itself), so it doesn't meet the
+  definition of prime."_ It was asked to walk 1 through 12 and list the primes.
+  It answered one number of twelve and listed nothing.
+- **limit=25, `t4-long-chain`** (run `3b323faecf7048f1b670be22d4fb40df`): also
+  `completed`, and it replied with a checklist about **European capitals** —
+  the previous task's content — then "Step 1 — Three European capitals: Paris,
+  Rome, Madrid." It never counted, and never listed a prime.
+
+So `3/4 @ 25 → 4/4` is a **termination** claim and was never an answer-quality
+claim. Read strictly, at most **1 of 4** answers in either arm is verifiably
+right (`t1`, which asked for one word), because `t2` and `t3` as written had no
+unique answer at all: "three primary colours" is red/yellow/blue _or_
+red/green/blue, and "three European capitals … one river in each" is whatever
+the model picks.
+
+**What changed.** Each of the four tasks now declares `expect`, a regex its
+final answer must match, fixed in `recursion_ceiling_ab.py` and derived from a
+constant there. `rescore.py` re-grades it offline from the store, so a
+correctness mistake never costs a paid run. `t2` and `t3` needed new PROMPTS to
+have a checkable answer (`t2` is now arithmetic, `t3` a three-row sort); each
+keeps verbatim the structural instruction that drives its round count, and `t4`
+gained only a sentinel line. Governance, stated so it can be held to: **an
+expectation may be relaxed only by changing the prompt and re-running — never by
+editing the pattern after reading an answer.**
+
+**What this costs the table above, and it is not nothing.** `arm-25` and
+`arm-500` ran **prompt set v1**. They carry no recorded expectation, so they are
+reported `?` — UNKNOWN, explicitly distinct from wrong — and they are _not_
+graded against v2's answers, because an arm is a measurement of the prompts it
+actually ran. Two consequences:
+
+- **§6's trajectory cannot be extended by a v2 arm.** Splicing a v2 row into
+  that table would compare four prompts against three different ones. Both arms
+  must be re-measured under v2 before any new cost claim joins it.
+- **The cost shape of v2 is asserted, not measured.** v1's model calls were
+  1/1/4/2 at limit=25 and 1/1/1/1 at limit=500. The re-run must be compared
+  against those; if they move materially, the trajectory restarts rather than
+  continues.
+
+The first honest correctness number this produces will look worse than `4/4`.
+That is the point of measuring it.

@@ -30,7 +30,10 @@
       "peak_result_bytes": 0,
       "budget_notes": 0,
       "super_steps_estimate": 6,
-      "reconciled_rounds": []
+      "reconciled_rounds": [],
+      "answer_head": "ready.",
+      "answer_tail": "ready.",
+      "outcome_reason": "this arm declared no expected answer"
     },
     {
       "task": "t2-three-steps",
@@ -61,7 +64,10 @@
       "peak_result_bytes": 0,
       "budget_notes": 0,
       "super_steps_estimate": 6,
-      "reconciled_rounds": []
+      "reconciled_rounds": [],
+      "answer_head": "**Step 1:** Red, Yellow, Blue\n\n**Step 2:** Red \u2192 Apple; Yellow \u2192 Banana; Blue \u2192 Blueberry\n\n**Step 3:** Red-Apple, Yellow-Banana, Blue-Blueberry",
+      "answer_tail": "**Step 3:** Red-Apple, Yellow-Banana, Blue-Blueberry",
+      "outcome_reason": "this arm declared no expected answer"
     },
     {
       "task": "t3-todo-driven",
@@ -96,7 +102,10 @@
       "super_steps_estimate": 22,
       "reconciled_rounds": [
         "write_todos"
-      ]
+      ],
+      "answer_head": "",
+      "answer_tail": "",
+      "outcome_reason": "this arm declared no expected answer"
     },
     {
       "task": "t4-long-chain",
@@ -127,7 +136,10 @@
       "peak_result_bytes": 461,
       "budget_notes": 0,
       "super_steps_estimate": 10,
-      "reconciled_rounds": []
+      "reconciled_rounds": [],
+      "answer_head": "**Checklist:**\n1. List three European capitals\n2. Identify the country of each\n3. Name one river in each country\n4. Produce final table\n5. Count 1\u201312, one number per step, prime/not with reason\n6. Lis",
+      "answer_tail": "**Step 1 \u2014 Three European capitals:** Paris, Rome, Madrid.",
+      "outcome_reason": "this arm declared no expected answer"
     }
   ],
   "session_dir": "/Users/parthpahwa/Library/Application Support/0xCopilot/journey-bench-recursion-25-1786682615662746000",
