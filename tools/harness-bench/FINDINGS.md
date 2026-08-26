@@ -229,14 +229,17 @@ Same four tasks, same model, same stage discipline (re-staged from the tree
 under test before every run). Cold prompt is run 1's input, which is the one
 paid at full price.
 
-| build                                   | cold prompt | tools segment | 4-task total | completion |
-| --------------------------------------- | ----------- | ------------- | ------------ | ---------- |
-| baseline (harness program as merged)    | 23,181      | 9,759         | 95,655       | 3/4 @ 25   |
-| + `run_tool_program` gated, attribution | 22,304      | 9,159         | 91,098       | 4/4        |
-| + first-party tool disclosure           | **20,547**  | **7,910**     | **83,662**   | 4/4        |
+| build                                      | cold prompt | tools segment | 4-task total | completion |
+| ------------------------------------------ | ----------- | ------------- | ------------ | ---------- |
+| baseline (harness program as merged)       | 23,181      | 9,759         | 95,655       | 3/4 @ 25   |
+| + `run_tool_program` gated, attribution    | 22,304      | 9,159         | 91,098       | 4/4        |
+| + first-party tool disclosure              | **20,547**  | **7,910**     | **83,662**   | 4/4        |
+| + `stage_rowset_write` gated _(predicted)_ | _19,647_    | _7,010_       | _unscored_   | _unscored_ |
 
-**Cumulative: −2,634 cold tokens (−11.4%), −11,993 total (−12.5%), completion
-3/4 → 4/4.**
+**Cumulative measured: −2,634 cold tokens (−11.4%), −11,993 total (−12.5%),
+completion 3/4 → 4/4.** The fourth row is a **prediction, not a result** — it is
+recorded here before any paid run so that it can be scored rather than asserted,
+which is the discipline §1 exists to enforce.
 
 The disclosure step was predicted at −1,326 and measured **−1,757** — it beat its
 own estimate, because deferring prose also shrank text the estimate attributed
@@ -244,9 +247,56 @@ elsewhere. Predictions here are worth recording precisely so they can be scored;
 this one was conservative.
 
 What remains resident and what it costs: `write_todos` 997 (third-party,
-LangChain middleware), `stage_rowset_write` 900, `publish_artifact` 805,
-`ask_a_question` 667 (deliberately resident — it is reached while a human
-waits), `grep` 539 (deepagents). The named next lever is **lossless JSON-schema
-slimming**: pydantic emits a `"title"` for every field, ~15–20% of every args
-schema with zero semantic loss, applying to third-party tools too and requiring
-no model behaviour change at all.
+LangChain middleware), `publish_artifact` 805, `ask_a_question` 667 (deliberately
+resident — it is reached while a human waits), `grep` 539 (deepagents).
+`stage_rowset_write` 900 **left this list**: it is now withheld by
+`tool_surface.rowset_staging_tool="off"` in the shipped hyperparameter document.
+
+### Why `stage_rowset_write` was the one to gate, and what "never invoked" means
+
+Same evidence shape as `run_tool_program`, on a bigger corpus. Across every run
+store on this machine — 1,441 `tool_invocations` rows over 323 run ids, 43,551
+run-event lines over 272 sessions, 883 `context_occupancy` model-call rows over
+475 runs:
+
+| tool                 | invocations | run events | resident on         |
+| -------------------- | ----------- | ---------- | ------------------- |
+| `publish_artifact`   | 142         | 18,866     | 883/883 model calls |
+| `revise_artifact`    | 36          | 3,930      | 883/883 model calls |
+| `stage_rowset_write` | **0**       | **0**      | 883/883 model calls |
+
+The two non-zero rows are the point, not decoration: they are the positive
+controls that make the zero mean something. A first pass at this scan returned a
+zero for _every_ tool because it read the wrong key off the JSONL rows (they are
+`{"op":…,"record":{…}}`, so top-level reads yield nothing and raise nothing) —
+a false zero that read exactly like a genuine one. No zero in this file should be
+believed without a control on the same query.
+
+`stage_rowset_write`'s siblings being heavily used is also why
+`ArtifactToolFamilyExposure` could not be the lever: it is all-or-nothing over
+all three, and flipping it would have withheld the third most-used tool in the
+product. The tool got its own row instead.
+
+**Blind spots, both directions.** `tool_invocations` rows are written at
+`TOOL_CALL_STARTED` — when the model emits the call, before any policy or
+refusal — so a call that was attempted and rejected would still have left a row;
+zero rows means the model never chose it. But this is one machine's corpus,
+dominated by journey-harness boots rather than human sessions, so it is evidence
+about this corpus and not proof about every user. Re-opening is a one-line diff.
+
+The 900 is **not an estimate**. Composing the production chain offline
+(`RuntimeRunHandler._stage_rowset_write_tool` → `_model_visible_tools` →
+`wrap_tools_with_display`) and counting with the occupancy ledger's own
+`ContextTokenCounter` reproduces **3,704 bytes / 900 estimated tokens**,
+byte-for-byte identical to a live `context_occupancy.jsonl` record. Skipping the
+display wrap gives 3,963 B / 978 tok, so the match pins the exact object rather
+than landing there by rounding. Two caveats on how to quote it: 900 is the
+figure on a deployment whose `/tools/` guidance route mounts (on one that does
+not, the same tool measures 4,983 B / 1,223 tok — the older figure the corpus
+also contains, 601 of 883 calls); and per §4/§7 the saving is realised on **cold**
+calls at list price, so it is "−900 per cold prompt", never "−900 × every model
+call".
+
+The named next lever is still **lossless JSON-schema slimming**: pydantic emits a
+`"title"` for every field, ~15–20% of every args schema with zero semantic loss,
+applying to third-party tools too and requiring no model behaviour change at all.

@@ -1293,6 +1293,17 @@ def _model_visible_tools(
     # PRD-D3 — the gated bulk row-set staging tool. Injected as a domain adapter
     # (the worker builds it per run when SURFACES_V2 is on) and wrapped here with
     # its typed schema, like the other builtin tools. Flag off ⇒ `None` ⇒ absent.
+    #
+    # On a default deployment ``stage_rowset_write_tool`` arrives ``None`` and no
+    # schema is appended: ``tool_surface.rowset_staging_tool`` is "off" in
+    # ``hyperparameters.json``, so ``RuntimeRunHandler._stage_rowset_write_tool``
+    # withholds the tool rather than letting a measured 900-token schema — never
+    # invoked once in 1,441 recorded invocations, while its two siblings below
+    # were invoked 178 times between them — stay resident on every model call.
+    # The gate is deliberately *there* and not here, for the same reason
+    # ``run_tool_program``'s is: a tool that registers and then refuses has
+    # already paid its schema. Note the two artifact tools below are unaffected —
+    # the knob composes with ``artifact_family`` instead of replacing it.
     if stage_rowset_write_tool is not None:
         model_tools.append(
             ModelToolDeclaration.declared(

@@ -14,7 +14,8 @@
     "index_summary_min_bytes": 24
   },
   "tool_surface": {
-    "artifact_family": "always"
+    "artifact_family": "always",
+    "rowset_staging_tool": "off"
   },
   "reads": {
     "default_line_limit": 2000,
