@@ -21,7 +21,7 @@ Building on the wrong two would have produced a PRD for work that already exists
 
 | #   | Asserted                                | Verdict                                       | Evidence                                                                                                                                                                                            |
 | --- | --------------------------------------- | --------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1   | Dispatch works and a fleet card renders | **TRUE**                                      | `runtime_worker/stream_subagents.py:461-502` emits `subagent_fleet_started`; `packages/chat-surface/src/subagents/SubagentFleetCard.tsx:54`; projected at `subagents/subagentProjection.ts:109-158` |
+| 1   | Dispatch works and a fleet card renders | **TRUE**                                      | `runtime_worker/stream_subagents.py:463-506` emits `subagent_fleet_started`; `packages/chat-surface/src/subagents/SubagentFleetCard.tsx:54`; projected at `subagents/subagentProjection.ts:109-158` |
 | 2   | A user cannot inspect one child's work  | **PARTLY TRUE** — see §0.2                    | `FleetSubagentRow.tsx:43,58,82`; `SubagentCard.tsx:118-147`                                                                                                                                         |
 | 3   | A user cannot steer one child           | **TRUE**, and deliberately so                 | `capabilities/middleware/runtime_tool_control.py:376-377`                                                                                                                                           |
 | 4   | A user cannot interrupt one child       | **TRUE**                                      | `runtime_worker/run_cancellation.py:18-23`; only route is run-scoped, `runtime_api/http/routes.py:1183-1187`                                                                                        |
@@ -53,11 +53,11 @@ invocation" (`recursion.py:12-15`).
 **Fan-out is a different story.** Three numbers look like fan-out caps and none of
 them is one:
 
-| Value                                        | Where                                            | Live?                                                                                                                                                                                                                               |
-| -------------------------------------------- | ------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `Defaults.SUBAGENT_CONCURRENCY_LIMIT = 2`    | `constants.py:103`                               | Read only by `SubagentTask.concurrency_limit` (`contracts.py:160-162`) — a contract field with no live task-tool caller                                                                                                             |
-| `DelegationAdmissionPolicy.max_children = 3` | `coordination.py:303`                            | The class's own docstring says `max_depth` "is the one field of this contract that the live `task` tool enforces today… The remaining fields belong to the batch planner below, which is still unwired" (`coordination.py:291-294`) |
-| `execution.max_parallel_subagents: 4`        | `hyperparameters.json:40`, `settings.py:293-294` | **Zero consumers.** `grep max_parallel_subagents` over `runtime_worker/`, `execution/`, `delegation/` returns nothing                                                                                                               |
+| Value                                        | Where                                                                                                   | Live?                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| -------------------------------------------- | ------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Defaults.SUBAGENT_CONCURRENCY_LIMIT = 2`    | `constants.py:103`                                                                                      | Read only by `SubagentTask.concurrency_limit` (`contracts.py:160-162`) — a contract field with no live task-tool caller                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| `DelegationAdmissionPolicy.max_children = 3` | `coordination.py:301`                                                                                   | The class's own docstring says `max_depth` "is the one field of this contract that the live `task` tool enforces today… The remaining fields belong to the batch planner below, which is still unwired" (`coordination.py:291-294`)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| `execution.max_parallel_subagents: 4`        | `hyperparameters.json:40`, `hyperparameters/contracts.py:433-435`, `settings.py:293-294` and `:776-782` | **Loaded, validated, env-overridable — and read by nothing that bounds a dispatch.** Not a stray constant: a `ge=1, le=100` field on `RuntimeSettings`' execution block (`settings.py:293-294`), merged from the document (`:776-782`) through a JSON pointer (`:223`) with a legacy `RUNTIME_MAX_PARALLEL_SUBAGENTS` shim (`:61`). What is missing is an enforcement point: `grep '\.max_parallel_subagents'` outside `settings.py` and `hyperparameters/contracts.py` returns nothing. It is a **live tunable nothing enforces**, which is the failure the settings module already names — a parallelism value an operator sets that "makes the agent four times more parallel than the operator believes, in production, with a green test suite" (`settings.py:198-200`) |
 
 What _does_ bound `task` today is the wildcard tool budget:
 `DefaultToolBudget` — `TOOL_NAME = "*"`, `MAX_CALLS_PER_RUN = 10`, and the cap is
@@ -93,7 +93,10 @@ arguments, its tool results. `onJumpToThread` scrolls within the same thread
 
 `AgentFleetList` is **not** the subagent fleet. It is a cross-**run** list:
 "This run plus the OTHER runs (running or with held work)"
-(`AgentFleetList.tsx:3`). Three findings:
+(`packages/chat-surface/src/workspace/AgentFleetList.tsx:3`). Note the path: it
+lives under `workspace/`, **not** under `destinations/run/`, which is where a
+reader looking for a rail component would go first. Every bare
+`AgentFleetList.tsx:N` below is that file. Three findings:
 
 1. **The chip is conditional.** The server skips a run with no pending items —
    "A quiet run, including the current run, has no fleet signal."
@@ -340,7 +343,7 @@ stays done, and its host writes stay in the journal and stay revertible. The
 product copy says "Stopped — 3 tool calls already finished", never "cancelled" as
 if nothing happened. This is the `write_journal` honesty rule applied: "An honest
 'cannot undo this one' is a usable answer; a missing row is not."
-(`capabilities/desktop/write_journal.py:79`, surrounding note `:236-244`).
+(`capabilities/desktop/write_journal.py:76-77`, applied at `:236-244`).
 
 **D5 — Per-child steering reuses the run-steer mailbox, keyed by scope.** The
 mailbox lives on the live-run handle (`run_cancellation.py:61-81`); the drain is
@@ -356,6 +359,21 @@ start.** Not per run — the per-run bound already exists as the wildcard tool
 budget of 10 (`tool_budgets.py:69`) and is the wrong instrument, because it
 cannot distinguish ten children at once from ten children over ten turns. The new
 cap is per-tick, defaults to 4, and is refused as a value.
+
+**And it is a deployment tunable, not a user spend control.** `hyperparameters.json`
+is the right home for a runtime knob an operator sets once per deployment, and
+that is all `max_children_per_tick` is. S5's BYOK framing describes why the
+_runtime_ default is conservative; it does **not** license a user-facing "max
+parallel agents" setting here, and open question 8 (per-supervisor vs per-run)
+must be read as a runtime-scoping question, not a billing one. A per-user or
+per-tenant spend limit is **policy data**: it is authored, stored and
+administered in `services/backend`, and only _enforced_ in the runtime — the
+PDP/PEP split the root `CLAUDE.md` states, whose companion rule is that billing,
+pricing and usage rollups do not live in `ai-backend` at all. If a follow-up PR
+wants "let the user choose how many agents run at once", the setting, its
+storage and its API belong in `backend`; the runtime's job is to snapshot the
+resolved value at run start and refuse against it, exactly as
+`ToolUsePolicySnapshot.from_response` already does.
 
 **D7 — Refusals become visible.** A depth or fan-out refusal today is a string in
 a tool result and nothing else. It gets a frame. Users read cards, not tool
@@ -520,7 +538,7 @@ ships later:
   would no longer be the source of `subagent_completed`. That event needs a second
   producer, keyed on the job rather than on the tool result.
 - `subagent_fleet_finished` decrements on `subagent_completed`
-  (`stream_subagents.py:505-537`); it would need to survive the parent turn
+  (`stream_subagents.py:508-544`); it would need to survive the parent turn
   ending, i.e. the fleet bookkeeping moves off the per-run stream processor's
   in-memory dicts (`stream_subagents.py:71-77`) onto something durable.
 - The run's terminal event can no longer be emitted while a child is open, or
@@ -612,7 +630,10 @@ POST /v1/agent/runs/{run_id}/subagents/{task_id}/steer
 with the supervisor's scope as one key among several. The drain is already
 scope-gated and already refuses to deliver to a child
 (`runtime_tool_control.py:376-377`); the change is that a child now drains its
-own key instead of nothing.
+own key instead of nothing. **Keying the inbox is not sufficient on its own** —
+the middleware reaches the mailbox through `RunSteeringContext`, whose `drain()`
+takes no scope (`runtime_tool_control.py:378`), so that class is part of the
+change. §9.1 carries the contract and the one-line call-site diff.
 
 The existing comment at `runtime_tool_control.py:368-372` is the spec for why
 this must be keyed and not global:
@@ -916,19 +937,33 @@ the trusted one wrong" posture.
 class DelegationFanoutPolicy:
     """Per-tick child admission, snapshotted once and enforced in-process.
 
-    Built at graph-build time (run start) so a mid-run configuration change
-    cannot retro-authorize a dispatch the run did not start with — the same
+    Snapshotted at run start so a mid-run configuration change cannot
+    retro-authorize a dispatch the run did not start with — the same
     snapshot-then-enforce shape ``DelegationDepthPolicy`` uses
     (recursion.py:69-107) and ``ToolUsePolicySnapshot`` before it.
+
+    **Exactly one instance exists per run, and that is load-bearing.** The
+    counter §3.2 specifies is keyed by ``(run_id, execution_scope,
+    model_turn)`` and its read-then-charge pair is lock-guarded; a second
+    instance is a second counter and a second lock, which is precisely the
+    race the lock exists to prevent. So this is not built per agent-build the
+    way the depth policy is — a depth check is a pure comparison against an
+    immutable ceiling and is safe to duplicate, while this one holds mutable
+    per-run state and is not.
     """
 
-    __slots__ = ("_max_children_per_tick", "_lock", "_charged")
+    __slots__ = ("_run_id", "_max_children_per_tick", "_lock", "_charged")
 
-    def __init__(self, max_children_per_tick: int = Defaults.MAX_CHILDREN_PER_TICK) -> None: ...
+    def __init__(
+        self,
+        *,
+        run_id: str,
+        max_children_per_tick: int = Defaults.MAX_CHILDREN_PER_TICK,
+    ) -> None: ...
 
     @classmethod
-    def snapshot(cls) -> "DelegationFanoutPolicy":
-        """Read the ceiling from the hyperparameter document, once.
+    def snapshot(cls, *, run_id: str) -> "DelegationFanoutPolicy":
+        """Read the ceiling from the hyperparameter document, once, for one run.
 
         The document import is function-local for the same cycle reason
         ``DelegationDepthPolicy.snapshot`` documents (recursion.py:86-92).
@@ -936,17 +971,70 @@ class DelegationFanoutPolicy:
         default, which is the most restrictive useful value.
         """
 
+    # --- The single-instance seam. Identical in shape to ToolBudgetGuard's,
+    # --- deliberately: that class solves the same problem (one per-run
+    # --- accounting object, reached from inside the graph loop by a seam that
+    # --- cannot be handed a constructor argument) and its answer is a
+    # --- module ContextVar bound at the top of the run.
+
+    @classmethod
+    def bind_for_run(cls, policy: "DelegationFanoutPolicy") -> object: ...
+
+    @classmethod
+    def unbind(cls, token: object) -> None: ...
+
+    @classmethod
+    def active(cls) -> "DelegationFanoutPolicy | None": ...
+
     @property
     def max_children_per_tick(self) -> int: ...
 
-    def admit(self, *, execution_scope: str, model_turn: int) -> "SubagentError | None":
+    def admit(
+        self, *, run_id: str, execution_scope: str, model_turn: int
+    ) -> "SubagentError | None":
         """Charge one child against this tick; return the typed refusal or None.
+
+        ``run_id`` completes the key §3.2 specifies and is checked against
+        this instance's own. A mismatch is a wiring bug — two policies alive
+        for two runs, or one policy outliving its run — and it raises rather
+        than silently charging the wrong counter. This is the one place in the
+        fan-out path that raises, and it is not model-reachable: the model
+        sees only the returned ``SubagentError``.
 
         Lock-guarded read-then-charge: a turn's tool calls run concurrently, so
         two callers that both read "one left" would both dispatch
         (tool_budget_guard.py:169-171).
         """
 ```
+
+**Where the single instance lives.** The same seam `ToolBudgetGuard` uses: a
+module-level `ContextVar` set once at the top of the run and read from inside
+the graph loop.
+
+- Built and bound in `runtime_worker/handlers/run.py`, immediately beside
+  `ToolBudgetGuard.bind_for_run(budget_guard)` (`run.py:610-614`, built at
+  `:602-609`), and released with its token on the same path.
+- Read at the enforcement point by `DelegationFanoutPolicy.active()`, the way
+  `RuntimeControlMiddleware` already reaches the budget guard
+  (`ToolBudgetGuard.active()` — `tool_budget_guard.py:191-195`, called at
+  `runtime_tool_control.py:1049`).
+- `active()` returning `None` means no fan-out policy is bound — a legacy or
+  test composition. `atlas_task_tool` then admits, exactly as an unbound
+  budget guard is a passthrough today (`run.py:600-601`). The cap is a
+  product bound, not a security bound, so failing open here is correct; §11's
+  invariants do not depend on it.
+
+Do **not** build this inside `atlas_task_tool`'s closure the way
+`DelegationDepthPolicy` is built (`atlas_task_tool.py:117`). The closure runs
+"once per agent build, i.e. once per run" (`atlas_task_tool.py:108-115`), and
+that is enough for the depth policy because it is an immutable ceiling — a
+second copy compares the same number and reaches the same verdict. It is not
+enough here: this object holds the run's live counter, so a second copy is a
+second budget. The closure is also the wrong place for a different reason
+already recorded there — the signature is pinned to deepagents' upstream by
+`test_atlas_task_tool_signature`, which is exactly why the depth ceiling is
+snapshotted rather than "accepted as an argument", and a run id could not be
+threaded in as one either.
 
 ```python
 # agent_runtime/delegation/subagents/constants.py                    (EXTENDED)
@@ -980,7 +1068,66 @@ class RunSteeringInbox:
     def deposit(self, message: SteeringMessage, *, scope: str = SUPERVISOR_SCOPE) -> bool: ...
     def drain(self, *, scope: str = SUPERVISOR_SCOPE) -> tuple[SteeringMessage, ...]: ...
     def pending(self, *, scope: str = SUPERVISOR_SCOPE) -> int: ...
+
+
+class RunSteeringContext:
+    """The ContextVar hop between the graph seam and the run's mailbox.
+
+    **This class, not the inbox, is what the drain call site actually calls**,
+    and keying the inbox without keying this is the whole change silently
+    doing nothing.
+    """
+
+    @classmethod
+    def drain(cls, *, scope: str = RunSteeringInbox.SUPERVISOR_SCOPE) -> tuple[SteeringMessage, ...]:
+        """Forward one scope's drain to the bound inbox; total, as today.
+
+        Unbound still drains nothing rather than raising (run_steering.py:199-207).
+        """
 ```
+
+**Why this class has to be in the contract.** The only consumer of the drain is
+`RuntimeControlMiddleware`, and it does not hold the inbox — it calls
+`RunSteeringContext.drain()` with **no arguments**
+(`runtime_tool_control.py:378`). That indirection is deliberate and is bound
+once per run, from `LiveRunHandle.steering`, at the top of the worker's dispatch
+(`runtime_worker/loop.py:952-960`) precisely so "nothing between here and the
+model step has to thread a run id through the graph to find its own mailbox"
+(`loop.py:956-957`); the class itself is `run_steering.py:164-207`, with
+`drain()` at `:195-207`.
+
+So adding `scope=` to `RunSteeringInbox.drain` alone leaves
+`RunSteeringContext.drain()` passing nothing, which defaults to
+`SUPERVISOR_SCOPE`, and **every child drains the supervisor's key** — the exact
+outcome the comment at `runtime_tool_control.py:368-372` warns about, arrived at
+from the opposite direction.
+
+**Where the scope comes from.** `RuntimeControlMiddleware._execution_scope_for_runtime`
+(`runtime_tool_control.py:1032-1045`) — verified to return
+`f"subagent:{value.strip()}"` when `SUPERVISOR_TASK_CALL_ID_KEY` is present in
+the runtime config's `metadata` or `configurable` (`:1042-1044`), and
+`cls.SUPERVISOR_SCOPE` otherwise (`:1036`, `:1045`). That is already the key
+D5 names, and the same function already gates the drain one line above the call
+(`:376-377`).
+
+**Concretely, the `before_model` hook changes from a scope _gate_ to a scope
+_argument_:**
+
+```python
+# runtime_tool_control.py:376-378, today
+if cls._execution_scope_for_runtime(runtime) != cls.SUPERVISOR_SCOPE:
+    return {}
+steers: tuple[SteeringMessage, ...] = RunSteeringContext.drain()
+
+# after
+scope = cls._execution_scope_for_runtime(runtime)
+steers: tuple[SteeringMessage, ...] = RunSteeringContext.drain(scope=scope)
+```
+
+The early return goes away — that is the point of the change — but the
+supervisor's behaviour is unchanged, because for the supervisor
+`_execution_scope_for_runtime` returns `SUPERVISOR_SCOPE` and the drain resolves
+to the same key it drains today.
 
 ```python
 # agent_runtime/execution/subagent_interrupt.py                          (NEW)
@@ -1098,7 +1245,7 @@ SUBAGENT_REFUSED   = "subagent_refused"     # NEW — depth / fan-out refusal fr
 No new `approval_kind`. No new model-visible tool. The `subagent_completed`
 frame carries interruption via its existing `status` field, using
 `Values.Status.CANCELLED` (`constants.py:76`), which the client already maps
-(`SubagentCard.tsx:168-169`, `:187-188`).
+(`SubagentCard.tsx:168-169`, `:188-189`).
 
 ### 9.2 Python — payload shapes
 
@@ -1121,9 +1268,47 @@ frame carries interruption via its existing `status` field, using
 }
 ```
 
-`subagent_completed` gains no field. An interrupted child sets
-`status = "cancelled"` and `summary` to a bounded sentence naming the completed
-tool-call count; `duration_ms` is already stamped (`stream_subagents.py:62-65`).
+An interrupted child sets `status = "cancelled"` and `summary` to a bounded
+sentence naming the completed tool-call count; `duration_ms` is already stamped
+(`stream_subagents.py:196-198`, from the start timestamp recorded at `:61-64`
+and computed at `:266-272`).
+
+`subagent_completed` gains **one** field, and only for the refused case:
+
+```python
+# subagent_completed — ADDED
+{
+    ...,
+    "reason_code": str | None,   # NEW — SubagentErrorCode value, or None
+}
+```
+
+**Why it cannot be omitted.** Edge case 11 makes a refused child emit a terminal
+`subagent_completed` so the fleet's remaining-set decrements and the card can
+close. That gives one frame two meanings — "ran and failed" and "never started"
+— and the client has nothing to tell them apart. Two consequences a client must
+handle, both invisible without the field:
+
+- **`duration_ms` is present and meaningless.** `subagent_started` fires off the
+  supervisor's tool-call chunk at dispatch (`stream_subagents.py:687-711`),
+  which is **before** our refusal runs inside the tool function, so
+  `_subagent_started_at` already holds a timestamp and
+  `_subagent_duration_ms` returns a real number (`:266-272`). For a refused
+  child that number measures how long the refusal took, not how long the child
+  worked. A row rendering "✗ researcher-d · 0:00" is reporting a duration for
+  work that never happened.
+- **The failure copy would come from the wrong place.** S9 requires the reason
+  to be a typed `SubagentErrorCode`, not model prose. Without `reason_code` on
+  the terminal frame, a client must join it back to the separate
+  `subagent_refused` frame by `task_id` to render the row at all.
+
+**Client rule.** A `subagent_completed` carrying a `reason_code` of
+`depth_limit_exceeded` or `concurrency_limit_exceeded` is a child that **never
+started**: render the typed reason, and render **no** duration and **no** usage.
+Every other terminal frame is a child that ran. Absent `reason_code` is the
+normal case and must not render as an unknown-error state — this is an additive
+optional field, and the existing `status` mapping (`SubagentCard.tsx:168-169`,
+`:187-188`) is unchanged.
 
 ### 9.3 TypeScript — `packages/api-types`
 
@@ -1153,6 +1338,13 @@ export interface SubagentRefusedPayload {
 // RuntimeEventPayloadMap (index.ts:3938-3974)
 subagent_steered: SubagentSteeredPayload;
 subagent_refused: SubagentRefusedPayload;
+
+// SubagentActivityPayload (index.ts:3786-3812) — the payload behind
+// subagent_completed (index.ts:3940). One optional field, beside `usage`:
+/** Present on subagent_completed only when the child was refused at
+ *  dispatch and never ran. Its presence is what tells a client not to
+ *  render `duration_ms` or `usage` for this row. */
+reason_code?: string;
 
 export interface InterruptSubagentResponse {
   run_id: string;
@@ -1231,15 +1423,27 @@ Raised, not removed. Where an edge case is hard it says so.
     child returns the grandchild's events too. **Decision: correct — a child's
     view includes its own subtree.** The tree in §7.2 nests accordingly.
 11. **A fleet where one child is refused at dispatch.** `_maybe_emit_fleet_started`
-    counts payloads from tool-call chunks (`stream_subagents.py:461-475`), which
+    counts payloads from tool-call chunks (`stream_subagents.py:463-497`), which
     are emitted before our refusal runs, so the fleet's declared `total` would
     include a child that never started. **This is a real defect in the design and
     must be handled:** the refused child emits `subagent_refused` **and** a
     terminal `subagent_completed` with `status = "failed"` so
     `_maybe_emit_fleet_finished`'s remaining-set decrements
-    (`stream_subagents.py:505-537`) and the fleet card can reach `done`.
+    (`stream_subagents.py:508-544`) and the fleet card can reach `done`.
     Without this the fleet card spins forever. Same failure class as
     `close_open_subagents_as_cancelled`.
+
+    **That terminal frame MUST carry `reason_code`** (§9.2). Emitting it without
+    one overloads `subagent_completed` with two meanings the client cannot
+    separate — "ran and failed" and "never started" — and hands the row a
+    `duration_ms` that is real, non-zero and about nothing, because
+    `subagent_started` already fired at dispatch (`stream_subagents.py:687-711`)
+    and the elapsed clock started there (`:266-272`). The rule the client
+    enforces: `reason_code` present ⇒ never started ⇒ render the typed reason,
+    no duration, no usage. **This is the one place this PRD changes a payload
+    that already ships**, and it is additive and optional, so an unpatched
+    client renders exactly what it renders today.
+
 12. **A child's approval appears in two views.** §6.5 — intended, decided.
 13. **Two children write the same file.** §8.3 — undo collapses to one restore of
     the content preceding both. Documented, not fixed.
@@ -1426,32 +1630,79 @@ one button. Inspection is third because it needs a panel.
 
 ### Phase 0 — Verify, do not build (½ day)
 
-Three unverified claims gate the rest. Each is a live run, not a unit test.
+Four claims gate the rest. Each is a live run, not a unit test.
 
 1. Does a child's host write attribute to the child's inner `tool_call_id` or the
    parent's `task` call id? (§8.3 row 3.)
 2. Does a tool-budget rejection draw a user-visible card today? (§3.3 row 3.)
 3. Does `_maybe_emit_fleet_started` fire before a refusal could run, i.e. is edge
-   case 11 real? Read `stream_subagents.py:461-475` against a live fleet.
+   case 11 real? Read `stream_subagents.py:463-497` against a live fleet.
+4. **Are a turn's `task` calls concurrent on _our_ build?** Source says yes and
+   §16 item 6 shows the whole chain — `astream` → `create_agent` → `ToolNode` →
+   `asyncio.gather` — so this is a **confirmation, not an investigation**. Drive
+   a run whose assistant message emits three `task` calls and read the ledger:
+   the three `subagent_started` frames must precede the first
+   `subagent_completed`, and the children's inner tool events must interleave by
+   `sequence_no` rather than appearing in three contiguous blocks. While you are
+   there, count how many are genuinely simultaneous — that is the
+   `max_concurrency` sub-question §16 item 6 leaves open, and this run answers it
+   for free.
 
 Also: `run_cancellation.py:6` references `LiveBatchAdmissionRegistry`, which does
 not exist anywhere in the repo (verified by grep). Fix the docstring or find what
 it meant.
 
-**Exit:** three answers, each with a citation or a transcript.
+**Exit:** four answers, each with a citation or a transcript. Item 4 is a Phase 1
+gate specifically — see below.
 
 ### Phase 1 — Bounded fan-out + visible refusals (S5, S6)
 
+**Gated on Phase 0 item 4.** What that answer decides is not whether to build the
+cap but what the cap _is_, and therefore whether the design below is right:
+
+- **Concurrent** (what source says, §16 item 6): `max_children_per_tick` bounds
+  children **in flight together**. Ship as designed — the lock in §3.2 is load
+  bearing, the "which of N is refused is not deterministic" copy is honest, and
+  S5's promise to the BYOK payer holds because 4 is a bound on simultaneous
+  spend.
+- **Serial** (only if the live run contradicts source): the lock is dead weight,
+  refusal becomes deterministic and the copy should say "your fourth call", and
+  — the part that matters — "cap of 4" would mean four children **one after
+  another**, which bounds nothing S5 cares about. In that world the per-tick cap
+  is the wrong instrument and Phase 1 stops to re-pick one, because the only
+  remaining bound is the per-run budget of 10 that §3.2 already rejects.
+
+Then:
+
 - `DelegationFanoutPolicy` + `Defaults.MAX_CHILDREN_PER_TICK` +
   `Limits.FANOUT_MAX` + the refusal message.
+- The per-run binding seam (§9.1): build and bind beside
+  `ToolBudgetGuard.bind_for_run` in `runtime_worker/handlers/run.py:610-614`.
+  One instance per run, or the lock guards two counters and guards nothing.
 - Wire it into `atlas_task_tool` beside the depth check.
 - `subagent_refused` event, both producers (depth and fan-out).
-- The terminal frame for a refused child so the fleet card closes (edge 11).
-- Delete or wire `execution.max_parallel_subagents` — a config key with zero
-  consumers is a lie in a document users read.
+- The terminal frame for a refused child, carrying `reason_code`, so the fleet
+  card closes and the client can tell "never started" from "ran and failed"
+  (edge 11, §9.2).
+- Delete or wire `execution.max_parallel_subagents`. It is **not** a stray
+  constant, so "delete" is bigger than it sounds: it is a validated settings
+  field (`settings.py:293-294`), a document contract field
+  (`hyperparameters/contracts.py:433-435`), a pointer-override target
+  (`settings.py:223`), a legacy env var (`settings.py:61`), and a value in
+  `hyperparameters.json:40` — plus the tests pinning them
+  (`tests/unit/agent_runtime/test_runtime_settings.py:59`,
+  `hyperparameters/test_loader.py:184` and `:268`,
+  `hyperparameters/test_contracts.py:125-132`,
+  `hyperparameters/test_document.py:83` and `:273`). Either branch touches
+  `settings.py` and `hyperparameters/contracts.py`, which nothing else in this
+  phase does — budget for them. Whether the honest fix is to make
+  `max_children_per_tick` the enforcement of that existing key rather than a
+  second name for the same idea is an implementer's call to raise at review; a
+  key users can read that bounds nothing is a lie either way.
 
 **Why first:** no new route, no new UI surface, no new wire contract beyond one
-event. It removes the only genuinely uncapped axis.
+event and one optional payload field. It removes the only genuinely uncapped
+axis.
 
 ### Phase 2 — Per-child interrupt (S2, S3, S10)
 
@@ -1513,7 +1764,7 @@ when — and only when — the task executing the parent stops"
 (`run_cancellation.py:18-23`).
 
 **Enforce fan-out in `coordination.py`'s planner.** The planner already has
-`max_children` (`coordination.py:303`) and a full admission vocabulary. Rejected
+`max_children` (`coordination.py:301`) and a full admission vocabulary. Rejected
 because the planner "deliberately stops before dispatch"
 (`coordination.py:3-5`) and has no product caller — wiring it would mean adopting
 its whole batch-request contract on a path where the model emits N independent
@@ -1551,7 +1802,7 @@ a run-scoped surface; the fix is removal (§7.4), not a working no-op.
 2. **Whether a tool-budget rejection draws a card.** I traced the model-facing
    message (`tool_budget_middleware.py:66-80`) but not the event path.
 3. **Whether `_maybe_emit_fleet_started` can count a child that a later refusal
-   prevents.** Read from `stream_subagents.py:461-475`; not exercised.
+   prevents.** Read from `stream_subagents.py:463-497`; not exercised.
 4. **`run_cancellation.py:6` cites `LiveBatchAdmissionRegistry`.** No such symbol
    exists in `services/ai-backend` (verified by grep over the whole service).
    Either a stale docstring or a module that was removed.
@@ -1562,10 +1813,45 @@ a run-scoped surface; the fix is removal (§7.4), not a working no-op.
    out. **If nothing does, a wedged child holds the parent's tool node open with
    no bound**, which would make per-child interrupt more urgent, not less.
 6. **Whether LangGraph runs a turn's `task` calls concurrently or serially.**
-   `tool_budget_guard.py:169-171` says "the graph now runs a turn's tool calls
-   concurrently", which I take as authoritative for the lock requirement in §3.2
-   — but I did not verify it for the `task` tool specifically, and it changes how
-   `max_children_per_tick` behaves (a concurrency cap versus a dispatch cap).
+   **ANSWERED: concurrently.** This one decides what the headline feature
+   _means_, so it is settled here rather than deferred, from source in the
+   installed venv rather than from inference. The chain, end to end:
+   - Our graph is driven asynchronously — `harness.agent.astream(...)`
+     (`agent_runtime/execution/runtime.py:370`, resume twin `:407`), so
+     LangGraph takes its async node path.
+   - deepagents builds the agent through `langchain.agents.create_agent`
+     (`deepagents/graph.py:12`, called `:922` — deepagents 0.7.1).
+   - `create_agent` puts every client-side tool in one
+     `langgraph.prebuilt.ToolNode` (`langchain/agents/factory.py:1060-1068` —
+     langchain 1.3.14).
+   - `ToolNode._afunc` builds one coroutine per tool call in the turn and
+     `await asyncio.gather(*coros)` (`langgraph/prebuilt/tool_node.py:855-858`
+     — langgraph-prebuilt 1.1.0). The sync twin fans the same calls across a
+     thread-pool executor (`:821-824`).
+   - `atask` is a coroutine that `await`s the child graph
+     (`atlas_task_tool.py:373`), so each of the N gathered calls yields at
+     every provider hop and the children genuinely interleave. They are not
+     dispatched-then-serialized.
+
+   Our own source already says this and is corroborated by the above:
+   "LangGraph schedules a turn's tool calls itself — its async node gathers
+   them, its sync node fans them across a thread pool"
+   (`runtime_tool_control.py:11-13`), a note written when that module stopped
+   holding a run-wide exclusive permit.
+
+   **Therefore `max_children_per_tick` is a concurrency cap, not merely a
+   dispatch cap** — the N it admits are in flight together, which is what S5
+   needs it to bound. The §3.2 lock requirement stands for the same reason,
+   now on direct evidence rather than on a comment about a different tool.
+
+   One narrow sub-question is deliberately left open and is **not** a blocker:
+   `runtime_config` passes `max_concurrency` from `execution.max_parallel_tasks`
+   (`execution/runtime.py:118`) and `runtime_tool_control.py:13-14` describes the
+   scheduling as "bounded by the framework's own `max_concurrency`" — I did not
+   establish whether that bound reaches _inside_ `ToolNode._afunc`'s gather or
+   only across Pregel's nodes. It changes how many of an admitted 4 are truly
+   simultaneous; it does not change concurrent-versus-serial, and the cap is
+   correct either way. Phase 0 item 4 observes it on a live run.
 
 **Open product questions.**
 

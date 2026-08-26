@@ -42,27 +42,73 @@ latin / latin-ext by `unicode-range`, `font-display: swap`
 the repo referencing them** (verified: the only `space-grotesk`/`instrument-sans`
 string hits outside `node_modules` are two parity harnesses and one audit finding).
 
-**Usage split.** `var(--font-mono)` is referenced **241** times across `packages/` +
-`apps/`; `var(--font-sans)` 66 times; `var(--font-display)` 25 times. Mono is not a
-code-block accent in this product — it is the dominant chrome face. Metadata,
-section heads, chips, timestamps, rail badges and ⌘K rows are all mono
+**Usage split.** Counted with this exact command, from the repo root:
+
+```bash
+for f in mono sans display; do
+  printf '%-8s %s\n' "$f" "$(grep -rho --include='*.css' --include='*.ts' --include='*.tsx' \
+    --exclude-dir=node_modules --exclude-dir=dist \
+    -- "var(--font-$f)" packages/*/src apps/desktop/renderer apps/frontend/src | wc -l)"
+done
+# mono 221   sans 63   display 19
+```
+
+`var(--font-mono)` **221** · `var(--font-sans)` **63** · `var(--font-display)` **19**
+— 303 family references, 73% of them mono. Mono is not a code-block accent in this
+product — it is the dominant chrome face. Metadata, section heads, chips, timestamps,
+rail badges and ⌘K rows are all mono
 (`styles.css:963, 1022, 1101, 1120, 1147, 1175, 1214, 1225, 1330, 1454` …).
+
+**On the counting basis**, because an earlier draft of this document reported
+241 / 66 / 25 and those numbers do not reproduce. The scope above is deliberate and
+narrow: `packages/*/src` plus the two host renderers, `.css`/`.ts`/`.tsx` only,
+`node_modules` and `dist` excluded, `.md` excluded, **test files included** (a
+`.test.tsx` asserting `var(--font-mono)` is asserting about a real call site). One
+knob moves these numbers materially and is worth knowing before quoting them:
+counting the bare token `--font-mono` instead of the `var(…)` form adds the
+definitions and the token-name string literals in tests (**250 / 68 / 26**,
+re-run 2026-08-27). The `var(…)` form is the one that answers "how many places
+consume this token."
+
+An earlier draft also quoted a `dist/` variant (396 / 123 / 37). That number is
+withdrawn rather than corrected: **no `dist/` directory exists** under
+`packages/*/src`, `packages/*/`, `apps/desktop/renderer` or `apps/frontend/src`,
+so including or excluding it changes nothing and the knob was never real. A
+paragraph whose whole job is to establish the counting basis cannot afford a
+number nobody can reproduce.
 
 ### 1.2 The scale
 
-Sans ladder, `styles.css:69-77` — with the resolved pixel value:
+Sans ladder, `styles.css:69-77` — with the resolved pixel value. The `var()` uses
+column is the same command as §1.1, one `sort | uniq -c` away:
 
-| Token             | rem       | px        | uses |
-| ----------------- | --------- | --------- | ---- |
-| `--font-size-3xs` | 0.5625rem | 9         | 26   |
-| `--font-size-2xs` | 0.7rem    | **11.2**  | 214  |
-| `--font-size-xs`  | 0.78rem   | **12.48** | 343  |
-| `--font-size-sm`  | 0.8125rem | 13        | 247  |
-| `--font-size-md`  | 0.875rem  | 14        | 56   |
-| `--font-size-lg`  | 1rem      | 16        | 28   |
-| `--font-size-xl`  | 1.125rem  | 18        | 13   |
-| `--font-size-2xl` | 1.4rem    | **22.4**  | 15   |
-| `--font-size-3xl` | 2rem      | 32        | 3    |
+```bash
+grep -rho --include='*.css' --include='*.ts' --include='*.tsx' \
+  --exclude-dir=node_modules --exclude-dir=dist \
+  -E -- 'var\(--font-size-[a-z0-9-]+\)' packages/*/src apps/desktop/renderer apps/frontend/src \
+| sort | uniq -c | sort -rn      # 829 total across all 16 rungs
+```
+
+| Token             | rem       | px        | `var()` uses |
+| ----------------- | --------- | --------- | ------------ |
+| `--font-size-3xs` | 0.5625rem | 9         | 23           |
+| `--font-size-2xs` | 0.7rem    | **11.2**  | 184          |
+| `--font-size-xs`  | 0.78rem   | **12.48** | 266          |
+| `--font-size-sm`  | 0.8125rem | 13        | 167          |
+| `--font-size-md`  | 0.875rem  | 14        | 49           |
+| `--font-size-lg`  | 1rem      | 16        | 21           |
+| `--font-size-xl`  | 1.125rem  | 18        | 9            |
+| `--font-size-2xl` | 1.4rem    | **22.4**  | 11           |
+| `--font-size-3xl` | 2rem      | 32        | 2            |
+
+Those nine sans rungs are 732 of the 829; the remaining 97 are the mono and
+whole-pixel rungs below (`mono-9-5` 35, `mono-10` 29, `mono-10-5` 14, `mono-8-5` 12,
+`12` 3, `11` 3, `13` 1). The px column assumes a 16px rem anchor, which the body
+comment states explicitly is preserved: _"It deliberately does NOT touch the rem
+anchor (`html`/`:root` stays at the UA 16px)"_ (`styles.css:639-640`). Verified: no
+`html` or `:root` rule in `packages/*/src` or either host renderer sets `font-size`,
+and the compact-density block (`styles.css:182-188`) changes spacing and line-height
+only.
 
 A separate **mono micro-ladder** exists in half-pixel steps, named by pixel value
 (`styles.css:93-96`): `8-5` / `9-5` / `10` / `10-5`. Plus three whole-pixel
@@ -139,63 +185,118 @@ Four separable causes. Only one is the face.
 
 It is set in the desktop **boot splash** (`apps/desktop/renderer/BootProgress.css:34`).
 
-It is **not set anywhere in `packages/design-system/src/styles.css`, `packages/chat-surface/src/*.css`, or `apps/frontend/src/styles.css`** — verified by a
-repo-wide grep whose only hits are the six mocks above, the boot splash, and four
-`apps/website` stylesheets.
+It is **not set anywhere in `packages/design-system/src/styles.css`, `packages/chat-surface/src/*.css`, or `apps/frontend/src/styles.css`** — verified by
+`grep -rn --exclude-dir={node_modules,dist,.git} font-smoothing .`, whose only hits
+outside this document are the six mocks above, five `docs/plan/**` mock HTMLs
+(`windowed-mode/mock-prd-01..03`, `generative-ui-floor/mock-status-strip` and
+`-mock-email-and-quiet-chrome`), the boot splash, and four `apps/website`
+stylesheets. **No shipped app stylesheet is among them.**
 
-Consequence, on a dark UI (`--color-bg: #09090b`), on macOS: subpixel-antialiased
-light-on-dark text gets stem-darkened and reads heavier and slightly muddier than
-the same type rendered grayscale. This is the classic "why does my app look worse
-than the mock" answer. It also means the desktop app currently **changes its text
-rendering at the moment the boot splash unmounts** — smoothed during boot, unsmoothed
-after.
+**The one consequence that is verifiable without running the app:** the desktop
+renderer **changes its text rendering the moment the boot splash unmounts**, inside a
+single document. `-webkit-font-smoothing` is inherited; the splash sets it on the
+`.boot` wrapper (`BootProgress.css:7` opens the rule, `:34` sets the property),
+`BootChrome` renders that wrapper as `<div className="boot">`
+(`apps/desktop/renderer/BootProgress.tsx:163`), and once boot reaches `ready`
+`BootGate` returns bare `children` with no wrapper
+(`BootProgress.tsx:83-84`) into the same React root
+(`apps/desktop/renderer/bootstrap.tsx:167-202`). Smoothed during boot, unsmoothed
+after, same window. That is a real inconsistency at exact lines.
 
-**The parity gate cannot see this.** `-webkit-font-smoothing` is not in
+**What is _not_ verified is the part a reader would act on.** The usual story —
+"subpixel-antialiased light-on-dark text is stem-darkened and reads heavier and
+muddier" — is asserted from general knowledge and **I did not run the app or measure
+a pixel**. Two things could make it much smaller than the story implies:
+
+- macOS has not done subpixel (RGB) antialiasing system-wide since Mojave (10.14),
+  so on any macOS this app actually ships to, `auto` may already resolve to
+  grayscale, leaving `antialiased` little or nothing to change. What can still
+  differ is Chromium's contrast/stem-darkening treatment, which is display- and
+  OS-version-dependent.
+- On Windows — the other shipping host, and the one running Segoe UI —
+  `-webkit-font-smoothing` is a macOS-only Blink property and does **nothing at
+  all**.
+
+So §3.1 is a demonstrated divergence from the mock and from our own splash, with an
+**unmeasured** aesthetic payoff. §6/B1 prices it on that basis and says how to
+measure it before deciding.
+
+**The parity gate cannot see this either.** `-webkit-font-smoothing` is not in
 `DEFAULT_PROPS` (`tools/design-parity/lib/extract-computed.js:29-58`), so every
 parity report to date has been blind to it.
 
-Confidence: high that the property is missing; **unverified** how large the visual
-difference is on the user's specific display, because I did not run the app.
-
 ### 3.2 The sans ladder cannot express the design, and 35 call sites already say so out loud
 
-The design's sans sizes, counted from `design-kit/app-v3/copilot.css`:
+All 110 `font-size: <n>px` declarations in `design-kit/app-v3/copilot.css`, split by
+whether the same rule block also declares `font-family: var(--mono)`. An earlier
+draft printed only the **all faces** column and labelled it "the design's sans
+sizes"; it is not, and the split matters, because the low half-pixel band turns out
+to be almost entirely mono — which the design system **already models**.
 
-| px   | occurrences |
-| ---- | ----------- |
-| 12   | 20          |
-| 10.5 | 15          |
-| 11   | 14          |
-| 12.5 | 12          |
-| 10   | 10          |
-| 9    | 9           |
-| 11.5 | 8           |
-| 9.5  | 7           |
-| 13.5 | 5           |
-| 13   | 4           |
-| 8.5  | 2           |
-| ≥14  | 4 total     |
+```bash
+perl -0777 -ne 'while (/\{([^{}]*)\}/g) { my $b = $1;
+    next unless $b =~ /font-size:\s*([0-9.]+)px/;
+    my $sz = $1;                                   # bind BEFORE the next match clobbers $1
+    my $mono = ($b =~ /font-family:\s*var\(--mono\)/) ? "MONO" : "other";
+    print "$mono\t$sz\n"; }' \
+  tools/design-parity/design-kit/app-v3/copilot.css | sort | uniq -c
+```
 
-That is a **half-pixel ladder living almost entirely between 8.5px and 13.5px**.
+| px        | all faces | in a `var(--mono)` block | not mono |
+| --------- | --------- | ------------------------ | -------- |
+| 12        | 20        | 2                        | **18**   |
+| 10.5      | 15        | 11                       | 4        |
+| 11        | 14        | 6                        | **8**    |
+| 12.5      | 12        | 0                        | **12**   |
+| 10        | 10        | 8                        | 2        |
+| 9         | 9         | 8                        | 1        |
+| 11.5      | 8         | 3                        | **5**    |
+| 9.5       | 7         | 7                        | 0        |
+| 13.5      | 5         | 0                        | **5**    |
+| 13        | 4         | 1                        | 3        |
+| 8.5       | 2         | 1                        | 1        |
+| ≥14       | 4         | 0                        | 4        |
+| **total** | **110**   | **47**                   | **63**   |
+
+Read the right-hand column, not the left. The 8.5 / 9 / 9.5 / 10 / 10.5 band is
+mono, and `--font-size-mono-*` (`styles.css:93-96`) already covers it. **The design's
+_non-mono_ register is 11 / 11.5 / 12 / 12.5 / 13 / 13.5, plus four sizes ≥14** —
+still a half-pixel ladder, still one the rem t-shirt scale cannot express, but a
+narrower and more specific claim than the earlier framing.
+
+One caveat on the method, stated because it bounds the claim: "not mono" is an
+**upper bound** on sans. A rule can inherit mono from an ancestor without
+re-declaring `font-family`, so a few of those 63 are probably mono too. It cannot
+run the other way — a block that names `var(--mono)` is mono.
 
 Our sans ladder is a rem t-shirt scale whose stated derivation is _not the design_:
-`styles.css:62` says **"Sizes hit the 5 most common values in the existing app (≈11/13/14/16/19 px)."** It was fitted to the app that preceded the redesign.
+`styles.css:61` says **"Sizes hit the 5 most common values in the existing app (≈11/13/14/16/19 px)."** It was fitted to the app that preceded the redesign.
 
 The mismatch is concrete:
 
-- Design's most common size, **12px** (20 uses). Nearest sans rung: `xs` = **12.48px**.
-  Off by 0.48px — above `compare.mjs`'s 0.4px threshold (`compare.mjs:337-343`), so
-  it scores **MEDIUM** wherever an anchor lands on it.
-- Design's **11px** (14 uses). Nearest rung `2xs` = **11.2px**. Off by 0.2px — _below_
-  the threshold, so it is real drift the gate is designed not to report.
-- Design's **11.5px** (8 uses) and **13.5px** (5 uses): **no rung exists.**
+- Design's most common size, **12px** (20 uses, 18 of them non-mono). Nearest sans
+  rung: `xs` = **12.48px**. Off by 0.48px — above `compare.mjs`'s 0.4px threshold
+  (`compare.mjs:337-343`), so it scores **MEDIUM** wherever an anchor lands on it.
+- Design's **11px** (8 non-mono uses). Nearest rung `2xs` = **11.2px**. Off by 0.2px
+  — _below_ the threshold, so it is real drift the gate is designed not to report.
+- Design's **12.5px** (12 non-mono uses) is what `xs` currently renders, by accident
+  rather than by declaration.
+- Design's **11.5px** (5 non-mono uses) and **13.5px** (5 non-mono uses): **no rung
+  exists.**
 
 So components bail out to raw pixels. There are **35 raw-`px` `font-size` literals**
-in shipped package CSS (`packages/design-system/src` + `packages/chat-surface/src`) —
-ten of them `11.5px` — despite `packages/design-system/CLAUDE.md:32` mandating
-_"never hard-code rems / pixels for `font-size`"_ and `SKILL.md:17` repeating it.
+in shipped package CSS (`packages/design-system/src` + `packages/chat-surface/src`;
+`.css` files only) — despite `packages/design-system/CLAUDE.md:32` mandating _"never
+hard-code rems / pixels for `font-size`"_ and `SKILL.md:17` repeating it. Their
+distribution matters, and separates two different problems: **ten are `11.5px`, the
+one size on this list that no token covers**; the remaining 25 (`9` ×2, `9.5` ×2,
+`10` ×5, `10.5` ×2, `11` ×2, `12` ×8, `13` ×4) all have a token already and are
+discipline debt rather than a coverage gap. Only the first group is evidence that
+the ladder cannot express the design.
 
-Four of those literals annotate the reason themselves:
+**Eleven** of those 35 annotate the reason themselves — all eleven in
+`packages/chat-surface/src/onboarding/onboarding.css`, at `:80, 162, 170, 176, 214,
+456, 549, 667, 785, 804, 824`. The four that are `11.5px`:
 
 ```
 packages/chat-surface/src/onboarding/onboarding.css:176   font-size: 11.5px; /* design-exact; off the type ladder */
@@ -204,7 +305,7 @@ packages/chat-surface/src/onboarding/onboarding.css:804   font-size: 11.5px; /* 
 packages/chat-surface/src/onboarding/onboarding.css:824   font-size: 11.5px; /* design-exact; off the type ladder */
 ```
 
-The mono side **already solved this**. `styles.css:80-92` explains, verbatim, that
+The mono side **already solved this**. `styles.css:79-92` explains, verbatim, that
 "the design's mono metadata register is a HALF-PIXEL ladder (8.5 / 9 / 9.5 / 10 /
 10.5 / 11) that the sans t-shirt scale above cannot express, so these rungs sit
 deliberately OFF the main ladder and are named by their px value." The sans side
@@ -212,8 +313,11 @@ never got the same treatment. Three whole-pixel escape hatches were later bolted
 for the composer and popover (`styles.css:102-104`) — the same fix, applied
 piecemeal, twice.
 
-**53% of all type-token references land on a fractional-pixel rung**
-(343 `xs` + 214 `2xs` + 15 `2xl` = 572 of 1,076 total `--font-size-*` references).
+**55.6% of all `var(--font-size-*)` references land on a rung that resolves to a
+fractional pixel** — 266 `xs` + 184 `2xs` + 11 `2xl` = **461 of 829** (§1.2's
+command). An earlier draft said 53% from 572 of 1,076; that arithmetic came from
+counting the bare token name with tests excluded, and does not reproduce. The
+conclusion is unchanged, and slightly stronger.
 
 This is the cause a face swap does **not** fix.
 
@@ -226,7 +330,7 @@ This is the cause a face swap does **not** fix.
 `-apple-system` is a _meta-family_. macOS chooses SF Pro Text or SF Pro Display by
 optical size, and the app cannot pin it. In a UI whose entire type register lives in
 the 8.5–13.5px band with weights spanning 400–700, that switch point is inside our
-working range. The token discipline in `CLAUDE.md:69` is a workaround for a property
+working range. The token discipline in `packages/design-system/CLAUDE.md:69` is a workaround for a property
 of the face, not a bug in the components.
 
 A vendored face with a single continuous variable axis has no switch point. That is
@@ -235,7 +339,7 @@ own repo as having cost us a visible defect.
 
 ### 3.4 The face itself
 
-The mono-heavy register (241 `--font-mono` references vs 91 sans) plus a system UI
+The mono-heavy register (221 `--font-mono` references vs 82 sans + display) plus a system UI
 sans is a specific look: **terminal-adjacent, technically neutral, unbranded**. It
 resembles a well-built internal tool. Whether that is "not aesthetic enough" is a
 taste judgement, and the only one of the four that a face swap addresses.
@@ -292,7 +396,8 @@ when nobody subsets. Our two JetBrains files total 55,600 B.
   _"so bold/italic share the regular face's metrics instead of squeezing against a system fallback."_
 - `src/styles.css:394` — `--dt-font-kbd` is pinned to the native stack with the
   comment _"Key caps always use the native UI face — never theme typography overrides."_
-- `src/styles.css:565` — **`-webkit-font-smoothing: antialiased` on `body`.** (We do not.)
+- `src/styles.css:561` — **`-webkit-font-smoothing: antialiased`**, inside the `body`
+  block that opens at `:551`. (We do not. An earlier draft cited `:565`; re-verified.)
 - Terminal font is a user setting (`src/app/settings/terminal-font-setting.tsx`).
 
 ### Read-across
@@ -306,8 +411,18 @@ when nobody subsets. Our two JetBrains files total 55,600 B.
 
 Neither reference validates "everyone ships a branded face." One kept native and
 made typography a theme setting; one moved to Inter for its newer surfaces and pays
-1.9 MB for it. Both set `antialiased`. Both size in whole pixels or a whole-pixel
-base — neither has fractional rungs.
+1.9 MB for it. Both size in whole pixels or a whole-pixel base — neither has
+fractional rungs.
+
+**Both set `antialiased`, but not the same way**, and the difference matters for
+B1. Hermes sets it once on `body` (`src/styles.css:561`) — global, the shape B1
+proposes. OpenCode's desktop app sets it **per component**, in eight v2 kit
+stylesheets (`packages/ui/src/v2/components/`: `button-v2.css:2`, `menu-v2.css:22`
+and `:44`, `keybind-v2.css:2`, `tabs-v2.css`, `accordion-v2.css`,
+`icon-button-v2.css`, `line-comment-v2.css`, `text-shimmer-v2.css`, each paired with
+`-moz-osx-font-smoothing: grayscale`) — never on `body` or `:root` anywhere in
+`packages/ui` or `packages/app`. So one neighbour is precedent for B1's exact
+change; the other is precedent only for the property being worth setting at all.
 
 ---
 
@@ -330,7 +445,7 @@ answers to "what is the 0xCopilot typeface" in this repository:
 | Desktop + web app                               | native              | native              | JetBrains Mono               | `packages/design-system/src/styles.css:47-53`                                                                                     |
 | Design mock (parity source of truth)            | native              | native              | JetBrains Mono               | `tools/design-parity/design-kit/app-v3/copilot.css:33-39`                                                                         |
 | Website default layer                           | Space Grotesk       | IBM Plex Sans       | JetBrains Mono               | `apps/website/src/styles/site.css:32-34`                                                                                          |
-| Website live pages (home, install, token, docs) | Bricolage Grotesque | Bricolage Grotesque | DM Mono (+ Instrument Serif) | `apps/website/src/styles/home.css:11-13`; loaded at `pages/index.astro:50`, `install.astro:19`, `token.astro:17`, `docs.astro:63` |
+| Website live pages (home, install, token, docs) | Bricolage Grotesque | Bricolage Grotesque | DM Mono (+ Instrument Serif) | `apps/website/src/styles/home.css:12-14`; loaded at `pages/index.astro:50`, `install.astro:19`, `token.astro:17`, `docs.astro:63` |
 
 **Inter appears on none of them.** A repo-wide grep for `Inter` as a font family
 across `packages/`, `apps/desktop/renderer/` and `apps/website/src/` returns nothing.
@@ -359,7 +474,7 @@ look like 0xCopilot, or like the operating system?** Everything else follows.
 ## 6. The options
 
 All three assume the mono face is unchanged. Nobody has complained about JetBrains
-Mono and it is the face doing 241 of the 332 family references.
+Mono and it is the face doing 221 of the 303 family references.
 
 ---
 
@@ -396,9 +511,16 @@ register straddles the switch point.
 
 ---
 
-### Option B — Keep native, fix the two rendering defects
+### Option B — Keep native, fix the two face-independent defects
 
 No new face. Two independent changes; either can ship without the other.
+
+**Neither is a "rendering defect" in the sense of a browser drawing something
+wrong**, and an earlier draft of this heading said so — wrongly. B1 is a
+**divergence** (the mock and our own splash set a property the app does not); B2 is a
+**spec-conformance and token-coverage** defect (the ladder cannot express the design,
+so 35 call sites go around it). Both are demonstrated at exact lines. What each one
+_looks like_ once fixed is, in both cases, unmeasured.
 
 **B1 — Turn on grayscale smoothing.** One rule, at `styles.css:619-648`:
 
@@ -408,9 +530,9 @@ No new face. Two independent changes; either can ship without the other.
    color: var(--color-text);
    font-family: var(--font-sans);
 +  /* Every design mock sets this on body (design-kit/app-v3/copilot.css:110);
-+   * the boot splash already does (apps/desktop/renderer/BootProgress.css:34).
-+   * Without it, light-on-dark text is subpixel-antialiased and stem-darkened,
-+   * so the build reads heavier than the mock it is measured against. */
++   * our own boot splash sets it on .boot (BootProgress.css:34), so text
++   * rendering currently changes when the splash unmounts (BootProgress.tsx:83).
++   * macOS-only property: no effect on the Windows host. */
 +  -webkit-font-smoothing: antialiased;
 +  -moz-osx-font-smoothing: grayscale;
    font-size: var(--font-size-sm);
@@ -418,20 +540,44 @@ No new face. Two independent changes; either can ship without the other.
  }
 ```
 
+- **Verified (file:line).** Absent from every shipped stylesheet; present in all six
+  design mocks at the lines listed in §3.1; present on `.boot`
+  (`apps/desktop/renderer/BootProgress.css:34`) which `BootChrome` renders as
+  `<div className="boot">` (`BootProgress.tsx:163`) and `BootGate` drops on `ready`
+  (`BootProgress.tsx:83-84`), inside one React root
+  (`apps/desktop/renderer/bootstrap.tsx:167-202`). Precedent: Hermes sets it on
+  `body` (`hermes-agent/apps/desktop/src/styles.css:561`).
+- **NOT verified — the visual payoff.** I did not run the app and did not measure a
+  pixel. On macOS ≥ Mojave the OS no longer does subpixel antialiasing, so
+  `antialiased` may change little or nothing there; on Windows the property is inert
+  by definition. **The "it will look better" claim is unsupported.** Do not adopt B
+  on B1's strength alone.
+- **How to verify it cheaply, before deciding.** `__extractParity` merges a surface's
+  `extraProps` into the captured set (`extract-computed.js:117`, `styles[p] = cs[p]`
+  at `:127`), and no `anchors.json` uses `extraProps` today. Add
+  `"webkitFontSmoothing"` to one surface's spec and run that surface's parity
+  extraction with and without the two lines. The design side reports `antialiased`
+  and the live side reports Blink's unset default, which makes the divergence a
+  measured row instead of an argument; more usefully, the captured `width` rows show
+  whether glyph advances actually moved on this machine. One afternoon, and it turns
+  the unverified half of B1 into a number.
 - **Cost — bundle:** zero.
 - **Cost — licensing:** zero.
 - **Cost — parity fixtures:** near-zero. `-webkit-font-smoothing` is not in
   `DEFAULT_PROPS` (`extract-computed.js:29-58`), so the property itself produces no
-  report row and no baseline is re-cut. Glyph _widths_ change slightly; `width` and
+  report row and no baseline is re-cut. Glyph _widths_ may change; `width` and
   `height` **are** captured (`extract-computed.js:59-61`, labelled "layout size
   (noisy)") and **are** compared, but they are deliberately kept out of the `BOX` set
   — "not the measured `width`/`height` rows, which are container-dependent noise"
   (`compare.mjs:80-83`) — so they fall through to `severity: "low"`
-  (`compare.mjs:371`). Expect a few extra LOW rows, not a gate change.
-- **Cost — risk:** the one real one. Grayscale smoothing makes light text on dark
-  _thinner_. If any surface is currently relying on stem-darkening to hit its
-  intended weight, it will read lighter. This is the change most likely to need one
-  visual pass afterward, and it should be reviewed on a real display, not in jsdom
+  (`compare.mjs:371`). Expect a few extra LOW rows, not a gate change. Glyph
+  advances can move at all only because extraction runs in a real browser —
+  `chromium.launch(...)` at `tools/design-parity/lib/extract-playwright.mjs:149-152`
+  — not in jsdom. It is _headless_ Chromium, which is one more reason its numbers do
+  not settle what the shipped window looks like.
+- **Cost — risk:** grayscale smoothing makes light text on dark _thinner_ wherever it
+  takes effect. If any surface is currently relying on stem-darkening to hit its
+  intended weight, it will read lighter. Reviewed on a real display, not in jsdom
   (jsdom performs no layout at all).
 - **Reversibility:** delete two lines.
 
@@ -442,43 +588,67 @@ This is the fix from `styles.css:626-636` — already applied once to `--font-si
 ```diff
 -  --font-size-2xs: 0.7rem; /* 11.2px — badge, kbd */
 -  --font-size-xs: 0.78rem; /* 12.5px — hint, caption */
-+  --font-size-2xs: 0.6875rem; /* 11px — badge, kbd (design uses 11px ×14) */
-+  --font-size-xs: 0.75rem; /* 12px — hint, caption (design uses 12px ×20, its most common size) */
++  --font-size-2xs: 0.6875rem; /* 11px — badge, kbd (design: 11px ×8 non-mono) */
++  --font-size-xs: 0.75rem; /* 12px — hint, caption (design: 12px ×18 non-mono, its most common) */
    --font-size-sm: 0.8125rem; /* 13px */
    ...
 -  --font-size-2xl: 1.4rem; /* 22.4px — page heading */
 +  --font-size-2xl: 1.375rem; /* 22px — page heading */
 +
-+  /* SANS half-pixel steps — the design's sans register is a half-pixel ladder
-+   * (8.5…13.5) exactly like the mono one documented at :80. Named by px value,
-+   * following --font-size-mono-10's precedent. Retires the 35 raw-px font-size
-+   * literals in packages/*, ten of which are 11.5px and four of which already
-+   * annotate themselves "design-exact; off the type ladder"
-+   * (chat-surface/src/onboarding/onboarding.css:176,214,804,824). */
-+  --font-size-11-5: 0.71875rem; /* 11.5px — design uses it ×8 */
-+  --font-size-13-5: 0.84375rem; /* 13.5px — design uses it ×5 */
++  /* SANS half-pixel steps — the design's non-mono register is a half-pixel
++   * ladder (11…13.5) like the mono one documented at :79. Named by px value,
++   * following --font-size-mono-10's precedent. 11-5 is the only one of the three
++   * that unblocks an existing literal: of the 35 raw-px font-size literals in
++   * shipped package CSS, TEN are 11.5px and no token covers that size. The other
++   * 25 (9 ×2, 9.5 ×2, 10 ×5, 10.5 ×2, 11 ×2, 12 ×8, 13 ×4) all already have a
++   * token and are discipline debt, not coverage gaps. 12-5 and 13-5 retire no
++   * existing literal — they exist so the design's 12.5px and 13.5px elements
++   * have a rung to land on at all. */
++  --font-size-11-5: 0.71875rem; /* 11.5px — design uses it ×5 non-mono */
++  --font-size-12-5: 0.78125rem; /* 12.5px — design uses it ×12 non-mono; see note */
++  --font-size-13-5: 0.84375rem; /* 13.5px — design uses it ×5 non-mono */
 ```
 
 - **Cost — bundle:** zero.
 - **Cost — licensing:** zero.
+- **A complication the earlier draft hid, and the reason `12-5` appears above.**
+  §3.2's split shows the design uses **both 12px (×18) and 12.5px (×12)** in non-mono
+  blocks. Today's `xs` renders 12.48px, so it is already almost exactly right for the
+  twelve 12.5px sites and 0.48px wrong for the eighteen 12px ones. Retuning `xs` to
+  12px therefore does not straightforwardly "move toward the design" — it swaps which
+  group is wrong, 18 sites gained against 12 lost, unless a `12-5` rung is added at
+  the same time and the 12.5px sites are migrated onto it. **That migration is call-site
+  work, not a token edit**, and it is not costed here.
 - **Cost — parity fixtures:** **this one moves numbers.** `2xs` shifts 0.2px, below
-  `compare.mjs`'s 0.4px cutoff (`compare.mjs:337-339`) — invisible. `xs` shifts
-  0.48px and will flag `MEDIUM` on every anchor that lands on it — but _toward_ the
-  design, since the design's most-used size is 12px and `xs` currently renders
-  12.48px. Expect the reports to get **better**, not worse. That prediction is
-  arithmetic from the design CSS and is **unverified** until a parity run confirms
-  it; do not merge B2 without one.
-- **Cost — blast radius:** 557 call sites change rendered size by 0.2–0.48px, and
-  ~35 raw-px literals become removable in follow-up. Line wrapping can change in
-  tight containers. This is the change that needs a real look at the app, not a
-  green test suite.
-- **Reversibility:** the rung values revert cleanly; the two new tokens can stay
-  unused or be deleted if nothing adopted them yet.
+  `compare.mjs`'s 0.4px cutoff (`compare.mjs:337-339`) — invisible either way. `xs`
+  shifts 0.48px and will flag `MEDIUM` on every anchor that lands on it; whether that
+  reads as improvement depends entirely on whether the anchor sits on a 12px or a
+  12.5px design element, per the bullet above. **Net direction is unverified** — it is
+  arithmetic over the design CSS, not a parity run, and the earlier draft's flat
+  "expect the reports to get better" was not supportable. Do not merge B2 without a
+  parity run, and read it per-anchor rather than as a total.
+- **Cost — blast radius:** **450 call sites** change rendered size by 0.2–0.48px
+  (266 `xs` + 184 `2xs`, §1.2's command), plus 11 on `2xl`. **Ten** raw-px literals
+  become removable in follow-up — the `11.5px` ones, the only size in the 35 with no
+  token today; the other 25 were already removable and simply were not removed. Line
+  wrapping can change in tight containers. This is the change that needs a real look
+  at the app, not a green test suite.
+- **Reversibility:** the rung values revert cleanly; the new tokens can stay unused or
+  be deleted if nothing adopted them yet. Note the asymmetry with B1 — reverting the
+  _tokens_ is trivial, but any call sites migrated onto `11-5` / `12-5` / `13-5` have
+  to be migrated back, so reversibility decays as adoption proceeds.
 
-**What B buys overall.** It fixes the two causes that are demonstrably defects rather
-than taste, at zero bundle and zero licensing cost, without touching the design
-contract. If the complaint was §3.1 or §3.2, B answers it completely. If the
+**What B buys overall.** It closes two divergences from the committed design that are
+demonstrable rather than taste, at zero bundle and zero licensing cost, without
+touching the design contract. If the complaint was §3.1 or §3.2, B answers it. If the
 complaint was §3.4, B does nothing for it.
+
+**Stated plainly, because it is the honest summary of B.** B1's _divergence_ is
+verified and B1's _visual payoff_ is not; B2's _defect_ is verified and B2's _net
+effect on parity_ is not, and B2 is bigger than the token diff makes it look once the
+12 / 12.5 split is priced in. B is the cheapest option to try and the cheapest to
+revert, which is a real argument for doing it first — but it is not the same as an
+argument that it will fix the complaint, and this document does not make that claim.
 
 **Sequencing note.** B is worth doing _before_ any face decision regardless of which
 option wins, because §3.1 and §3.2 are face-independent and B2's ladder work has to
@@ -552,7 +722,7 @@ exactly today's rendering.
   or it becomes folklore.
 - **What it buys:** brand identity; alignment with the stated brand memory; and the
   elimination of §3.3 — one continuous variable axis, no SF Text/Display optical
-  switch, no more `CLAUDE.md:69`-class bugs.
+  switch, no more `packages/design-system/CLAUDE.md:69`-class bugs.
 - **Reversibility:** high on the token (revert 6 lines), lower in practice — once a
   face ships, marketing assets, screenshots, the promo video and muscle memory
   accumulate around it.
@@ -618,32 +788,50 @@ a green suite over a broken screen (jsdom performs no layout).
 
 ## 8. Decision table
 
-|                               | A: nothing | B: fix defects | C1: Inter                  | C2: Instrument Sans        |
-| ----------------------------- | ---------- | -------------- | -------------------------- | -------------------------- |
-| Answers §3.1 smoothing        | ✗          | **✓**          | ✗ (unless bundled with B1) | ✗ (unless bundled with B1) |
-| Answers §3.2 ladder           | ✗          | **✓**          | ✗                          | ✗                          |
-| Answers §3.3 optical switch   | ✗          | ✗              | **✓**                      | **✓**                      |
-| Answers §3.4 "generic"        | ✗          | ✗              | **✓**                      | **✓**                      |
-| Bundle cost (desktop, base64) | 0          | 0              | ~35–60 KB _(unverified)_   | **~40 KB**                 |
-| New third-party asset         | no         | no             | **yes**                    | **no**                     |
-| `copyFileSync` list edits     | 0          | 0              | 9 harnesses                | 7 harnesses                |
-| Diverges from design mock     | no         | no             | **yes**                    | **yes**                    |
-| Matches brand memory          | no         | no             | **yes**                    | no                         |
-| Reversibility                 | n/a        | trivial        | moderate                   | high                       |
+|                               | A: nothing | B: fix defects                              | C1: Inter                  | C2: Instrument Sans        |
+| ----------------------------- | ---------- | ------------------------------------------- | -------------------------- | -------------------------- |
+| Answers §3.1 smoothing        | ✗          | **✓** _(payoff unmeasured; macOS only)_     | ✗ (unless bundled with B1) | ✗ (unless bundled with B1) |
+| Answers §3.2 ladder           | ✗          | **✓** _(needs 12.5px migration too)_        | ✗                          | ✗                          |
+| Answers §3.3 optical switch   | ✗          | ✗                                           | **✓**                      | **✓**                      |
+| Answers §3.4 "generic"        | ✗          | ✗                                           | **✓**                      | **✓**                      |
+| Bundle cost (desktop, base64) | 0          | 0                                           | ~35–60 KB _(unverified)_   | **~40 KB**                 |
+| New third-party asset         | no         | no                                          | **yes**                    | **no**                     |
+| `copyFileSync` list edits     | 0          | 0                                           | 9 harnesses                | 7 harnesses                |
+| Diverges from design mock     | no         | no                                          | **yes**                    | **yes**                    |
+| Matches brand memory          | no         | no                                          | **yes**                    | no                         |
+| Reversibility                 | n/a        | trivial for B1; decays with adoption for B2 | moderate                   | high                       |
 
 `B` is orthogonal to `A`/`C` and composes with either. `C1` and `C2` are mutually
 exclusive.
+
+Two ✓s in the B column are doing less work than a ✓ normally does, and §6/B says why:
+B1 provably closes a divergence but its visual effect is unmeasured and is inert on
+Windows; B2 provably closes a token-coverage gap but its net parity direction is
+unverified and it is under-costed until the twelve 12.5px design sites have a rung to
+land on. **Neither is a reason not to do B — both are reasons not to treat B as
+having answered the complaint until someone looks at the built app.**
 
 ---
 
 ## 9. What I could not verify
 
-- **The visual magnitude of §3.1.** I did not run the app. The property is provably
-  absent; how much it matters on the user's display is a look-at-it question.
+- **The visual magnitude _or direction_ of §3.1.** I did not run the app and did not
+  measure a pixel. The property is provably absent and the splash/app inconsistency is
+  provable at exact lines (§6/B1), but the familiar "subpixel AA makes it heavier and
+  muddier" story is asserted from general knowledge, not measured here — and it may
+  not apply at all on macOS ≥ Mojave, which stopped doing subpixel antialiasing
+  system-wide, or on Windows, where the property does nothing. §6/B1 gives a concrete
+  way to measure it via `extraProps` before the decision is taken.
 - **Inter's subset size.** No file fetched. Bracketed by in-repo comparables
   (22–30 KB) and OpenCode's unsubsetted 874,708 B upper bound.
-- **Whether B2 improves or worsens parity scores.** The arithmetic says improves
-  (design's most-used sans size is 12px; `xs` currently renders 12.48px). Not run.
+- **Whether B2 improves or worsens parity scores.** Genuinely open, and more open than
+  an earlier draft said: the design uses 12px ×18 _and_ 12.5px ×12 in non-mono blocks
+  (§3.2), so retuning `xs` from 12.48px to 12px moves toward one group and away from
+  the other. Not run.
+- **How much of the design's "not mono" column is really sans.** §3.2's split keys on
+  a rule block declaring `font-family: var(--mono)` itself; a block inheriting mono
+  from an ancestor counts as "not mono". So 63 is an upper bound on the sans register,
+  and every per-size non-mono count in §3.2 and §6/B2 is an upper bound too.
 - **Font license terms.** Asserted from general knowledge, not citable from this
   repo — there is no OFL or NOTICE text vendored anywhere under
   `packages/design-system/`. That absence _is_ citable, and is a gap under any option.
