@@ -43,6 +43,18 @@ export interface ToolView {
   readonly subtitle: (toolCall: ToolCallEntry) => string | null;
   /** Specialised disclosure body. `null` falls through to the generic rows. */
   readonly Body: ((props: ToolViewBodyProps) => ReactElement | null) | null;
+  /**
+   * Open the disclosure without a click.
+   *
+   * True only for the file-change views, and it is not a preference. A live run
+   * showed the diff sitting inside a collapsed `<details>`: present in the DOM,
+   * counted by a passing DOM assertion, and invisible to the reader. For an
+   * agent that edits files the change IS the message, so burying it one click
+   * deep makes the transcript read exactly as raw as it did before the card
+   * existed. Reads and searches stay closed — a 120-line file preview expanded
+   * by default would flood the transcript it is meant to clarify.
+   */
+  readonly defaultOpen: boolean;
 }
 
 /* ── argument readers ──────────────────────────────────────────────────── */
@@ -97,7 +109,12 @@ function EditBody({ toolCall }: ToolViewBodyProps): ReactElement | null {
   const diff = computeLineDiff(before, after);
   if (diff.hunks.length === 0) return null;
   return (
-    <TcFileDiff diff={diff} filePath={filePath} testId="tc-tool-edit-diff" />
+    <TcFileDiff
+      diff={diff}
+      filePath={filePath}
+      applied={toolCall.status === "complete"}
+      testId="tc-tool-edit-diff"
+    />
   );
 }
 
@@ -109,7 +126,12 @@ function WriteBody({ toolCall }: ToolViewBodyProps): ReactElement | null {
   const diff = computeLineDiff("", content);
   if (diff.hunks.length === 0) return null;
   return (
-    <TcFileDiff diff={diff} filePath={filePath} testId="tc-tool-write-diff" />
+    <TcFileDiff
+      diff={diff}
+      filePath={filePath}
+      applied={toolCall.status === "complete"}
+      testId="tc-tool-write-diff"
+    />
   );
 }
 
@@ -209,6 +231,7 @@ const VIEWS: Readonly<Record<string, ToolView>> = {
       return p === undefined ? null : basename(p);
     },
     Body: EditBody,
+    defaultOpen: true,
   },
   write_file: {
     kind: "write",
@@ -218,6 +241,7 @@ const VIEWS: Readonly<Record<string, ToolView>> = {
       return p === undefined ? null : basename(p);
     },
     Body: WriteBody,
+    defaultOpen: true,
   },
   read_file: {
     kind: "read",
@@ -227,18 +251,21 @@ const VIEWS: Readonly<Record<string, ToolView>> = {
       return p === undefined ? null : basename(p);
     },
     Body: ReadBody,
+    defaultOpen: false,
   },
   glob: {
     kind: "search",
     icon: SearchIcon,
     subtitle: (t) => str(t.args, "pattern") ?? null,
     Body: SearchBody,
+    defaultOpen: false,
   },
   grep: {
     kind: "search",
     icon: SearchIcon,
     subtitle: (t) => str(t.args, "pattern") ?? null,
     Body: SearchBody,
+    defaultOpen: false,
   },
   ls: {
     kind: "search",
@@ -248,6 +275,7 @@ const VIEWS: Readonly<Record<string, ToolView>> = {
       return p === undefined ? null : basename(p);
     },
     Body: SearchBody,
+    defaultOpen: false,
   },
 };
 
@@ -256,6 +284,7 @@ const GENERIC_VIEW: ToolView = {
   icon: null,
   subtitle: () => null,
   Body: null,
+  defaultOpen: false,
 };
 
 /** The view for `toolName`; the generic card for anything unregistered. */

@@ -785,7 +785,8 @@ describe("TcChat — inline tool-call card (Workstream D)", () => {
     const item = await screen.findByTestId("tc-chat-tool-call-edit");
     const card = item.querySelector("details");
     expect(card).not.toBeNull();
-    fireEvent.click(card!.querySelector("summary")!);
+    // Open WITHOUT a click: the diff is the message, so the card seeds itself
+    // open. Clicking here would collapse it.
     expect(card!).toHaveAttribute("open");
 
     const diff = within(card!).getByTestId("tc-tool-edit-diff");

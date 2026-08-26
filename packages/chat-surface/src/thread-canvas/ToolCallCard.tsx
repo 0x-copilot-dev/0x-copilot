@@ -46,7 +46,9 @@ export function ToolCallCard({
 }: ToolCallCardProps): ReactElement {
   const view = toolViewFor(toolCall.toolName);
   const hasDetails = hasToolDetails(toolCall);
-  const [detailsOpen, setDetailsOpen] = useState(false);
+  // A file-change card opens itself. `defaultOpen` is uncontrolled on purpose —
+  // it seeds the native <details> and the user's own toggle wins thereafter.
+  const [detailsOpen, setDetailsOpen] = useState(view.defaultOpen);
   // Only a call that is still running can be parked; a finished one is history.
   const waiting = parked && toolCall.status === "running";
   const header = renderHeader(toolCall, hasDetails, waiting, view);
@@ -74,6 +76,11 @@ export function ToolCallCard({
       aria-label={`Tool: ${toolCall.title}`}
       data-tool-status={toolCall.status}
       data-tool-waiting={waiting ? "true" : "false"}
+      // CONTROLLED, seeded from the view. A bare `open={true}` would be
+      // re-applied on every render and the reader could never collapse the
+      // card; driving it from state means `defaultOpen` only chooses the
+      // STARTING position and the user's own toggle wins from then on.
+      open={detailsOpen}
       onToggle={(event) => setDetailsOpen(event.currentTarget.open)}
     >
       <style>{`${ACTIVITY_CARD_INTERACTION_CSS}\n${TOOL_CALL_CARD_CSS}`}</style>

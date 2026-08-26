@@ -22,6 +22,22 @@ export interface TcFileDiffProps {
    * thousands of rows into an already un-virtualized transcript.
    */
   readonly maxRows?: number;
+  /**
+   * Did the change actually land?
+   *
+   * The diff is built from the CALL'S ARGUMENTS, not from its result — the
+   * runtime returns one prose sentence, so the arguments are the only place the
+   * before/after text exists. That means a REFUSED or FAILED edit carries a
+   * perfectly well-formed diff, and rendering it unqualified states that a
+   * change happened when it did not. A live run made this concrete: both file
+   * tools were refused for want of a workspace grant, and the card still had a
+   * confident red/green hunk inside it.
+   *
+   * So the card says which it is. `false` keeps the diff — what was ATTEMPTED
+   * is worth reading, especially on a refusal — but labels it and drops the
+   * change-colour, so it can never be mistaken for an applied edit.
+   */
+  readonly applied?: boolean;
   readonly testId?: string;
 }
 
@@ -31,6 +47,7 @@ export function TcFileDiff({
   diff,
   filePath,
   maxRows = DEFAULT_MAX_ROWS,
+  applied = true,
   testId = "tc-file-diff",
 }: TcFileDiffProps): ReactElement | null {
   if (diff.hunks.length === 0) return null;
@@ -41,6 +58,7 @@ export function TcFileDiff({
     <div
       style={frameStyle}
       data-testid={testId}
+      data-applied={applied ? "true" : "false"}
       data-approximate={diff.approximate ? "true" : "false"}
     >
       <div style={headerStyle}>
@@ -53,9 +71,18 @@ export function TcFileDiff({
             {filePath}
           </span>
         ) : null}
+        {!applied ? (
+          <span style={notAppliedStyle} data-testid={`${testId}-not-applied`}>
+            not applied
+          </span>
+        ) : null}
         <span style={countsStyle} data-testid={`${testId}-counts`}>
-          <span style={addCountStyle}>+{diff.additions}</span>
-          <span style={delCountStyle}>−{diff.deletions}</span>
+          <span style={applied ? addCountStyle : mutedCountStyle}>
+            +{diff.additions}
+          </span>
+          <span style={applied ? delCountStyle : mutedCountStyle}>
+            −{diff.deletions}
+          </span>
         </span>
       </div>
 
@@ -68,7 +95,7 @@ export function TcFileDiff({
               </div>
             ) : null}
             {hunk.lines.map((line, lineIndex) => (
-              <DiffRow key={lineIndex} line={line} />
+              <DiffRow key={lineIndex} line={line} applied={applied} />
             ))}
           </div>
         ))}
@@ -90,13 +117,19 @@ export function TcFileDiff({
   );
 }
 
-function DiffRow({ line }: { readonly line: DiffLine }): ReactElement {
+function DiffRow({
+  line,
+  applied,
+}: {
+  readonly line: DiffLine;
+  readonly applied: boolean;
+}): ReactElement {
   const sign = line.kind === "add" ? "+" : line.kind === "remove" ? "−" : " ";
   return (
-    <div style={rowStyle(line.kind)} data-diff-kind={line.kind}>
+    <div style={rowStyle(line.kind, applied)} data-diff-kind={line.kind}>
       <span style={gutterStyle}>{line.oldLine ?? ""}</span>
       <span style={gutterStyle}>{line.newLine ?? ""}</span>
-      <span style={signStyle(line.kind)} aria-hidden="true">
+      <span style={signStyle(line.kind, applied)} aria-hidden="true">
         {sign}
       </span>
       {/* A leading space keeps an empty line from collapsing the row height. */}
@@ -172,6 +205,22 @@ const countsStyle: CSSProperties = {
 };
 
 const addCountStyle: CSSProperties = { color: "var(--color-success)" };
+const mutedCountStyle: CSSProperties = { color: "var(--color-text-subtle)" };
+
+/** Says plainly that the change did not land. Warning-toned, not danger: the
+ *  call failing is already reported by the card header's own status. */
+const notAppliedStyle: CSSProperties = {
+  background: "var(--color-warning-bg)",
+  borderRadius: 4,
+  color: "var(--color-warning)",
+  flex: "0 0 auto",
+  fontFamily: "var(--font-mono)",
+  fontSize: "var(--font-size-mono-9-5)",
+  letterSpacing: "0.04em",
+  lineHeight: "14px",
+  padding: "1px 5px",
+  whiteSpace: "nowrap",
+};
 const delCountStyle: CSSProperties = { color: "var(--color-danger)" };
 
 const scrollStyle: CSSProperties = {
@@ -179,9 +228,13 @@ const scrollStyle: CSSProperties = {
   overflow: "auto",
 };
 
-const rowStyle = (kind: DiffLine["kind"]): CSSProperties => ({
-  background:
-    kind === "add"
+// An unapplied diff keeps its SHAPE (gutters, signs, alignment) and loses its
+// change-colour. Green and red are the app's "this happened" signal; spending
+// them on a refusal is the lie this guards against.
+const rowStyle = (kind: DiffLine["kind"], applied: boolean): CSSProperties => ({
+  background: !applied
+    ? "transparent"
+    : kind === "add"
       ? "var(--color-success-bg)"
       : kind === "remove"
         ? "var(--color-danger-bg)"
@@ -202,9 +255,13 @@ const gutterStyle: CSSProperties = {
   userSelect: "none",
 };
 
-const signStyle = (kind: DiffLine["kind"]): CSSProperties => ({
-  color:
-    kind === "add"
+const signStyle = (
+  kind: DiffLine["kind"],
+  applied: boolean,
+): CSSProperties => ({
+  color: !applied
+    ? "var(--color-text-muted)"
+    : kind === "add"
       ? "var(--color-success)"
       : kind === "remove"
         ? "var(--color-danger)"

@@ -24,13 +24,13 @@ const EDIT_CALL = call({
   toolName: "edit_file",
   title: "Edit file",
   args: {
-    file_path: "/Users/parthpahwa/Documents/work/kscope-benchmarks/random.csv",
+    file_path: "/Users/dev/projects/kscope-benchmarks/random.csv",
     old_string: "5,orange,lynx,29,false",
     new_string: "5,orange,lynx,30,false",
   },
   result: {
     content:
-      "Successfully replaced 1 instance(s) of the string in '/Users/parthpahwa/Documents/work/kscope-benchmarks/random.csv'",
+      "Successfully replaced 1 instance(s) of the string in '/Users/dev/projects/kscope-benchmarks/random.csv'",
   },
 });
 
@@ -100,6 +100,51 @@ describe("edit_file view", () => {
     render(<ToolCallCard toolCall={EDIT_CALL} />);
     const raw = screen.getByText("raw payload");
     expect(raw.tagName.toLowerCase()).toBe("summary");
+  });
+
+  it("opens itself, so the diff is visible without a click", () => {
+    // A live run showed the diff sitting inside a COLLAPSED <details>: present
+    // in the DOM, found by querySelectorAll, and invisible to the reader. DOM
+    // presence is not visibility, so this asserts the disclosure's open state.
+    const { container } = render(<ToolCallCard toolCall={EDIT_CALL} />);
+    const details = container.querySelector("details");
+    expect(details).not.toBeNull();
+    expect((details as HTMLDetailsElement).open).toBe(true);
+  });
+
+  it("leaves an unregistered tool's card closed", () => {
+    const { container } = render(
+      <ToolCallCard
+        toolCall={call({ toolName: "get_issue", args: { issue: "ENG-1" } })}
+      />,
+    );
+    expect(
+      (container.querySelector("details") as HTMLDetailsElement).open,
+    ).toBe(false);
+  });
+
+  it("marks a FAILED edit as not applied and drops the change colour", () => {
+    // The diff is built from the call's ARGUMENTS, so a refused edit still has
+    // a well-formed hunk. Rendering it unqualified would claim a change that
+    // never happened — which is exactly what a live run produced when both
+    // file tools were refused for want of a workspace grant.
+    render(
+      <ToolCallCard
+        toolCall={{ ...EDIT_CALL, status: "error", errorMessage: "refused" }}
+      />,
+    );
+    const diff = screen.getByTestId("tc-tool-edit-diff");
+    expect(diff.getAttribute("data-applied")).toBe("false");
+    expect(
+      within(diff).getByTestId("tc-tool-edit-diff-not-applied").textContent,
+    ).toBe("not applied");
+  });
+
+  it("marks a completed edit as applied", () => {
+    render(<ToolCallCard toolCall={EDIT_CALL} />);
+    const diff = screen.getByTestId("tc-tool-edit-diff");
+    expect(diff.getAttribute("data-applied")).toBe("true");
+    expect(screen.queryByTestId("tc-tool-edit-diff-not-applied")).toBeNull();
   });
 
   it("renders no diff while the arguments are still streaming", () => {

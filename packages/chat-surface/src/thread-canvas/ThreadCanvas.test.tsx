@@ -394,12 +394,14 @@ describe("ThreadCanvas", () => {
       );
 
       // The content half. jsdom performs no layout, so a collapsed <details>
-      // still has its body in the DOM — the disclosure is really opened, which
-      // is what "reachable without switching modes" has to mean.
+      // still has its body in the DOM — asserting the OPEN STATE is what
+      // "reachable without switching modes" has to mean. This used to click
+      // the summary first; a file-change card now opens itself (a live run
+      // found the diff collapsed and therefore unread), so the click would
+      // CLOSE it and the stronger assertion is that no click is needed.
       const item = screen.getByTestId("tc-chat-tool-call-edit");
       const card = item.querySelector("details");
       expect(card).not.toBeNull();
-      fireEvent.click(card!.querySelector("summary")!);
       expect(card!).toHaveAttribute("open");
       expect(
         within(card!).getByTestId("tc-tool-edit-diff-counts"),
