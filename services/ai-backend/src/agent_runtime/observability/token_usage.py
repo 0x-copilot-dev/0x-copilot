@@ -565,8 +565,44 @@ class TokenUsageExtractorRegistry:
     }
 
     @classmethod
-    def for_provider(cls, provider: str) -> ProviderTokenUsageExtractor:
-        return cls._BY_PROVIDER.get(provider.strip().lower(), cls._LCD)
+    def for_provider(cls, provider: str | None) -> ProviderTokenUsageExtractor:
+        """Resolve an extractor, tolerating an absent or library-named slug.
+
+        ``None`` is accepted rather than rejected because a caller genuinely has
+        it: ``_ProviderLifecycleCallback`` is constructed with ``provider=None``
+        on the default model-call path, deliberately, so that failure
+        classification goes by SDK exception identity instead of by LangChain's
+        ``_llm_type``. That decision is about *failures*, but this method was
+        typed ``str`` and called with the same field, so every usage observation
+        on that path raised ``AttributeError`` inside a LangChain callback —
+        which LangChain swallows. The run succeeded, no test went red, and the
+        occupancy ledger recorded 820 of 820 model calls with no provider totals
+        at all. An absent slug must degrade to the LCD extractor, never raise.
+        (:class:`CitationStreamPipeline.for_provider` already took ``str | None``
+        for the same reason.)
+
+        Substring matching exists for the second half of that defect. Our slugs
+        are normalized (``anthropic``), but a caller without a resolved route has
+        only the model class's ``_llm_type`` (``anthropic-chat``), which matched
+        nothing and silently fell to the LCD fallback — and the LCD deliberately
+        surfaces no ``cache_creation`` and no reasoning tokens, so the lane would
+        have stayed cache-blind even once it stopped raising. Matching a known
+        slug inside the library's name also does the right thing for the
+        compatible-endpoint families we already route (``azure-openai``,
+        ``openai-compatible`` → the OpenAI extractor). Anything unrecognized
+        still degrades to the LCD rather than guessing.
+        """
+
+        if not provider:
+            return cls._LCD
+        slug = provider.strip().lower()
+        exact = cls._BY_PROVIDER.get(slug)
+        if exact is not None:
+            return exact
+        for known, extractor in cls._BY_PROVIDER.items():
+            if known in slug:
+                return extractor
+        return cls._LCD
 
 
 # ---------------------------------------------------------------------------

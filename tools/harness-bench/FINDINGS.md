@@ -418,3 +418,73 @@ on top of an already-gross figure and made the over-count worse.
 ```bash
 python tools/harness-bench/cache_profile.py          # free, offline, no app
 ```
+
+### 7.2 Why the ledger was empty: three defects, and a green suite over all of them
+
+§7 reported that the per-model-call ledger carried `provider_input_tokens: null`
+and zeroed cache figures on **820 of 820** records, and filed it as "the
+reconciliation has never received a populated usage object". That was true and
+incomplete. Three independent defects sat between the provider's answer and the
+row, and **each one alone was sufficient to keep the lane dark** — which is why
+fixing the obvious one first would have changed nothing at all.
+
+**1. The dispatcher captured the usage and dropped it.** `FeatureModeSet.f10`
+ships `OFF`, so the shipped default takes `_awrap_occupancy_only`, whose
+docstring declared as a deliberate limit: _"There is no
+`_ProviderLifecycleCallback` here, so the snapshot carries no
+`provider_input_tokens` and no cache figures."_ That stopped being true when
+`_dispatch_with_retry` began attaching one for failure classification. The
+observer is a `BaseCallbackHandler` whose `on_llm_end` records usage, so the
+totals were being collected and then discarded on the success path, while the
+append site passed a hard-coded `usage=None`. **The sentence outlived the
+condition it described, and because it read as a considered limit rather than a
+gap, nobody re-checked it.**
+
+**2. Reading the usage raised, inside a callback the framework swallows.**
+`TokenUsageExtractorRegistry.for_provider` was typed `str` and implemented as
+`provider.strip().lower()`. The default path constructs its observer with
+`provider=None` **on purpose** — naming it would yield LangChain's `_llm_type`
+("anthropic-chat"), which matches no failure-adapter key and would classify every
+provider failure as UNKNOWN, i.e. never retry. So every usage observation on the
+default path did `None.strip()`:
+
+```
+>>> obs = _ProviderLifecycleCallback(provider=None, adapters=...)
+>>> obs.on_llm_end(result_with_usage)
+AttributeError: 'NoneType' object has no attribute 'strip'
+>>> obs.usage
+(NormalizedTokenUsage(input_tokens=0, ...), False)
+```
+
+LangChain does not fail a call when a callback handler raises. The run
+succeeded, the response was correct, no test went red, and the only symptom
+anywhere was a ledger column that was always null — **which is indistinguishable
+from a provider that reports no usage.** One field was answering two questions
+(which adapter classifies failures, which extractor reads usage) whose right
+answers differ, and the type signature hid the collision.
+
+**3. Even given a slug, it reached the wrong extractor.** Registry keys are our
+normalized slugs (`anthropic`); the only hint available without a resolved route
+is `_llm_type` (`anthropic-chat`), which matched nothing and fell to the LCD
+fallback — and the LCD _deliberately_ surfaces no `cache_creation`. So the lane
+would have stayed half-blind even after it stopped raising.
+
+The two lanes' disagreement was the tell all along, and §7 printed it without
+reading it: `run_usage.jsonl` **has** cache data on the same runs where
+`context_occupancy.jsonl` has none. Same provider, same calls, two lanes —
+because `run_metrics.py` resolves its extractor from the normalized slug and the
+occupancy lane resolved it from `None`.
+
+All three are fixed, with the seam driven end-to-end rather than by handing the
+observer to the code under test, and each mutation-checked to fail exactly the
+test that names it. Re-run `cache_profile.py` against a store written by a build
+carrying this fix — the `occupancy calls carrying provider totals` line is the
+one to read, and it should stop being `0 of N`.
+
+**The rule this earns:** a value a framework will swallow an exception around is
+not observable by testing that the surrounding operation succeeded. Both §1 and
+§7.2 are the same failure at different layers — a signal that cannot distinguish
+"measured zero" from "never measured". The ledger needs the distinction the
+`NormalizedTokenUsage` contract already names: `provider_cache_metadata_observed`
+exists precisely so that "zero cache tokens without that bit must never be called
+a miss."

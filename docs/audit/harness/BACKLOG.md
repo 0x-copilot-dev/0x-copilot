@@ -35,19 +35,19 @@ a reader to "recommend trimming the stable prefix, which is exactly backwards".
 
 ## 1. Ranked
 
-| #      | Item                                                  | Effort | Why it is where it is                                                                            |
-| ------ | ----------------------------------------------------- | ------ | ------------------------------------------------------------------------------------------------ |
-| **1**  | ~~Anthropic cache accounting~~ ✅ landed              | hours  | was two defects: writes invisible (latent) **and** reads counted twice (live, 71.7% over-report) |
-| **2**  | Populate the occupancy ledger's provider/cache fields | days   | 820/820 records empty; a shipped user-facing meter is cache-blind because of it                  |
-| **3**  | Lossless JSON-schema slimming (drop `title`)          | hours  | the named next lever; ~15–20% of every args schema, and it reaches third-party tools             |
-| **4**  | Decide `artifact_family` exposure                     | —      | a decision, not code: 1,705 resident tokens on every cold run, parked pending an owner           |
-| **5**  | Run the heavy arms                                    | ~$2    | 830 LOC of validated harness never driven; 5 claims still unmeasured                             |
-| **6**  | `expires_at` + sweeper default                        | hours  | Top-8 #5, re-verified open; half-built machinery a compliance reviewer reads as implemented      |
-| **7**  | A correctness axis on the bench                       | days   | today a trimming change can degrade answers and still report 4/4                                 |
-| **8**  | Wire FTS5 conversation search                         | days   | Top-8 #6, re-verified open; we pay to maintain the index on every write                          |
-| **9**  | Desktop skill authoring                               | days   | Top-8 #8, re-verified open; on the surface CLAUDE.md calls the product                           |
-| **10** | Close the dark-wiring zero-default blind spot         | days   | a field defaulting to `0` and never produced reads as a measurement, not as absent               |
-| **11** | Grow the interactive corpus                           | —      | 13 runs on one machine is not a sample; it is the denominator for all cost work                  |
+| #      | Item                                                 | Effort | Why it is where it is                                                                            |
+| ------ | ---------------------------------------------------- | ------ | ------------------------------------------------------------------------------------------------ |
+| **1**  | ~~Anthropic cache accounting~~ ✅ landed             | hours  | was two defects: writes invisible (latent) **and** reads counted twice (live, 71.7% over-report) |
+| **2**  | ~~Occupancy ledger provider/cache fields~~ ✅ landed | days   | was three defects; the middle one raised inside a callback LangChain swallows                    |
+| **3**  | Lossless JSON-schema slimming (drop `title`)         | hours  | the named next lever; ~15–20% of every args schema, and it reaches third-party tools             |
+| **4**  | Decide `artifact_family` exposure                    | —      | a decision, not code: 1,705 resident tokens on every cold run, parked pending an owner           |
+| **5**  | Run the heavy arms                                   | ~$2    | 830 LOC of validated harness never driven; 5 claims still unmeasured                             |
+| **6**  | `expires_at` + sweeper default                       | hours  | Top-8 #5, re-verified open; half-built machinery a compliance reviewer reads as implemented      |
+| **7**  | A correctness axis on the bench                      | days   | today a trimming change can degrade answers and still report 4/4                                 |
+| **8**  | Wire FTS5 conversation search                        | days   | Top-8 #6, re-verified open; we pay to maintain the index on every write                          |
+| **9**  | Desktop skill authoring                              | days   | Top-8 #8, re-verified open; on the surface CLAUDE.md calls the product                           |
+| **10** | Close the dark-wiring zero-default blind spot        | days   | a field defaulting to `0` and never produced reads as a measurement, not as absent               |
+| **11** | Grow the interactive corpus                          | —      | 13 runs on one machine is not a sample; it is the denominator for all cost work                  |
 
 ---
 
@@ -88,21 +88,46 @@ that pins the old assertion as wrong. Written up in
 failure — the anomaly was in the first table §7 printed and was explained rather
 than tested.
 
-### 2. Populate the occupancy ledger's provider/cache fields — `days`
+### 2. Occupancy ledger provider/cache fields — ✅ **LANDED on this branch**
 
-All 820 per-model-call records across 98 stores carry `cached_input_tokens: 0`
-and `provider_input_tokens: null`. `_cache_subsets`
-(`context_occupancy_recorder.py:1511`) has never received a populated usage
-object on a real run — its reconciliation, its clamping, and its warning path are
-all dead in production.
+Filed as "the reconciliation has never received a populated usage object". True,
+and incomplete: **three** independent defects sat between the provider's answer
+and the row, and each alone was enough to keep the lane dark — so fixing the
+obvious one first would have changed nothing measurable.
 
-**Why this outranks a pure-instrument item:** the composer context meter
-(#625/#626) reads this ledger. A reader without cache fields "would recommend
-trimming the stable prefix, which is exactly backwards" — that sentence is the
-record's own docstring, and it is describing what we currently ship.
+**2a — the dispatcher captured usage and dropped it.** `f10` ships `OFF`, so the
+default path is `_awrap_occupancy_only`, whose docstring declared as a
+deliberate limit that no `_ProviderLifecycleCallback` exists there. It stopped
+being true when `_dispatch_with_retry` began attaching one for failure
+classification; the observer's `on_llm_end` was recording usage that the success
+path threw away, while the append site passed a hard-coded `usage=None`.
 
-**Skip cost:** the one screen that tells a user where their context went is
-cache-blind, and the trimming program's own ledger cannot audit its own results.
+**2b — reading that usage raised, inside a callback the framework swallows.**
+`for_provider` was typed `str`; the default path passes `provider=None` on
+purpose (naming it would make every failure UNKNOWN and never retried). So every
+observation did `None.strip()` → `AttributeError` → swallowed by LangChain. Run
+succeeded, suite green, ledger null. One field was answering two questions whose
+right answers differ.
+
+**2c — even given a slug, it reached the wrong extractor.** Keys are normalized
+slugs (`anthropic`); the only hint without a resolved route is `_llm_type`
+(`anthropic-chat`), which matched nothing and fell to the LCD fallback — which
+by design surfaces no `cache_creation`.
+
+**The tell was in §7 all along:** `run_usage.jsonl` has cache data on the very
+runs where `context_occupancy.jsonl` has none. Same calls, two lanes, because
+`run_metrics.py` resolves from the normalized slug and this lane resolved from
+`None`.
+
+**Landed:** all three, with the seam driven end-to-end (not by handing the
+observer to the code under test) and each mutation-checked to fail exactly the
+test naming it. Written up in
+[FINDINGS.md §7.2](../../../tools/harness-bench/FINDINGS.md).
+
+**Not yet confirmed against a live run.** The tests prove the wiring; the
+`occupancy calls carrying provider totals` line in `cache_profile.py` still reads
+`0 of 820` until a build carrying this fix writes a store. That check belongs
+with item 5's re-stage.
 
 ### 3. Lossless JSON-schema slimming — `hours`
 

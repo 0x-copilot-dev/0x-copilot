@@ -450,3 +450,67 @@ class TestRegistryDispatch:
         assert usage is not None
         assert usage.input_tokens == 100
         assert usage.output_tokens == 50
+
+    # The four tests below are regressions from one incident. The registry was
+    # typed ``str`` while ``_ProviderLifecycleCallback`` deliberately holds
+    # ``provider=None`` on the default model-call path, so every usage
+    # observation raised ``AttributeError`` inside a LangChain callback —
+    # swallowed by the framework, invisible to 10,000 green tests, and visible
+    # only as an occupancy ledger whose provider columns were null on 820 of
+    # 820 real model calls. Resolving an extractor must degrade, never raise,
+    # and never guess.
+
+    def test_an_absent_slug_degrades_to_the_lcd_extractor(self) -> None:
+        assert isinstance(
+            TokenUsageExtractorRegistry.for_provider(None), _LcdFallbackExtractor
+        )
+        assert isinstance(
+            TokenUsageExtractorRegistry.for_provider(""), _LcdFallbackExtractor
+        )
+        assert isinstance(
+            TokenUsageExtractorRegistry.for_provider("   "), _LcdFallbackExtractor
+        )
+
+    def test_the_normalized_slug_still_wins_exactly(self) -> None:
+        assert isinstance(
+            TokenUsageExtractorRegistry.for_provider("anthropic"),
+            AnthropicProviderTokenUsageExtractor,
+        )
+        assert isinstance(
+            TokenUsageExtractorRegistry.for_provider("OpenAI"),
+            OpenAIProviderTokenUsageExtractor,
+        )
+
+    def test_the_librarys_own_model_name_reaches_the_right_extractor(self) -> None:
+        """``_llm_type`` is all a caller without a resolved route ever has.
+
+        These are LangChain's names for the model classes, not our slugs, and
+        they used to match nothing and fall to the LCD — which surfaces no
+        ``cache_creation`` and no reasoning tokens.
+        """
+
+        assert isinstance(
+            TokenUsageExtractorRegistry.for_provider("anthropic-chat"),
+            AnthropicProviderTokenUsageExtractor,
+        )
+        assert isinstance(
+            TokenUsageExtractorRegistry.for_provider("openai-chat"),
+            OpenAIProviderTokenUsageExtractor,
+        )
+        # Compatible-endpoint families we already route resolve the same way.
+        assert isinstance(
+            TokenUsageExtractorRegistry.for_provider("azure-openai"),
+            OpenAIProviderTokenUsageExtractor,
+        )
+
+    def test_an_unrecognized_provider_degrades_rather_than_guessing(self) -> None:
+        """Matching is not a licence to invent. Unknown still means LCD."""
+
+        assert isinstance(
+            TokenUsageExtractorRegistry.for_provider("virtuals"),
+            _LcdFallbackExtractor,
+        )
+        assert isinstance(
+            TokenUsageExtractorRegistry.for_provider("moonshotai-kimi-k3"),
+            _LcdFallbackExtractor,
+        )
