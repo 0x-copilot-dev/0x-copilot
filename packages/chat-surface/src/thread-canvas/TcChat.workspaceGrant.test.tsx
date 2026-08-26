@@ -46,7 +46,7 @@ function makeTransport(): Transport {
 }
 
 const DOWNLOADS: WorkspaceGrantRequest = {
-  path: "/Users/parthpahwa/Downloads",
+  path: "/Users/ada/Downloads",
   folderName: "Downloads",
   mode: "read_only",
   reason: "to see what you downloaded today",
@@ -107,7 +107,7 @@ describe("TcChat — mid-run folder grant ask", () => {
         screen.getByTestId("tc-chat-workspace-grant-appr-fs-1"),
       ).toBeTruthy();
       expect(screen.getByTestId("wg-path").textContent).toBe(
-        "/Users/parthpahwa/Downloads",
+        "/Users/ada/Downloads",
       );
       expect(screen.getByText(/Let the agent read Downloads\?/)).toBeTruthy();
       // Never the `/decision` Approve/Decline ask card.
@@ -146,7 +146,7 @@ describe("TcChat — mid-run folder grant ask", () => {
 
     // Still named, still explained. Web lands here.
     expect(screen.getByTestId("wg-path").textContent).toBe(
-      "/Users/parthpahwa/Downloads",
+      "/Users/ada/Downloads",
     );
     expect(
       screen
