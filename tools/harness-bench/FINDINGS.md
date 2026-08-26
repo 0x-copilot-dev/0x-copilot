@@ -250,3 +250,407 @@ waits), `grep` 539 (deepagents). The named next lever is **lossless JSON-schema
 slimming**: pydantic emits a `"title"` for every field, ~15–20% of every args
 schema with zero semantic loss, applying to third-party tools too and requiring
 no model behaviour change at all.
+
+## 7. The cold-start question §4 left open: it is a process boundary, not a clock
+
+§4 ended by naming the next measurement: _"what fraction of real runs hit a cold
+cache."_ That fraction is the multiplier on every trimming change, so it decides
+whether the remaining prompt levers are worth building at all.
+
+`cache_profile.py` answers it offline from `run_usage.jsonl` records already on
+disk — **99 stores, 442 runs, no paid run**. It is the same discipline as
+`rescore.py`: scoring is free, so a measurement mistake never costs money.
+
+```
+cold rate by position in store
+  first in store              96 runs    65 cold    67.7%
+  later in store             341 runs    27 cold     7.9%
+```
+
+**A run that opens a store is cold about two times in three. A run that follows
+another inside the same store is cold about one time in thirteen.** Those two
+populations sit on the same time scale — a store's runs are typically seconds to
+minutes apart either way — so the ~9x difference is not the cache expiring.
+
+### The obvious explanation is wrong, and the test that kills it
+
+A prompt cache lives at the **provider**, keyed on the prefix — not on our disk.
+So a fresh COPILOT_HOME should still hit a warm cache when an identical prefix
+went out recently from any process, and the cold rate on a store's first run
+should fall away as the gap to the nearest earlier run anywhere shrinks.
+
+It does not:
+
+```
+first-run-in-store, by gap to the nearest earlier run ANYWHERE (same provider)
+  < 1 min      27 runs    74.1% cold     ← the LOWEST gap is the HIGHEST cold rate
+  1-5 min      22 runs    54.5% cold
+  5-15 min     10 runs    60.0% cold
+  15-60 min    11 runs    81.8% cold
+  1-24 h       17 runs    70.6% cold
+  > 1 day       6 runs    66.7% cold
+```
+
+Flat, non-monotone, and worst at the shortest gap. **Time is not the driver.**
+Whatever makes a first run cold is structural, and it survives an identical
+prompt having gone out seconds earlier.
+
+**What this buys the trimming program:** §4 said prompt-trimming pays "strictly
+in proportion to cold-start frequency", and that for a bursty desktop user —
+open the app, ask one thing, close it — "nearly every run is a cold start". That
+was a reasonable assumption. It is now an evidenced one: a session's opening run
+is the expensive one regardless of when the app was last used, so **there is no
+usage pattern a user can adopt that makes the resident prefix cheap.** Every
+token cut from the cold prompt is paid back on the first run of every session.
+
+### Three limits on that number, stated rather than buried
+
+1. **`run_usage` is a rollup across every model call in the run.** A run whose
+   first call was cold and whose later calls were warm reports `cached > 0` and
+   scores WARM. 67.7% is a **lower bound**.
+2. **A store is a COPILOT_HOME, not a person.** 424 of the 442 runs are journey
+   boots with heterogeneous configs, so "first in store" conflates a process
+   start with a prefix change. This corpus cannot separate them — that needs the
+   per-call ledger, which is empty (below).
+3. **The interactive corpus is 13 runs from one machine on one day.** Its 15.4%
+   is reported for completeness and should not be read as a user-behaviour rate.
+
+### The instrument that could settle it has never been populated
+
+```
+runs reading cache :   346 of 442   (6,333,964 tokens)
+runs writing cache :     0 of 442   (0 tokens)
+occupancy calls carrying any cache field : 0 of 820
+occupancy calls carrying provider totals : 0 of 820
+```
+
+A cache read is impossible without a preceding write. 6.3M read tokens against
+zero recorded writes is a statement about the instrument, not the cache.
+
+Two distinct defects sit behind it, and neither is visible from a green test
+suite:
+
+- **`ContextOccupancySnapshot` cache fields are dead on every real run.** All
+  820 per-model-call records across 98 stores carry `cached_input_tokens: 0`
+  and `provider_input_tokens: null`. The reconciliation that consumes them
+  (`context_occupancy_recorder.py:1511`, `_cache_subsets`) has never received a
+  populated usage object in production. The record's own docstring says these
+  fields are "what makes the report correct rather than merely large", because
+  without them a reader "would recommend trimming the stable prefix, which is
+  exactly backwards" — which is precisely the reading the composer's context
+  meter (#625/#626) now presents to users.
+- **The Anthropic extractor cannot see a cache write in LangChain's normalized
+  shape.** `token_usage.py:432-441` reads `cache_creation_input_tokens` from the
+  top-level block only, while `cache_read` gets a second lookup inside
+  `input_token_details`. LangChain 1.5.3's `InputTokenDetails` has exactly three
+  keys — `audio`, `cache_creation`, `cache_read` — so the read is found there and
+  the write never is. `provider_cache_metadata_observed` carries the same
+  asymmetry.
+
+**On the write half, what is NOT established** is whether the missing counter is
+currently costing tokens. If writes were being dropped, a cold run's recorded
+`input_tokens` would be anomalously small, since
+`gross_input = non_cache + cache_creation + cache_read`. Measured, they are not:
+
+```
+                cold median input    warm median input
+  anthropic            20,058               40,844
+  openai               11,465               12,898
+  virtuals             21,655               22,977
+```
+
+Cold runs are comparable to warm ones, so no write-sized hole is visible. **A
+dropped write and an absent write produce an identical record — and that
+indistinguishability is the finding.** It is the same shape as §1: a metric that
+cannot observe the event it exists to detect.
+
+### 7.1 The same table had a second finding in it, and this file missed it
+
+The row above was read once and explained away — anthropic warm runs are 2x cold
+runs because a warm run is a later turn carrying more conversation. That is a
+plausible story and it is wrong, which the neighbouring rows already say: openai
+and virtuals are 1.1x on the same argument. Only anthropic doubles.
+
+The check that settles it asks what a warm run's **fresh** portion is. If
+`input_tokens` is a correct gross figure, `input − cached` is just the new turn's
+content and should be small. If a cache read was added on top of a figure that
+already included it, `input − cached` is the whole prompt over again:
+
+```
+             warm median (input − cached)     cold median input      ratio
+  anthropic            21,091                      20,058            1.05
+  openai                  346                      11,465            0.03
+  virtuals                931                      21,655            0.04
+```
+
+**Anthropic's "fresh" portion is the entire prompt.** OpenAI's is 346 tokens,
+which is what a correct figure looks like.
+
+The cause is one line up from the missing write counter, in the same function.
+`_UsageBlocks` yields **two** wire shapes and they disagree about what
+`input_tokens` means. Provider-raw `response_metadata.usage` excludes the caches,
+so summing is right. LangChain's `usage_metadata` documents `input_tokens` as
+"the sum of all input token types" — its own example is `input_tokens: 350` over
+details summing to 310 — so the details are **subsets**, and
+`gross = input + cache_creation + cache_read` counts the read twice. Anthropic is
+the only provider whose extractor takes that branch, which is exactly the shape
+of the measurement.
+
+Across 442 runs, anthropic input is over-reported by **71.7%** — 7,972,019
+recorded against a corrected 4,642,605. The pricing consequence is not a wash,
+because the identity `(input − cached − creation)·p_in + cached·p_cached` turns
+into `true_gross·p_in + cached·p_cached` once `input` carries `cached` twice:
+**the cached tokens are billed at the full input rate _and_ at the cached rate.**
+
+Two things worth keeping from how this went. The first is that §4's headline —
+"97% of it is cache reads" — is unaffected, because it was computed from
+`cached / input` on a bench arm and both terms move together; but any absolute
+anthropic token or cost figure taken from the run store before this fix is
+inflated. The second is the method failure, which is the familiar one: **the
+anomaly was in the first table this file printed, and it was explained rather
+than tested.** A one-line ratio against the other two providers would have caught
+it immediately. §1's rule generalizes — read the number, never infer the reason.
+
+Both halves are fixed together, because they cannot be fixed apart: adding the
+missing `cache_creation` details lookup to the old arithmetic would have added it
+on top of an already-gross figure and made the over-count worse.
+
+```bash
+python tools/harness-bench/cache_profile.py          # free, offline, no app
+```
+
+### 7.2 Why the ledger was empty: three defects, and a green suite over all of them
+
+§7 reported that the per-model-call ledger carried `provider_input_tokens: null`
+and zeroed cache figures on **820 of 820** records, and filed it as "the
+reconciliation has never received a populated usage object". That was true and
+incomplete. Three independent defects sat between the provider's answer and the
+row, and **each one alone was sufficient to keep the lane dark** — which is why
+fixing the obvious one first would have changed nothing at all.
+
+**1. The dispatcher captured the usage and dropped it.** `FeatureModeSet.f10`
+ships `OFF`, so the shipped default takes `_awrap_occupancy_only`, whose
+docstring declared as a deliberate limit: _"There is no
+`_ProviderLifecycleCallback` here, so the snapshot carries no
+`provider_input_tokens` and no cache figures."_ That stopped being true when
+`_dispatch_with_retry` began attaching one for failure classification. The
+observer is a `BaseCallbackHandler` whose `on_llm_end` records usage, so the
+totals were being collected and then discarded on the success path, while the
+append site passed a hard-coded `usage=None`. **The sentence outlived the
+condition it described, and because it read as a considered limit rather than a
+gap, nobody re-checked it.**
+
+**2. Reading the usage raised, inside a callback the framework swallows.**
+`TokenUsageExtractorRegistry.for_provider` was typed `str` and implemented as
+`provider.strip().lower()`. The default path constructs its observer with
+`provider=None` **on purpose** — naming it would yield LangChain's `_llm_type`
+("anthropic-chat"), which matches no failure-adapter key and would classify every
+provider failure as UNKNOWN, i.e. never retry. So every usage observation on the
+default path did `None.strip()`:
+
+```
+>>> obs = _ProviderLifecycleCallback(provider=None, adapters=...)
+>>> obs.on_llm_end(result_with_usage)
+AttributeError: 'NoneType' object has no attribute 'strip'
+>>> obs.usage
+(NormalizedTokenUsage(input_tokens=0, ...), False)
+```
+
+LangChain does not fail a call when a callback handler raises. The run
+succeeded, the response was correct, no test went red, and the only symptom
+anywhere was a ledger column that was always null — **which is indistinguishable
+from a provider that reports no usage.** One field was answering two questions
+(which adapter classifies failures, which extractor reads usage) whose right
+answers differ, and the type signature hid the collision.
+
+**3. Even given a slug, it reached the wrong extractor.** Registry keys are our
+normalized slugs (`anthropic`); the only hint available without a resolved route
+is `_llm_type` (`anthropic-chat`), which matched nothing and fell to the LCD
+fallback — and the LCD _deliberately_ surfaces no `cache_creation`. So the lane
+would have stayed half-blind even after it stopped raising.
+
+The two lanes' disagreement was the tell all along, and §7 printed it without
+reading it: `run_usage.jsonl` **has** cache data on the same runs where
+`context_occupancy.jsonl` has none. Same provider, same calls, two lanes —
+because `run_metrics.py` resolves its extractor from the normalized slug and the
+occupancy lane resolved it from `None`.
+
+All three are fixed, with the seam driven end-to-end rather than by handing the
+observer to the code under test, and each mutation-checked to fail exactly the
+test that names it. Re-run `cache_profile.py` against a store written by a build
+carrying this fix — the `occupancy calls carrying provider totals` line is the
+one to read, and it should stop being `0 of N`.
+
+**The rule this earns:** a value a framework will swallow an exception around is
+not observable by testing that the surrounding operation succeeded. Both §1 and
+§7.2 are the same failure at different layers — a signal that cannot distinguish
+"measured zero" from "never measured". The ledger needs the distinction the
+`NormalizedTokenUsage` contract already names: `provider_cache_metadata_observed`
+exists precisely so that "zero cache tokens without that bit must never be called
+a miss."
+
+### 7.3 Confirmed against a live run — and a third instrument reporting zero
+
+§7.1 and §7.2 were argued from code and unit tests. Both are now confirmed on the
+packaged app against a real Anthropic model, which is the only evidence that
+settles a "landed not wired" claim.
+
+**Stage discipline first**, because §5 is emphatic that this is where a verdict
+goes wrong: the runtime was re-staged from the branch under test and the stamps
+checked before anything was believed.
+
+```
+staged src mtime          Aug 26 13:26:41
+newest ai-backend commit  Aug 26 13:23:42     ← stage is NEWER: not a stale snapshot
+```
+
+One task (`HEAVY_TASKS=h1-corpus`, `JOURNEY_PROVIDER=anthropic`), six `write_file`
+rounds, completed. What the store now holds:
+
+```
+                                            BEFORE            AFTER
+runs writing cache                          0 of 442          1 of 1   (936 tokens)
+occupancy calls carrying cache fields       0 of 820          2 of 2
+occupancy calls carrying provider totals    0 of 820          2 of 2
+```
+
+Every counter this program has ever read as structurally zero is populated. The
+two occupancy rows also show the cold→warm pair the old code could not represent
+at all — row 1 `cache_creation 19,349 / cached 0` (the call that wrote the
+prefix), row 2 `cached 19,349 / cache_creation 936` (the call that read it).
+
+**§7.1's correction, measured:**
+
+```
+warm Anthropic run, fresh portion (input − cached)
+  before (median of 157 runs)   21,091     ← the whole prompt again
+  OpenAI, same metric              346     ← what a correct figure looks like
+  after, this run                  938
+```
+
+#### The third instrument, found by disbelieving a passing run
+
+The arm reported `PASS`, and printed:
+
+```
+h1-corpus: status=completed ok=True llm_calls=0 tool_calls=6 in=0 out=0 12.1s
+```
+
+Six tool calls and a completed answer for **zero tokens and zero model calls**.
+The store for that same run says 20,287 input tokens. `measure()` sums
+`usage.recorded` events off the events API — and this file's own method notes
+open by documenting that exact reader returning "0 tokens for every task". It was
+never removed; it was retained as a "lower bound", which is how it survived.
+
+It is not a lower bound. **`usage.recorded` is a Generative Surfaces v2 ledger
+event, not a per-model-call usage event on the run stream.**
+`streaming_executor` returns early on `if not surfaces_v2_enabled`, and the
+`handlers/run` emitter meters only the VIEW_SHAPING spec-generation path. On the
+ordinary run path the sum is structurally 0 forever, on every arm, in every
+build. The run's actual event stream carries `model_call_started`, `tool_result`,
+`final_response` — and no usage event of any kind.
+
+`measure()` now counts `model_call_started` and reports tokens as **`None`**,
+printed as `tokens=via rescore.py`. A number that cannot be observed should say
+so rather than print a zero, because _this_ is the third time in this program a
+zero has been mistaken for a cheap run:
+
+| #   | Instrument                        | Reported | Actually                   |
+| --- | --------------------------------- | -------- | -------------------------- |
+| 1   | first scorer, `usage.recorded`    | 0 tokens | never emitted on this path |
+| 2   | occupancy `provider_input_tokens` | 0 / null | raised inside a callback   |
+| 3   | `measure()`, retained as a bound  | `in=0`   | 20,287, per the same run   |
+
+All three are the same defect: **a signal that cannot distinguish "measured
+zero" from "never measured"**, shipped because the surrounding operation
+succeeded. The `NormalizedTokenUsage` contract already names the cure — a
+separate `provider_cache_metadata_observed` bit, so that "zero cache tokens
+without that bit must never be called a miss". Every counter this program adds
+from here should carry its own version of that bit.
+
+## 8. The heavy arms, finally run — the ceiling never binds, the tool budget does
+
+§5 built `heavy_tasks_ab.py` to reach five claims the four short prompts cannot,
+and then recorded that no arm had ever been driven. Both arms are now run.
+
+**Setup, and two deliberate departures from §5's recipe.** Model pinned to
+`claude-haiku-4-5` via `COPILOT_JOURNEY_MODEL` — the earlier passes silently used
+whatever the app defaulted to, which was `claude-opus-4-5`, the most expensive
+model in the catalog, for a benchmark that writes six files. Task set pinned to
+the five that declare `Needs.NOTHING`, because `h6-bigread` needs a folder grant
+that cannot be driven on this host and `h7-mcp-namespace` needs two hand-connected
+MCP servers. Both arms: same model, same tasks, same order, own process.
+
+```
+arm 25 : 5/5 completed, 4/5 correct, 81,330 listed input, $0.0119
+arm 500: 3/5 completed, 3/5 correct, 69,558 listed input, $0.0135
+```
+
+**Cost first, because §5's estimate was badly wrong in the useful direction.** It
+predicted "~1.2M listed input tokens, ~150k full-price-equivalent, a bit under $1
+an arm". Measured: **81k listed and $0.012**. Two reasons — the estimate assumed a
+Sonnet-class model, and it predicted 45–60 model calls per arm against an actual
+5 (one per task; Haiku batches its tool calls into a single assistant turn rather
+than round-tripping per call). The whole two-arm experiment costs **$0.025**.
+
+### The headline: the step ceiling never bound, in either arm
+
+```
+no run was stopped by the step ceiling in any arm
+```
+
+§1's win — `recursion_limit` 25 → 500 buying +25 points of completion — does not
+reproduce here, and the reason is visible in the failure column rather than
+inferred. What stopped `h4-delegate` and `h5-longchain` at limit=500 was the
+**per-tool-name call budget**:
+
+```
+read_file:tool_budget_exceeded  x6      (execution.tool_call_budget = 10)
+read_file:tool_run_failed       x2
+```
+
+That is one of the five claims §5 listed as unreachable, and it is now measured:
+**the budget binds on real work, and the ceiling does not.** For the tasks in
+this set, the ceiling raise §1 paid for is not the constraint that matters.
+
+### Three of five previously-unmeasured claims are now reached
+
+| claim                | §5 said       | measured now                              |
+| -------------------- | ------------- | ----------------------------------------- |
+| per-tool-name budget | unmeasured    | **binds** — 6 `tool_budget_exceeded` rows |
+| delegation           | 0 in any task | **6 → 21** delegated rounds (`h4`)        |
+| parallel execution   | peak 1        | **peak 12** parallel calls                |
+| tool-result cap      | unmeasured    | still unmeasured — peak 68 of 8,192       |
+| MCP namespacing      | unmeasured    | still unmeasured — 0 servers connected    |
+
+The two that remain unmeasured are the two whose tasks were excluded, and the
+scorer says so itself rather than reporting a zero: _"zero namespaced names on a
+profile with no connected server is NOT evidence either way."_
+
+### What this does NOT establish
+
+**n=1 per cell.** 4/5 correct against 3/5 is one task, one sample, on a small
+model whose tool-call behaviour visibly varies run to run — the same
+`h5-longchain` made **1** tool call in one arm and **21** in the other. Reading
+that as "raising the ceiling hurts correctness" would be exactly the mistake §1
+documents: a conclusion drawn from a single arm. The defensible claims are the
+mechanical ones — the ceiling was never the stop, the budget was — because those
+come from terminal codes and failure rows, not from a difference of one.
+
+`h5-longchain` was designed to span the old ceiling of 25 super-steps and did not
+reach it in either arm (peak estimated 34 at limit=25). Either the fit
+overestimates, or Haiku's batching collapses the chain the prompt intended to
+serialise. `peak_parallel` of 12 favours the second.
+
+### §2's mis-stamped innocent reappeared, from a different cause
+
+```
+calls CLOSED BY RECONCILIATION, not by running:
+  limit=500  h4-delegate   read_file, read_file
+  limit=500  h5-longchain  read_file, read_file
+```
+
+Same shape as §2 — a terminal row with an empty `result_summary`, a tool that
+looks like it threw and never ran — but the cause here is budget exhaustion, not
+a step ceiling. The scorer named it unprompted, which is the second time that
+column has found this shape without being told what to look for.

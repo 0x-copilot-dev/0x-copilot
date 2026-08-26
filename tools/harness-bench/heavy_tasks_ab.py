@@ -435,30 +435,46 @@ def measure(session: DriverSession, run_id: str) -> dict:
     A LOWER BOUND on everything, and knowingly so: this is the live read that
     keeps a running arm legible. ``rescore.py`` re-derives all of it from the
     run store afterwards, offline, and that is the number to quote.
+
+    **Tokens are ``None`` here, not 0, and that is the whole point.** This
+    function used to sum ``usage.recorded`` events and print ``in=0 out=0`` on
+    every task of every arm — the exact instrument failure this program's own
+    method notes open with: *"a broken instrument reporting zero is
+    indistinguishable from a genuinely cheap run."* It survived the rewrite that
+    note describes because the reader was left in place as a "lower bound".
+
+    ``usage.recorded`` is a **Generative Surfaces v2 ledger event**, not a
+    per-model-call usage event on the run stream. `streaming_executor` returns
+    early on ``if not surfaces_v2_enabled``, and the `handlers/run` emitter
+    meters only the VIEW_SHAPING spec-generation path. So on the ordinary run
+    path the event is not merely absent from a given run — it cannot fire, and
+    the sum is structurally 0 forever. Verified against a live arm whose store
+    recorded 20,287 input tokens while this read reported ``in=0``.
+
+    ``llm_calls`` now counts ``model_call_started``, which the run path does
+    emit, and remains a lower bound because a call that dies before its start
+    event is invisible to it.
     """
 
     payload = session.transport("GET", f"/v1/agent/runs/{run_id}/events")
     events = payload.get("events", []) if isinstance(payload, dict) else []
-    rounds = 0
+    model_calls = 0
     tool_calls = 0
-    input_tokens = 0
-    output_tokens = 0
     for event in events:
         if not isinstance(event, dict):
             continue
         event_type = event.get("event_type") or event.get("type")
-        body = event.get("payload") if isinstance(event.get("payload"), dict) else {}
-        if event_type == "usage.recorded":
-            rounds += 1
-            input_tokens += int(body.get("input_tokens") or 0)
-            output_tokens += int(body.get("output_tokens") or 0)
+        if event_type == "model_call_started":
+            model_calls += 1
         elif event_type in {"tool_call", "tool_call_started"}:
             tool_calls += 1
     return {
-        "llm_calls": rounds,
+        "llm_calls": model_calls,
         "tool_calls": tool_calls,
-        "input_tokens": input_tokens,
-        "output_tokens": output_tokens,
+        # Not observable from the event stream — see the docstring. ``rescore.py``
+        # reads them off ``run_usage.jsonl``, which is where they actually live.
+        "input_tokens": None,
+        "output_tokens": None,
         "events": len(events),
     }
 
@@ -555,10 +571,12 @@ class Arm:
             "seconds": round(time.time() - started, 1),
             **measure(self.session, run_id),
         }
+        # "tokens=via rescore" rather than "in=0 out=0": a zero here would read
+        # as a free run, which is the failure mode the method notes open with.
         log(
             f"  {task.task_id}: status={row['status']} ok={row['outcome_ok']} "
             f"llm_calls={row['llm_calls']} tool_calls={row['tool_calls']} "
-            f"in={row['input_tokens']} out={row['output_tokens']} {row['seconds']}s"
+            f"tokens=via rescore.py {row['seconds']}s"
         )
         return row
 
@@ -592,13 +610,21 @@ class Arm:
         )
 
 
-def sign_in_key_and_grant(arm: Arm) -> None:
+def sign_in_key_and_grant(arm: Arm, tasks: tuple[HeavyTask, ...] = TASKS) -> None:
     """Sign in, add the BYOK key, and arrange the H6 folder grant.
 
     The grant is attempted, never assumed. Attaching is the ONLY way in and it
     is a NATIVE dialog: when the host denies the controlling process
     Accessibility, no keystroke can reach that sheet. That records against H6
     and costs nothing else.
+
+    **Only attempted when a selected task actually needs it.** Five of the seven
+    tasks declare ``Needs.NOTHING``, so a run pinned to those was opening a
+    native macOS folder picker, failing to drive it, and printing a BLOCKED line
+    for a claim nothing in the run was measuring — noise that reads like a
+    broken harness. ``tasks`` is the already-resolved pin, so the question is
+    answered from the same list the arm is about to execute rather than from the
+    full set.
     """
 
     session = arm.session
@@ -606,6 +632,9 @@ def sign_in_key_and_grant(arm: Arm) -> None:
     log(f"provider={provider} key_len={len(key)} (value withheld)")
     session.sign_in_local()
     session.ftue_add_key(provider, key)
+
+    if not any(task.needs is Needs.HOST_GRANT for task in tasks):
+        return
 
     fixture_root = Path(tempfile.mkdtemp(prefix="heavy-bench-")).resolve()
     ledger = write_ledger(fixture_root)
@@ -680,7 +709,11 @@ def run_arm(limit: str) -> int:
 
     def setup(_: DriverSession) -> None:
         arm = holder["arm"]
-        sign_in_key_and_grant(arm)
+        sign_in_key_and_grant(arm, pinned)
+        # Same rule as the folder grant: do not report a claim blocked when
+        # nothing in this run measures it.
+        if not any(task.needs is Needs.CONNECTED_MCP for task in pinned):
+            return
         servers = connected_mcp_servers(arm.session)
         if len(servers) < 2:
             arm.blocked[Needs.CONNECTED_MCP] = (

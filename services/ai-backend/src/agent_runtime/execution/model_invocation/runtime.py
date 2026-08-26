@@ -247,12 +247,21 @@ class _ProviderLifecycleCallback(BaseCallbackHandler):
         *,
         provider: str | None,
         adapters: ProviderFailureAdapterRegistry,
+        usage_provider: str | None = None,
     ) -> None:
         #: ``None`` means "no verified route named the provider" — the default
         #: deployment path, where the only provider hint available is the
         #: LangChain model's ``_llm_type`` and that is the library's name, not
         #: ours. Classification then goes by SDK exception identity instead.
         self._provider = provider
+        #: Which extractor reads the usage block. Separate from ``_provider``
+        #: because the two questions have different right answers on the default
+        #: path: failure classification must NOT trust ``_llm_type`` (it matches
+        #: no adapter key and would make every failure UNKNOWN, i.e. never
+        #: retried), while usage extraction *can* — the wire shape really is
+        #: Anthropic's whether or not a route said so. Conflating them is what
+        #: made this path pass ``None`` into a registry typed ``str``.
+        self._usage_provider = provider if usage_provider is None else usage_provider
         self._adapters = adapters
         self._reducer = ProviderLifecycleReducer()
         self._state = ProviderAttemptLifecycle()
@@ -408,9 +417,9 @@ class _ProviderLifecycleCallback(BaseCallbackHandler):
             self._state = self._reducer.reduce(
                 self._state, ProviderLifecycleEvent.TOOL_CALL_CONTENT
             )
-        observed = TokenUsageExtractorRegistry.for_provider(self._provider).extract(
-            message
-        )
+        observed = TokenUsageExtractorRegistry.for_provider(
+            self._usage_provider
+        ).extract(message)
         if observed is not None:
             message_id = getattr(message, "id", None)
             if isinstance(message_id, str) and message_id:
@@ -1733,14 +1742,24 @@ class ModelInvocationMiddleware(AgentMiddleware):
         would trade a measurement gap for a correctness hazard. This is a
         separate, much smaller path: measure, call the handler, append.
 
-        Two honest limits. There is no ``_ProviderLifecycleCallback`` here, so
-        the snapshot carries no ``provider_input_tokens`` and no cache figures —
-        it is estimate-only, and ``unattributed_delta`` stays 0 rather than
-        pretending to reconcile against a total nobody reported. And the route
-        facts come from the request's own model object rather than a resolved
-        deployment descriptor, so ``context_window_tokens`` is ``None`` and
-        ``free_tokens`` with it. Segment attribution — the reason the ledger
-        exists — is unaffected.
+        One honest limit remains: the route facts come from the request's own
+        model object rather than a resolved deployment descriptor, so
+        ``context_window_tokens`` is ``None`` and ``free_tokens`` with it.
+        Segment attribution — the reason the ledger exists — is unaffected.
+
+        The *other* limit used to read "there is no ``_ProviderLifecycleCallback``
+        here, so the snapshot carries no ``provider_input_tokens`` and no cache
+        figures". That stopped being true when :meth:`_dispatch_with_retry`
+        started attaching one for failure classification: the observer it builds
+        is a ``BaseCallbackHandler`` whose ``on_llm_end`` / ``on_llm_new_token``
+        record usage, so the provider's own totals were being captured on this
+        path and then dropped on the floor when the attempt succeeded. The
+        sentence outlived the condition it described, and because it read as a
+        deliberate limit nobody re-checked it — every record this default path
+        wrote carried ``provider_input_tokens: null`` and zeroed cache figures.
+        Measured across 98 stores, that was **820 of 820** model calls, and the
+        composer's context meter renders exactly this ledger. The dispatcher now
+        hands its usage back.
 
         The handler is called at least once whatever happens above it, and more
         than once only when :class:`ModelCallRetryPolicy` admits a re-dispatch —
@@ -1758,7 +1777,7 @@ class ModelInvocationMiddleware(AgentMiddleware):
 
         pending = self._plan_occupancy_only(request)
 
-        response = await self._dispatch_with_retry(request, handler)
+        response, usage = await self._dispatch_with_retry(request, handler)
 
         # Every argument below is a plain local resolved inside the guarded
         # planner above. That is deliberate rather than stylistic: computing an
@@ -1770,7 +1789,7 @@ class ModelInvocationMiddleware(AgentMiddleware):
             await self._append_occupancy(
                 sink=pending.sink,
                 snapshot=pending.snapshot,
-                usage=None,
+                usage=usage,
                 org_id=pending.org_id,
                 run_id=pending.run_id,
                 conversation_id=pending.conversation_id,
@@ -1782,8 +1801,29 @@ class ModelInvocationMiddleware(AgentMiddleware):
         self,
         request: ModelRequest[Any],
         handler: Callable[[ModelRequest[Any]], Awaitable[ModelResponse[Any]]],
-    ) -> ModelResponse[Any]:
+    ) -> tuple[ModelResponse[Any], NormalizedTokenUsage | None]:
         """Dispatch one model call under the runtime-owned retry policy.
+
+        Returns the response and **the usage the winning attempt reported**,
+        which is the whole reason the second half of the tuple exists. The
+        observer below is attached for failure classification, but it is a
+        ``BaseCallbackHandler``: LangChain drives its ``on_llm_end`` and
+        ``on_llm_new_token`` on the way through, so by the time the handler
+        returns it already holds the provider's own totals. Discarding it on
+        success threw away the only provider-attested numbers this path ever
+        sees — see :meth:`_awrap_occupancy_only`.
+
+        ``None`` means *nothing was reported*, and it is deliberately not a
+        zero-token usage object: the former leaves ``provider_input_tokens``
+        unset and ``unattributed_delta`` at 0, while the latter would assert the
+        provider billed nothing and turn the whole estimate into a large
+        negative residual on every unreported call.
+
+        Only the winning attempt's usage is returned. A failed attempt may have
+        streamed tokens before it died, but those belong to a request that has
+        no response, and merging them into the survivor would bill one call for
+        another call's tokens — the same reason ``§6.3`` keeps retries as
+        separate snapshots rather than averaging them.
 
         Classification is not re-implemented here. A ``_ProviderLifecycleCallback``
         is attached to the request's model exactly as the F10 path attaches one,
@@ -1812,6 +1852,12 @@ class ModelInvocationMiddleware(AgentMiddleware):
                 # classify every provider failure as UNKNOWN — i.e. never
                 # retry. The exception's own SDK identity is authoritative.
                 provider=None,
+                # Usage extraction is the opposite case and gets the hint. The
+                # response's wire shape is the provider's regardless of whether
+                # a route named it, so withholding the slug here bought nothing
+                # and cost the whole lane: the registry read ``None`` and raised
+                # inside a callback LangChain swallows.
+                usage_provider=self._request_provider(request),
                 adapters=ProviderFailureAdapterRegistry.defaults(),
             )
             observer.dispatch_started()
@@ -1819,7 +1865,7 @@ class ModelInvocationMiddleware(AgentMiddleware):
                 model=self._attach_callback(request.model, observer)
             )
             try:
-                return await handler(attempt_request)
+                response = await handler(attempt_request)
             except BaseException as error:
                 observer.observe_error(error)
                 state = observer.state
@@ -1841,6 +1887,32 @@ class ModelInvocationMiddleware(AgentMiddleware):
                 if not decision.should_retry:
                     raise
                 await self._sleep(decision.delay_seconds)
+            else:
+                return response, self._reported_usage(observer)
+
+    @staticmethod
+    def _reported_usage(
+        observer: "_ProviderLifecycleCallback",
+    ) -> NormalizedTokenUsage | None:
+        """The observer's usage, or ``None`` — guarded, because this is the hot path.
+
+        Guarded for the same reason :meth:`_retry_decision` is: this runs
+        between the provider's answer and the response handed back to the graph,
+        and an observability read that raised here would fail a model call that
+        had already succeeded. Losing the totals costs a cache-blind ledger row;
+        losing the run costs the turn.
+        """
+
+        try:
+            usage, reported = observer.usage
+        except Exception:  # noqa: BLE001 — measurement never fails a run (§6.4)
+            _OCCUPANCY_LOGGER.warning(
+                "Could not read provider usage off the attempt observer; "
+                "recording the estimate without provider totals.",
+                exc_info=True,
+            )
+            return None
+        return usage if reported else None
 
     def _retry_pacing_seconds(
         self,

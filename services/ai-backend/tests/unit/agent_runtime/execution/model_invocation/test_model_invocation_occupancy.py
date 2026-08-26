@@ -62,6 +62,7 @@ from agent_runtime.execution.model_invocation.journal import (
 from agent_runtime.execution.model_invocation.runtime import (
     ModelInvocationMiddleware,
     ModelInvocationRuntimeBinding,
+    _ProviderLifecycleCallback,
     canonical_model_request_digest,
 )
 from agent_runtime.execution.providers.model_failure_adapters import (
@@ -1302,3 +1303,169 @@ class TestFailOpenAtEverySeam(OccupancyMiddlewareMixin):
         assert seen[0].messages[0] is message
         assert dict(message.additional_kwargs) == kwargs_before
         assert canonical_model_request_digest(request) == digest_before
+
+
+class AnthropicShapedFakeModel(FakeListChatModel):
+    """A fake whose ``_llm_type`` is the library's Anthropic name.
+
+    ``_request_provider`` reads exactly this attribute on the default path, so a
+    fake that keeps ``fake-list-chat-model`` cannot exercise the slug-matching
+    half of the fix. Nothing else about the model matters here.
+    """
+
+    @property
+    def _llm_type(self) -> str:
+        return "anthropic-chat"
+
+
+class TestTheDefaultPathRecordsProviderTotals(OccupancyMiddlewareMixin):
+    """The non-F10 path — the shipped default — must carry provider totals.
+
+    ``FeatureModeSet.f10`` ships ``OFF``, so every model call in a default
+    deployment goes through ``_awrap_occupancy_only``. That path wrote **820 of
+    820** ledger rows across 98 real stores with ``provider_input_tokens: null``
+    and both cache figures at zero, and the composer's context meter renders
+    this ledger. Three separate defects had to line up to produce that, and each
+    one alone would have kept the lane dark, so each gets a test:
+
+    1. the dispatcher captured usage on the observer and dropped it on success;
+    2. ``TokenUsageExtractorRegistry.for_provider`` was typed ``str`` but called
+       with the ``None`` this path deliberately passes, so every observation
+       raised ``AttributeError`` *inside a LangChain callback* — which LangChain
+       swallows, leaving a green suite over a dark lane;
+    3. even given a slug, the only one available here is the library's
+       ``_llm_type`` (``anthropic-chat``), which matched no registry key and
+       fell to the LCD extractor — and the LCD surfaces no ``cache_creation``.
+
+    ``run_once`` cannot be reused: it installs an F10 binding, which is the path
+    that already worked. These drive the seam with the occupancy sink installed
+    and the F10 binding deliberately absent, which is the shipped topology.
+    """
+
+    def usage_message(self, **details: int) -> AIMessage:
+        return AIMessage(
+            content="done",
+            usage_metadata={
+                "input_tokens": 20_000,
+                "output_tokens": 5,
+                "total_tokens": 20_005,
+                "input_token_details": dict(details),
+            },
+        )
+
+    async def drive_default_path(
+        self,
+        *,
+        sink: OccupancySink,
+        model: Any = None,
+        message: AIMessage | None = None,
+        fire_callbacks: bool = True,
+    ) -> None:
+        """One model call with the occupancy sink installed and no F10 binding.
+
+        ``fire_callbacks`` stands in for LangChain's callback manager, which is
+        what invokes ``on_llm_end`` in production. Simulating that dispatch — as
+        opposed to handing the observer to the code under test — is the point:
+        the observer is built, attached and read back by the runtime itself, so
+        a break anywhere in that chain fails here.
+        """
+
+        reply = message or self.usage_message()
+        request = self.request(tools=[self.tool()])
+        if model is not None:
+            request = request.override(model=model)
+
+        async def handler(inner: ModelRequest[Any]) -> ModelResponse[Any]:
+            if fire_callbacks:
+                for callback in getattr(inner.model, "callbacks", None) or ():
+                    end = getattr(callback, "on_llm_end", None)
+                    if end is not None:
+                        end(
+                            SimpleNamespace(
+                                generations=[[SimpleNamespace(message=reply)]]
+                            )
+                        )
+            return ModelResponse(result=[reply])
+
+        token = RunControlContext.bind_for_run(self.control())
+        try:
+            RunControlContext.install_context_occupancy_store(
+                cast(Any, sink), org_id=self.ORG_ID
+            )
+            assert RunControlContext.model_invocation_runtime() is None
+            await self.middleware().awrap_model_call(request, handler)
+        finally:
+            RunControlContext.unbind(token)
+
+    async def test_the_row_carries_the_providers_own_input_total(self) -> None:
+        sink = OccupancySink()
+        await self.drive_default_path(sink=sink, message=self.usage_message())
+
+        assert len(sink.records) == 1
+        row = sink.records[0]
+        assert row.provider_input_tokens == 20_000
+
+    async def test_an_unnamed_provider_no_longer_raises_the_observation(
+        self,
+    ) -> None:
+        """Regression for the defect that made the whole lane dark.
+
+        ``for_provider(None)`` used to raise ``AttributeError`` on
+        ``None.strip()``. It happened inside ``on_llm_end``, LangChain swallowed
+        it, and the only visible symptom was a ledger column that was always
+        null — indistinguishable from a provider that reports no usage.
+        """
+
+        observer = _ProviderLifecycleCallback(
+            provider=None,
+            adapters=ProviderFailureAdapterRegistry.defaults(),
+        )
+        observer.dispatch_started()
+        message = self.usage_message(cache_read=19_000)
+        observer.on_llm_end(
+            SimpleNamespace(generations=[[SimpleNamespace(message=message)]])
+        )
+
+        usage, reported = observer.usage
+        assert reported is True
+        assert usage.input_tokens == 20_000
+
+    async def test_the_library_slug_reaches_the_providers_own_extractor(
+        self,
+    ) -> None:
+        """``anthropic-chat`` must not fall to the LCD fallback.
+
+        The LCD extractor reads a cache *read* and deliberately surfaces no
+        cache *creation*, so a lane stuck on it stays half-blind even once it
+        stops raising — which is why matching the library's name matters rather
+        than merely tolerating it.
+        """
+
+        sink = OccupancySink()
+        await self.drive_default_path(
+            sink=sink,
+            model=AnthropicShapedFakeModel(responses=["done"]),
+            message=self.usage_message(cache_read=19_000, cache_creation=800),
+        )
+
+        row = sink.records[0]
+        assert row.provider_input_tokens == 20_000
+        assert row.cached_input_tokens == 19_000
+        assert row.cache_creation_input_tokens == 800
+
+    async def test_an_unreported_usage_stays_unset_rather_than_zero(self) -> None:
+        """``None`` and "the provider billed nothing" must not collapse.
+
+        A zero-token usage object would assert the provider billed nothing and
+        turn the whole estimate into a large negative residual on every
+        unreported call, so a provider that says nothing must leave the column
+        unset and ``unattributed_delta`` at 0.
+        """
+
+        sink = OccupancySink()
+        await self.drive_default_path(sink=sink, fire_callbacks=False)
+
+        row = sink.records[0]
+        assert row.provider_input_tokens is None
+        assert row.cached_input_tokens == 0
+        assert row.unattributed_delta == 0
