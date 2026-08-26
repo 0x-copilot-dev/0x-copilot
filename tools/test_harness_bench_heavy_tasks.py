@@ -734,3 +734,83 @@ def test_the_super_step_fit_is_stated_where_it_came_from(rescore):
         "the measured super-step fit this scorer copies is no longer stated in "
         "ExecutionHyperparameters.recursion_limit's comment"
     )
+
+
+class TestScorerLabelsArePinnedToTheService:
+    """The three occupancy labels ``rescore`` matches on must be the service's.
+
+    These are copied literals — ``rescore.py`` is stdlib-only and must not import
+    a service's ``src`` (CLAUDE.md) — and a copied literal that nothing pins is
+    the shape this program keeps rediscovering: a rename lands, the scorer stops
+    matching, and every column it feeds reports a confident **zero** instead of
+    an error. The existing gates cannot catch it, because they build their
+    synthetic rows out of ``rescore``'s own constant, so the string is compared
+    against itself. Mutating ``OFFLOAD_STUB_LABEL`` to a value the ledger never
+    emits left all 24 of them green.
+
+    The service file is read as DATA and parsed with ``ast`` — never imported —
+    so this stays on the legal side of the boundary rule while still failing on
+    a rename.
+    """
+
+    CLASSIFIER = (
+        REPO_ROOT
+        / "services"
+        / "ai-backend"
+        / "src"
+        / "agent_runtime"
+        / "observability"
+        / "context_message_classifier.py"
+    )
+
+    @classmethod
+    def _origin_labels(cls) -> dict[str, str]:
+        """``{ATTRIBUTE: "owner:name"}`` for every ``ContextOrigin`` constant."""
+
+        import ast
+
+        source = cls.CLASSIFIER.read_text(encoding="utf-8")
+        labels: dict[str, str] = {}
+        for node in ast.walk(ast.parse(source)):
+            if not isinstance(node, ast.AnnAssign) or node.value is None:
+                continue
+            call = node.value
+            if not isinstance(call, ast.Call):
+                continue
+            func = call.func
+            name = func.id if isinstance(func, ast.Name) else getattr(func, "attr", "")
+            if name != "ContextOrigin":
+                continue
+            fields = {
+                kw.arg: kw.value.value
+                for kw in call.keywords
+                if isinstance(kw.value, ast.Constant)
+            }
+            owner, origin_name = fields.get("owner"), fields.get("name")
+            target = node.target
+            if owner and origin_name and isinstance(target, ast.Name):
+                labels[target.id] = f"{owner}:{origin_name}"
+        return labels
+
+    def test_the_service_file_is_where_we_think_it_is(self) -> None:
+        # A moved file would make every assertion below vacuously pass on an
+        # empty mapping — the same failure mode the class exists to prevent.
+        assert self.CLASSIFIER.is_file(), self.CLASSIFIER
+        assert self._origin_labels(), "parsed no ContextOrigin constants"
+
+    def test_offload_stub_label_matches_the_service(self, rescore) -> None:
+        labels = self._origin_labels()
+        assert "OFFLOAD_STUB" in labels, sorted(labels)
+        assert rescore.OFFLOAD_STUB_LABEL == labels["OFFLOAD_STUB"], (
+            "rescore.OFFLOAD_STUB_LABEL has drifted from the service; every "
+            "offloaded_results count would silently read 0"
+        )
+
+    def test_the_other_copied_labels_match_the_service(self, rescore) -> None:
+        labels = set(self._origin_labels().values())
+        for attribute in ("TOOL_RESULT_LABEL", "BUDGET_NOTE_LABEL"):
+            value = getattr(rescore, attribute)
+            assert value in labels, (
+                f"rescore.{attribute}={value!r} matches no ContextOrigin in the "
+                f"service; known labels: {sorted(labels)}"
+            )

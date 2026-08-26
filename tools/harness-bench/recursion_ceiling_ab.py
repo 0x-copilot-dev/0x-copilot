@@ -77,6 +77,7 @@ import re
 import sys
 import time
 from dataclasses import dataclass
+from collections.abc import Mapping
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "desktop-journeys"))
@@ -320,6 +321,43 @@ def sign_in_and_key(session: DriverSession) -> None:
     session.ftue_add_key(provider, key)
 
 
+def build_row(
+    task: "RecursionTask",
+    *,
+    run_id: str,
+    record: Mapping[str, object],
+    answer: str,
+) -> dict:
+    """The report row's graded half, factored out so a test can reach it.
+
+    ``collect`` needs a booted app and a paid model call, so everything built
+    inside its loop was unreachable by any test — and two of the keys here are
+    the whole correctness axis. Deleting either one left the suite green while
+    every future arm silently recorded no expectation, ``rescore`` reported
+    ``?`` forever, and the axis went dark with nothing failing. That is this
+    program's signature defect, so the seam is a function now and
+    ``tools/test_harness_bench_recursion_answers.py`` pins its shape.
+    """
+
+    return {
+        "task": task.task_id,
+        "claim": task.claim,
+        "run_id": run_id,
+        "status": record.get("status"),
+        "safe_error": record.get("safe_error"),
+        # The OUTCOME, not a proxy for it. `rescore.py` re-derives this from
+        # the store afterwards and OVERWRITES it; this live value exists so
+        # a paid arm is legible while it is still running, and so a crash
+        # mid-arm leaves something readable behind.
+        "outcome_ok": bool(task.expect.search(answer)),
+        # Recorded so the arm can be re-graded offline for free. A row
+        # WITHOUT this key declared no expected answer and must be reported
+        # UNKNOWN — never wrong. That is what the two arms in `runs/` are.
+        "expected": task.expect.pattern,
+        "answer_head": answer.strip()[:ANSWER_HEAD_CHARS],
+    }
+
+
 def collect(session: DriverSession, limit: str) -> None:
     """Drive every task through one booted app and write the arm's report.
 
@@ -345,21 +383,7 @@ def collect(session: DriverSession, limit: str) -> None:
         record = terminal_run(session, run_id)
         answer = assistant_text(session, run_id) or ""
         row = {
-            "task": task.task_id,
-            "claim": task.claim,
-            "run_id": run_id,
-            "status": record.get("status"),
-            "safe_error": record.get("safe_error"),
-            # The OUTCOME, not a proxy for it. `rescore.py` re-derives this from
-            # the store afterwards and OVERWRITES it; this live value exists so
-            # a paid arm is legible while it is still running, and so a crash
-            # mid-arm leaves something readable behind.
-            "outcome_ok": bool(task.expect.search(answer)),
-            # Recorded so the arm can be re-graded offline for free. A row
-            # WITHOUT this key declared no expected answer and must be reported
-            # UNKNOWN — never wrong. That is what the two arms in `runs/` are.
-            "expected": task.expect.pattern,
-            "answer_head": answer.strip()[:ANSWER_HEAD_CHARS],
+            **build_row(task, run_id=run_id, record=record, answer=answer),
             "seconds": round(time.time() - started, 1),
             **measure(session, run_id),
         }

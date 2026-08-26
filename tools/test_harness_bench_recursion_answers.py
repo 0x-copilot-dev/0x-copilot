@@ -554,3 +554,66 @@ def test_the_compare_table_renders_an_unmeasured_number_as_a_dash(bench):
     assert bench._ok_glyph(None) == "?"
     assert bench._ok_glyph(True) == "Y"
     assert bench._ok_glyph(False) == "-"
+
+
+class TestTheReportRowCarriesTheCorrectnessAxis:
+    """The row-writing seam, which was unreachable by any test until now.
+
+    ``collect`` needs a booted app and a paid model call, so the dict it builds
+    per task — the dict that carries the entire correctness axis — could not be
+    exercised. Deleting ``expected`` or ``outcome_ok`` from it left the whole
+    suite green, while every future arm would record no expectation, ``rescore``
+    would report ``?`` forever, and the axis would go dark with nothing failing.
+
+    ``build_row`` exists so these four assertions can run. They are cheap and
+    they are the difference between an axis that is measured and one that merely
+    looks measured.
+    """
+
+    @staticmethod
+    def _row(bench, answer: str) -> dict:
+        task = bench.TASKS[0]
+        return bench.build_row(
+            task,
+            run_id="run_abc",
+            record={"status": "completed", "safe_error": None},
+            answer=answer,
+        )
+
+    def test_the_row_records_the_pattern_it_was_graded_against(self, bench) -> None:
+        # Without this key `rescore` cannot re-grade the arm offline, and the
+        # row is reported UNKNOWN forever rather than right or wrong.
+        row = self._row(bench, "irrelevant")
+        assert row["expected"] == bench.TASKS[0].expect.pattern
+        assert row["expected"], "an empty expectation grades every answer unknown"
+
+    def test_the_row_records_the_live_verdict(self, bench) -> None:
+        task = bench.TASKS[0]
+        hit = self._row(bench, f"the answer is {task.expect.pattern}")
+        assert "outcome_ok" in hit, "the live verdict is the axis; it must be recorded"
+
+    def test_a_wrong_answer_grades_false_not_missing(self, bench) -> None:
+        row = self._row(bench, "a confident answer to a different question")
+        assert row["outcome_ok"] is False, (
+            "a wrong answer must grade False — never absent, which reads as unknown"
+        )
+
+    def test_the_recorded_pattern_round_trips_through_re(self, bench) -> None:
+        # `rescore` recompiles this string offline. If a flag lived on the
+        # compiled object instead of inside the pattern, the offline verdict
+        # would differ from the live one — silently, and in the direction that
+        # invents a wrong answer.
+        import re
+
+        for task in bench.TASKS:
+            row = bench.build_row(
+                task,
+                run_id="r",
+                record={"status": "completed", "safe_error": None},
+                answer="",
+            )
+            recompiled = re.compile(row["expected"])
+            probe = f"{task.task_id} probe"
+            assert bool(recompiled.search(probe)) == bool(task.expect.search(probe)), (
+                f"{task.task_id}: recompiled pattern disagrees with the live one"
+            )

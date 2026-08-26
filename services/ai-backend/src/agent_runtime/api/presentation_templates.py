@@ -100,9 +100,17 @@ class _ErrorMessage:
     # "start a new run with this goal" button would offer a remedy that cannot
     # work. Before this code existed the case landed on EXTERNAL_SERVICE_ERROR
     # and did exactly that.
+    # Carries the same actionable clause as
+    # ``agent_runtime.execution.runtime.MODEL_NOT_FOUND_MESSAGE``. The two are
+    # separate strings on separate paths — ``safe_message`` wins on ``run_failed``,
+    # so this entry is normally unreachable — but a producer that stops setting
+    # ``safe_message`` would silently fall back to whichever wording lived here.
+    # "Choose a different model" is the whole point of the code: without it the
+    # copy reads as transient and invites a retry that cannot ever succeed.
     MODEL_NOT_FOUND = (
         "Model unavailable",
-        "The provider wouldn't serve the model this run selected.",
+        "The provider wouldn't serve the model this run selected. Choose a "
+        "different model — sending this again will fail the same way.",
     )
     TOOL_EXCEPTION = (
         "Step failed",

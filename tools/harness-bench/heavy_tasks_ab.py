@@ -98,8 +98,11 @@ fixture to get there: eight seed lines, then four chained ``edit_file``
 expansions that grow the file to ~64KB, then two reads that straddle
 ``INLINE_TOKEN_BUDGET``. It used to read a 2,600-row host CSV behind a folder
 grant instead — a lane this machine could never mint, because the grant comes
-only from a NATIVE picker and Accessibility is denied here, so in every arm ever
-run H6 recorded ``skipped`` and the cap stayed unmeasured. Writing its own
+only from a NATIVE picker and Accessibility is denied here. Stated precisely,
+because this file's whole discipline is precision: the two committed arms carry
+**no H6 row at all** (they were pinned to H1-H5), and the arms before them
+recorded it ``skipped``. Either way the cap stayed unmeasured — but "never ran"
+and "recorded skipped" are different facts and the reports show the former. Writing its own
 fixture is also what makes H6 the one task in the set that is valid pinned alone.
 
 PRECONDITION: the stage must be built from the tree under test (README §1b in
@@ -622,6 +625,17 @@ def recorded_pattern(pattern: re.Pattern[str]) -> str:
     )
 
 
+def _cell(value: object) -> str:
+    """Render a value that may be *unobservable*, distinctly from a real zero.
+
+    ``None`` means the harness could not see the number, which is not the same
+    fact as ``0`` and must not print as one. See ``measure``'s docstring for the
+    three separate times this program mistook one for the other.
+    """
+
+    return "?" if value is None else str(value)
+
+
 # ── driving one arm ──────────────────────────────────────────────────────────
 def terminal_run(session: DriverSession, run_id: str, timeout_s: int = 420) -> dict:
     """Wait for a terminal run and RETURN it, whatever it is.
@@ -668,28 +682,31 @@ def measure(session: DriverSession, run_id: str) -> dict:
     the sum is structurally 0 forever. Verified against a live arm whose store
     recorded 20,287 input tokens while this read reported ``in=0``.
 
-    ``llm_calls`` now counts ``model_call_started``, which the run path does
-    emit, and remains a lower bound because a call that dies before its start
-    event is invisible to it.
+    ``llm_calls`` is ``None`` for the same reason, and an earlier revision of
+    this file got that wrong in an instructive way: it substituted
+    ``model_call_started``, which the run path DOES emit, on the reasoning that a
+    real event beats a structural zero. It does not. That event fires **once per
+    RUN** here, not once per model call — measured 1/1/1/1 against real counts of
+    1/1/4/2 — so the substitution traded an obvious zero for a *plausible*
+    undercount, which is strictly worse: a zero invites the question, a plausible
+    number closes it. ``rescore.py`` counts model calls from
+    ``context_occupancy.jsonl``, which has one row per call.
     """
 
     payload = session.transport("GET", f"/v1/agent/runs/{run_id}/events")
     events = payload.get("events", []) if isinstance(payload, dict) else []
-    model_calls = 0
     tool_calls = 0
     for event in events:
         if not isinstance(event, dict):
             continue
         event_type = event.get("event_type") or event.get("type")
-        if event_type == "model_call_started":
-            model_calls += 1
-        elif event_type in {"tool_call", "tool_call_started"}:
+        if event_type in {"tool_call", "tool_call_started"}:
             tool_calls += 1
     return {
-        "llm_calls": model_calls,
-        "tool_calls": tool_calls,
         # Not observable from the event stream — see the docstring. ``rescore.py``
-        # reads them off ``run_usage.jsonl``, which is where they actually live.
+        # reads all three off the run store, which is where they actually live.
+        "llm_calls": None,
+        "tool_calls": tool_calls,
         "input_tokens": None,
         "output_tokens": None,
         "events": len(events),
@@ -789,7 +806,7 @@ class Arm:
         # as a free run, which is the failure mode the method notes open with.
         log(
             f"  {task.task_id}: status={row['status']} ok={row['outcome_ok']} "
-            f"llm_calls={row['llm_calls']} tool_calls={row['tool_calls']} "
+            f"llm_calls=via rescore.py tool_calls={row['tool_calls']} "
             f"tokens=via rescore.py {row['seconds']}s"
         )
         return row
@@ -1035,7 +1052,7 @@ def compare() -> int:
                 # different fact from a row that ran and reported nothing.
                 f"{(str(row.get('status')) if row else 'absent')[:9]:<10}"
                 f"{('Y' if row.get('outcome_ok') else '-' if row.get('run_id') else ' '):<3}"
-                f"{row.get('llm_calls', '-'):>4}{row.get('tool_calls', '-'):>5}"
+                f"{_cell(row.get('llm_calls')):>4}{row.get('tool_calls', '-'):>5}"
                 f"{row.get('seconds', '-'):>7}"
             )
         print(f"{task.task_id:<18} " + " ".join(f"{c:<30}" for c in cells))

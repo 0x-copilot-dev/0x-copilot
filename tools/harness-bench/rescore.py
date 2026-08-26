@@ -500,6 +500,12 @@ def tool_shape(invocations: list[list[dict]]) -> dict:
 
 
 # ── context occupancy: model calls, result sizes, budget notes ───────────────
+def _num(value: object) -> str:
+    """Render a counter that may be unobservable, distinctly from a real zero."""
+
+    return "?" if value is None else str(value)
+
+
 def occupancy_shape(rows: list[dict]) -> dict:
     """Per-run model-call count and the largest tool result that entered context.
 
@@ -520,8 +526,13 @@ def occupancy_shape(rows: list[dict]) -> dict:
     peak_tokens: int | None = None
     peak_bytes: int | None = None
     peak_stub: int | None = None
-    offloaded = 0
-    budget_notes = 0
+    # `None`, not 0, when there is no occupancy row to count: an empty ledger
+    # means the cap was NOT MEASURED, and "the cap never fired" is a different
+    # claim. This column is load-bearing for H6, so a false 0 here reads as a
+    # measured negative — the same mistake three other counters in this program
+    # already made (FINDINGS.md §7.3).
+    offloaded: int | None = None if not rows else 0
+    budget_notes: int | None = None if not rows else 0
     for row in rows:
         for segment in (row.get("segments_json") or {}).get("segments", []):
             if not isinstance(segment, dict):
@@ -535,10 +546,10 @@ def occupancy_shape(rows: list[dict]) -> dict:
                 # The cap FIRED here. Counted separately from the inline peak
                 # because it answers a different question: not "how big did a
                 # result get" but "how often was one too big to admit".
-                offloaded += 1
+                offloaded = (offloaded or 0) + 1
                 peak_stub = max(peak_stub or 0, tokens)
             elif label == BUDGET_NOTE_LABEL:
-                budget_notes += 1
+                budget_notes = (budget_notes or 0) + 1
     return {
         "model_calls": len(rows),
         "peak_result_tokens": peak_tokens,
@@ -636,10 +647,10 @@ def score(arm: str) -> dict | None:
             continue
         u = usage.get(run_id, {})
         grouped = list(group_invocations(tools.get(run_id, [])).values())
-        task["input_tokens"] = u.get("input_tokens", 0)
-        task["output_tokens"] = u.get("output_tokens", 0)
-        task["cached_input_tokens"] = u.get("cached_input_tokens", 0)
-        task["total_tokens"] = u.get("total_tokens", 0)
+        task["input_tokens"] = u.get("input_tokens")
+        task["output_tokens"] = u.get("output_tokens")
+        task["cached_input_tokens"] = u.get("cached_input_tokens")
+        task["total_tokens"] = u.get("total_tokens")
         task["duration_ms"] = u.get("duration_ms", 0)
         task.update(tool_shape(grouped))
         task.update(occupancy_shape(occupancy.get(run_id, [])))
@@ -721,19 +732,21 @@ def main() -> int:
             task_peak = task["peak_result_tokens"]
             if task_peak is not None:
                 peak_result = max(peak_result or 0, task_peak)
-            offloaded_total += task.get("offloaded_results") or 0
-            ok = task.get("outcome_ok")
+            offloaded_total += task.get("offloaded_results") or 0  # None -> 0 sum
             print(
                 f"{arm:<8}{task['task']:<18}{str(task['status']):<11}"
                 f"{ok_cell(task.get('outcome_ok')):<4}"
                 f"{task['tool_invocations']:>6}{task['orphaned_rounds']:>5}"
                 f"{task['peak_parallel']:>4}{task['delegated_rounds']:>4}"
                 f"{task['model_calls']:>5}{task['super_steps_estimate']:>7}"
-                f"{task['input_tokens']:>9}{task['cached_input_tokens']:>9}"
-                f"{task['output_tokens']:>7}"
+                # `?`, never `0`: run_usage.jsonl carried no row for this run,
+                # which is "not measured" and not "cost nothing".
+                f"{_num(task['input_tokens']):>9}"
+                f"{_num(task['cached_input_tokens']):>9}"
+                f"{_num(task['output_tokens']):>7}"
                 # `-`, never `0`: this column has no observation to report.
                 f"{('-' if task_peak is None else task_peak):>8}"
-                f"{task.get('offloaded_results', 0):>6}  "
+                f"{_num(task.get('offloaded_results')):>6}  "
                 f"{','.join(task['tool_failures']) or '-'}"
             )
 
