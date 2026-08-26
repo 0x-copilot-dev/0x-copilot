@@ -567,3 +567,90 @@ succeeded. The `NormalizedTokenUsage` contract already names the cure — a
 separate `provider_cache_metadata_observed` bit, so that "zero cache tokens
 without that bit must never be called a miss". Every counter this program adds
 from here should carry its own version of that bit.
+
+## 8. The heavy arms, finally run — the ceiling never binds, the tool budget does
+
+§5 built `heavy_tasks_ab.py` to reach five claims the four short prompts cannot,
+and then recorded that no arm had ever been driven. Both arms are now run.
+
+**Setup, and two deliberate departures from §5's recipe.** Model pinned to
+`claude-haiku-4-5` via `COPILOT_JOURNEY_MODEL` — the earlier passes silently used
+whatever the app defaulted to, which was `claude-opus-4-5`, the most expensive
+model in the catalog, for a benchmark that writes six files. Task set pinned to
+the five that declare `Needs.NOTHING`, because `h6-bigread` needs a folder grant
+that cannot be driven on this host and `h7-mcp-namespace` needs two hand-connected
+MCP servers. Both arms: same model, same tasks, same order, own process.
+
+```
+arm 25 : 5/5 completed, 4/5 correct, 81,330 listed input, $0.0119
+arm 500: 3/5 completed, 3/5 correct, 69,558 listed input, $0.0135
+```
+
+**Cost first, because §5's estimate was badly wrong in the useful direction.** It
+predicted "~1.2M listed input tokens, ~150k full-price-equivalent, a bit under $1
+an arm". Measured: **81k listed and $0.012**. Two reasons — the estimate assumed a
+Sonnet-class model, and it predicted 45–60 model calls per arm against an actual
+5 (one per task; Haiku batches its tool calls into a single assistant turn rather
+than round-tripping per call). The whole two-arm experiment costs **$0.025**.
+
+### The headline: the step ceiling never bound, in either arm
+
+```
+no run was stopped by the step ceiling in any arm
+```
+
+§1's win — `recursion_limit` 25 → 500 buying +25 points of completion — does not
+reproduce here, and the reason is visible in the failure column rather than
+inferred. What stopped `h4-delegate` and `h5-longchain` at limit=500 was the
+**per-tool-name call budget**:
+
+```
+read_file:tool_budget_exceeded  x6      (execution.tool_call_budget = 10)
+read_file:tool_run_failed       x2
+```
+
+That is one of the five claims §5 listed as unreachable, and it is now measured:
+**the budget binds on real work, and the ceiling does not.** For the tasks in
+this set, the ceiling raise §1 paid for is not the constraint that matters.
+
+### Three of five previously-unmeasured claims are now reached
+
+| claim                | §5 said       | measured now                              |
+| -------------------- | ------------- | ----------------------------------------- |
+| per-tool-name budget | unmeasured    | **binds** — 6 `tool_budget_exceeded` rows |
+| delegation           | 0 in any task | **6 → 21** delegated rounds (`h4`)        |
+| parallel execution   | peak 1        | **peak 12** parallel calls                |
+| tool-result cap      | unmeasured    | still unmeasured — peak 68 of 8,192       |
+| MCP namespacing      | unmeasured    | still unmeasured — 0 servers connected    |
+
+The two that remain unmeasured are the two whose tasks were excluded, and the
+scorer says so itself rather than reporting a zero: _"zero namespaced names on a
+profile with no connected server is NOT evidence either way."_
+
+### What this does NOT establish
+
+**n=1 per cell.** 4/5 correct against 3/5 is one task, one sample, on a small
+model whose tool-call behaviour visibly varies run to run — the same
+`h5-longchain` made **1** tool call in one arm and **21** in the other. Reading
+that as "raising the ceiling hurts correctness" would be exactly the mistake §1
+documents: a conclusion drawn from a single arm. The defensible claims are the
+mechanical ones — the ceiling was never the stop, the budget was — because those
+come from terminal codes and failure rows, not from a difference of one.
+
+`h5-longchain` was designed to span the old ceiling of 25 super-steps and did not
+reach it in either arm (peak estimated 34 at limit=25). Either the fit
+overestimates, or Haiku's batching collapses the chain the prompt intended to
+serialise. `peak_parallel` of 12 favours the second.
+
+### §2's mis-stamped innocent reappeared, from a different cause
+
+```
+calls CLOSED BY RECONCILIATION, not by running:
+  limit=500  h4-delegate   read_file, read_file
+  limit=500  h5-longchain  read_file, read_file
+```
+
+Same shape as §2 — a terminal row with an empty `result_summary`, a tool that
+looks like it threw and never ran — but the cause here is budget exhaustion, not
+a step ceiling. The scorer named it unprompted, which is the second time that
+column has found this shape without being told what to look for.

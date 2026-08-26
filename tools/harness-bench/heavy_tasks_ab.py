@@ -610,13 +610,21 @@ class Arm:
         )
 
 
-def sign_in_key_and_grant(arm: Arm) -> None:
+def sign_in_key_and_grant(arm: Arm, tasks: tuple[HeavyTask, ...] = TASKS) -> None:
     """Sign in, add the BYOK key, and arrange the H6 folder grant.
 
     The grant is attempted, never assumed. Attaching is the ONLY way in and it
     is a NATIVE dialog: when the host denies the controlling process
     Accessibility, no keystroke can reach that sheet. That records against H6
     and costs nothing else.
+
+    **Only attempted when a selected task actually needs it.** Five of the seven
+    tasks declare ``Needs.NOTHING``, so a run pinned to those was opening a
+    native macOS folder picker, failing to drive it, and printing a BLOCKED line
+    for a claim nothing in the run was measuring — noise that reads like a
+    broken harness. ``tasks`` is the already-resolved pin, so the question is
+    answered from the same list the arm is about to execute rather than from the
+    full set.
     """
 
     session = arm.session
@@ -624,6 +632,9 @@ def sign_in_key_and_grant(arm: Arm) -> None:
     log(f"provider={provider} key_len={len(key)} (value withheld)")
     session.sign_in_local()
     session.ftue_add_key(provider, key)
+
+    if not any(task.needs is Needs.HOST_GRANT for task in tasks):
+        return
 
     fixture_root = Path(tempfile.mkdtemp(prefix="heavy-bench-")).resolve()
     ledger = write_ledger(fixture_root)
@@ -698,7 +709,11 @@ def run_arm(limit: str) -> int:
 
     def setup(_: DriverSession) -> None:
         arm = holder["arm"]
-        sign_in_key_and_grant(arm)
+        sign_in_key_and_grant(arm, pinned)
+        # Same rule as the folder grant: do not report a claim blocked when
+        # nothing in this run measures it.
+        if not any(task.needs is Needs.CONNECTED_MCP for task in pinned):
+            return
         servers = connected_mcp_servers(arm.session)
         if len(servers) < 2:
             arm.blocked[Needs.CONNECTED_MCP] = (

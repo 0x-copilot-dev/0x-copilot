@@ -41,7 +41,7 @@ a reader to "recommend trimming the stable prefix, which is exactly backwards".
 | **2**  | ~~Occupancy ledger provider/cache fields~~ ✅ landed | days   | was three defects; the middle one raised inside a callback LangChain swallows                    |
 | **3**  | Lossless JSON-schema slimming (drop `title`)         | hours  | the named next lever; ~15–20% of every args schema, and it reaches third-party tools             |
 | **4**  | Decide `artifact_family` exposure                    | —      | a decision, not code: 1,705 resident tokens on every cold run, parked pending an owner           |
-| **5**  | Run the heavy arms                                   | ~$2    | re-stage DONE + validated on one task; the two paid arms remain                                  |
+| **5**  | ~~Run the heavy arms~~ ✅ done                       | $0.03  | the ceiling never bound; the per-tool-name budget did. 3 of 5 dark claims now measured           |
 | **6**  | `expires_at` + sweeper default                       | hours  | Top-8 #5, re-verified open; half-built machinery a compliance reviewer reads as implemented      |
 | **7**  | A correctness axis on the bench                      | days   | today a trimming change can degrade answers and still report 4/4                                 |
 | **8**  | Wire FTS5 conversation search                        | days   | Top-8 #6, re-verified open; we pay to maintain the index on every write                          |
@@ -49,6 +49,7 @@ a reader to "recommend trimming the stable prefix, which is exactly backwards".
 | **10** | Close the dark-wiring zero-default blind spot        | days   | a field defaulting to `0` and never produced reads as a measurement, not as absent               |
 | **11** | Grow the interactive corpus                          | —      | 13 runs on one machine is not a sample; it is the denominator for all cost work                  |
 | **12** | No per-model-call usage event on the run stream      | days   | three separate readers have now been written against an event that cannot fire on this path      |
+| **13** | Model picker shows raw, dated, duplicated ids        | days   | five Haiku rows for one family, three badly named, one retired and 404ing                        |
 
 ---
 
@@ -169,30 +170,31 @@ denominator we have not actually measured.
 
 ## 3. Completion rate and correctness
 
-### 5. Run the heavy arms — `~$2 and an afternoon`
+### 5. Run the heavy arms — ✅ **DONE**
 
-[`heavy_tasks_ab.py`](../../../tools/harness-bench/heavy_tasks_ab.py) is 830 LOC,
-`--plan`-checked, 19 offline gate tests, mutation-verified — and **no arm has ever
-been driven against a model**. It was blocked on a staged runtime four days
-behind the tree. **That blocker is now cleared:** the runtime was re-staged from
-this branch on 2026-08-26 and validated for the price of one task
-(`HEAVY_TASKS=h1-corpus`), which is the documented pre-flight. The two full arms
-have still not been paid for.
+Both arms run on `claude-haiku-4-5`, five grant-free tasks, **$0.025 total** —
+against §5's estimate of "a bit under $1 an arm". Written up in
+[FINDINGS.md §8](../../../tools/harness-bench/FINDINGS.md).
 
-Still unmeasured, and unreachable by the four short prompts: **delegation**,
-**parallel tool execution**, the **tool-result cap**, the **per-tool-name call
-budget**, and **MCP tool-name namespacing**.
+**The headline is a negative result worth having:** _the step ceiling never bound
+in either arm._ What stopped the two failing tasks at limit=500 was the
+**per-tool-name call budget** (`execution.tool_call_budget = 10`), with six
+`read_file:tool_budget_exceeded` rows. §1's ceiling win does not reproduce on
+this task set with this model.
 
-```bash
-node tools/desktop-runtime/stage.mjs --platform darwin --arch arm64
-npm run build --workspace @0x-copilot/desktop
-BENCH_ARM=500 HEAVY_TASKS=h1-corpus python tools/harness-bench/heavy_tasks_ab.py  # validate for 1 task
-BENCH_ARM=25  python tools/harness-bench/heavy_tasks_ab.py                        # own process
-BENCH_ARM=500 python tools/harness-bench/heavy_tasks_ab.py                        # own process
-python tools/harness-bench/rescore.py heavy-arm-25 heavy-arm-500
-```
+Three of the five previously-unreachable claims are now measured — the budget
+(binds), delegation (6 → 21 rounds), parallel execution (peak 12). Two remain
+unmeasured and the reasons are recorded rather than papered over: the
+tool-result cap needs `h6-bigread`'s folder grant, which cannot be driven on this
+host, and MCP namespacing needs two hand-connected servers.
 
-Expect ~45–60 model calls per arm. A number far from that is itself the finding.
+**Do not over-read the correctness column.** n=1 per cell, and the same task made
+1 tool call in one arm and 21 in the other. The defensible claims are the
+mechanical ones, which come from terminal codes rather than a difference of one.
+
+**Follow-up worth doing:** re-base `h6-bigread` on `/memories/` so the
+tool-result cap stops depending on a native folder picker. It is the only reason
+that claim is still dark.
 
 ### 7. A correctness axis on the bench — `days`
 
@@ -281,6 +283,46 @@ feature; the second is an afternoon and stops the fourth reader.
 
 **Skip cost:** a fourth person writes a fourth reader against a silent event,
 and every live cost readout in the program keeps saying zero.
+
+### 13. The model picker shows raw ids, dates, and dead models — `days`
+
+Found while pinning a cheap model for the heavy arms. The picker offers **five
+Haiku rows for one model family**:
+
+| catalog id                   | rendered label             | verdict                      |
+| ---------------------------- | -------------------------- | ---------------------------- |
+| `claude-haiku-4-5`           | Claude Haiku 4.5           | correct                      |
+| `claude-haiku-4-5-20251001`  | Claude Haiku 4.5.20251001  | date glued into the version  |
+| `anthropic/claude-haiku-4.5` | Anthropic/claude Haiku 4.5 | provider prefix leaked       |
+| `anthropic/claude-3-haiku`   | Anthropic/claude 3 Haiku   | provider prefix leaked       |
+| `claude-3-haiku-20240307`    | Claude 3 Haiku 20240307    | **retired — Anthropic 404s** |
+
+Three defects, one deriver. `ModelDisplayName.derive`
+(`api/litellm_model_source.py:75`) splits on `-` and collapses a trailing run of
+bare integers into a dotted version. It has no rule for:
+
+1. **a trailing `YYYYMMDD` snapshot stamp** — `4-5-20251001` collapses to
+   `4.5.20251001` rather than being recognised as a date and dropped;
+2. **a `provider/` prefix** — never stripped, and the `/` blocks the title-case
+   pass, so `anthropic/claude` renders with a lowercase `claude`;
+3. **brand words** — `KNOWN_ACRONYMS` holds only `gpt`.
+
+The fourth problem is not naming at all: **the catalog surfaces retired models
+the vendor will 404.** Selecting `Claude 3 Haiku 20240307` produces
+`external_service_error` → _"We couldn't complete this run. Please try again."_ —
+a retryable-looking message for a permanently dead model. That cost this session
+one wasted arm before the log was read.
+
+**Fix:** a date-stamp rule and a prefix strip in the deriver (cheap, testable —
+the existing test file already pins `claude-opus-4-8` → `"Claude Opus 4.8"`);
+prefer the undated alias when both are present so one family shows one row; and
+either filter models the pricing catalog marks deprecated, or classify a
+`not_found_error` as non-retryable so the copy stops inviting a retry.
+
+**Skip cost:** the model picker is the first screen a BYOK user meets after
+adding a key, and it currently offers them five ways to pick one model, one of
+which cannot work. Related: [[project_error_copy_is_model_paraphrase]] — the
+404's user-facing text is the collapsed-taxonomy problem again.
 
 ## 5. Root causes that outlive the individual items
 
