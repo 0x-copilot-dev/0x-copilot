@@ -168,7 +168,7 @@ class TestRenderFallbackProxy:
         scheduler = SurfaceGenerationScheduler(
             generator=generator,
             store=store,
-            emit=lambda _payload: _noop(),
+            emit=lambda _event_type, _payload: _noop(),
             model_id="fake-nano",
             schedule=lambda coro: scheduled.append(coro),
             max_per_run=5,
@@ -201,7 +201,7 @@ class TestBudgetAlarm:
         scheduler = SurfaceGenerationScheduler(
             generator=generator,
             store=store,
-            emit=lambda _payload: _noop(),
+            emit=lambda _event_type, _payload: _noop(),
             model_id="fake-nano",
             schedule=lambda coro: captured.append(coro),
             max_per_run=1,

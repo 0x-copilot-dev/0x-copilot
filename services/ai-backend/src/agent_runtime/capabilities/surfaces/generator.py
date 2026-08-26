@@ -111,6 +111,14 @@ if TYPE_CHECKING:
     # generation subsystem stays decoupled from the recording seam.
     from agent_runtime.observability.usage_meter import MeteredModelInvocation
 
+    # Typing-only, and late-imported at the two emit sites, to avoid the
+    # capabilities ↔ runtime_api.schemas circular import that CitationLedger
+    # and CitationResolver side-step the same way: importing any
+    # ``runtime_api.schemas`` submodule executes that package's ``__init__``,
+    # which reaches back into ``agent_runtime`` and lands on a
+    # partially-initialised module when the import starts from this side.
+    from runtime_api.schemas import RuntimeApiEventType
+
 _LOGGER = logging.getLogger(__name__)
 
 # Greppable structured-log prefix for the metering line, per PRD-07.
@@ -2151,8 +2159,16 @@ class _ShapeAttempt:
 # worker passes an ``asyncio.create_task`` wrapper; tests pass a synchronous
 # collector so scheduling decisions are asserted without a running task.
 ScheduleFn = Callable[[Coroutine[Any, Any, None]], None]
-# An EmitFn ships a ``surface_spec_generated`` payload onto the API event path.
-EmitFn = Callable[[Mapping[str, object]], Awaitable[None]]
+# An EmitFn ships one scheduler payload onto the API event path, under the event
+# type it names. The type is a PARAMETER, not baked into the closure, because
+# generation now emits a pair — ``surface_spec_requested`` when the model call
+# starts, ``surface_spec_generated`` when it lands — and the alternative (a
+# second injected closure) is the shape that lets one of the two be left unwired
+# while every test that injects both still passes. One seam, one wiring point.
+# Mirrors ``surfaces_v2.emitter.EmitFn``, which is event-type-first for the same
+# reason. The type is the wire enum rather than a bare string so a typo is a
+# type error here instead of a ``ValueError`` deep inside the worker's closure.
+EmitFn = Callable[["RuntimeApiEventType", Mapping[str, object]], Awaitable[None]]
 
 
 class SurfaceGenerationScheduler:
@@ -2285,6 +2301,7 @@ class SurfaceGenerationScheduler:
         output: object,
         surface_uri: str,
     ) -> None:
+        await self._emit_requested(surface_uri=surface_uri)
         started = time.perf_counter()
         try:
             result = await self._generator.generate(
@@ -2307,6 +2324,38 @@ class SurfaceGenerationScheduler:
             surface_uri=surface_uri, spec=result, duration_ms=duration_ms
         )
 
+    async def _emit_requested(self, *, surface_uri: str) -> None:
+        """Announce that the shaping model call for ``surface_uri`` is starting.
+
+        Shaping is a SECOND model call, awaited to completion, and until this
+        existed the runtime said nothing between the surface rendering and the
+        upgrade landing — so a client had no state to tie progress to and the
+        user read dead air for the whole generation.
+
+        Two properties are load-bearing:
+
+        * It is emitted BEFORE the timer starts, so it can never be mistaken for
+          part of the measured generation cost (``generator_ms``).
+        * It fails open. This is a progress signal, and a run whose emit raised
+          (a closed SSE stream, a sealed ledger — this task outlives its run by
+          design) must generate, store and upgrade exactly as it does today.
+          ``surface_spec_generated`` remains the terminal event; nothing may
+          wait for this one to have arrived.
+        """
+
+        from runtime_api.schemas import RuntimeApiEventType  # noqa: PLC0415
+
+        payload: dict[str, object] = {
+            "surface_id": surface_uri or None,
+            "model_id": self._model_id or None,
+        }
+        try:
+            await self._emit(RuntimeApiEventType.SURFACE_SPEC_REQUESTED, payload)
+        except Exception:  # noqa: BLE001 - progress must never fail a generation
+            _LOGGER.warning(
+                "%s emit_requested_failed uri=%s", _METER_PREFIX, surface_uri
+            )
+
     async def _emit_generated(
         self, *, surface_uri: str, spec: SurfaceSpec, duration_ms: int = 0
     ) -> None:
@@ -2318,6 +2367,8 @@ class SurfaceGenerationScheduler:
         merges by URI, so the user sees labels sharpen on a table that was
         already there, never a flash of un-shaped content and never a wait.
         """
+
+        from runtime_api.schemas import RuntimeApiEventType  # noqa: PLC0415
 
         payload: dict[str, object] = {
             "surface_uri": surface_uri,
@@ -2331,7 +2382,7 @@ class SurfaceGenerationScheduler:
             "skill_version": str(self._generator.skill_version),
         }
         try:
-            await self._emit(payload)
+            await self._emit(RuntimeApiEventType.SURFACE_SPEC_GENERATED, payload)
         except Exception:  # noqa: BLE001 - store is truth; the event is only a notification
             _LOGGER.warning("%s emit_failed uri=%s", _METER_PREFIX, surface_uri)
 
