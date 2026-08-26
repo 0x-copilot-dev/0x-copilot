@@ -488,3 +488,82 @@ not observable by testing that the surrounding operation succeeded. Both §1 and
 `NormalizedTokenUsage` contract already names: `provider_cache_metadata_observed`
 exists precisely so that "zero cache tokens without that bit must never be called
 a miss."
+
+### 7.3 Confirmed against a live run — and a third instrument reporting zero
+
+§7.1 and §7.2 were argued from code and unit tests. Both are now confirmed on the
+packaged app against a real Anthropic model, which is the only evidence that
+settles a "landed not wired" claim.
+
+**Stage discipline first**, because §5 is emphatic that this is where a verdict
+goes wrong: the runtime was re-staged from the branch under test and the stamps
+checked before anything was believed.
+
+```
+staged src mtime          Aug 26 13:26:41
+newest ai-backend commit  Aug 26 13:23:42     ← stage is NEWER: not a stale snapshot
+```
+
+One task (`HEAVY_TASKS=h1-corpus`, `JOURNEY_PROVIDER=anthropic`), six `write_file`
+rounds, completed. What the store now holds:
+
+```
+                                            BEFORE            AFTER
+runs writing cache                          0 of 442          1 of 1   (936 tokens)
+occupancy calls carrying cache fields       0 of 820          2 of 2
+occupancy calls carrying provider totals    0 of 820          2 of 2
+```
+
+Every counter this program has ever read as structurally zero is populated. The
+two occupancy rows also show the cold→warm pair the old code could not represent
+at all — row 1 `cache_creation 19,349 / cached 0` (the call that wrote the
+prefix), row 2 `cached 19,349 / cache_creation 936` (the call that read it).
+
+**§7.1's correction, measured:**
+
+```
+warm Anthropic run, fresh portion (input − cached)
+  before (median of 157 runs)   21,091     ← the whole prompt again
+  OpenAI, same metric              346     ← what a correct figure looks like
+  after, this run                  938
+```
+
+#### The third instrument, found by disbelieving a passing run
+
+The arm reported `PASS`, and printed:
+
+```
+h1-corpus: status=completed ok=True llm_calls=0 tool_calls=6 in=0 out=0 12.1s
+```
+
+Six tool calls and a completed answer for **zero tokens and zero model calls**.
+The store for that same run says 20,287 input tokens. `measure()` sums
+`usage.recorded` events off the events API — and this file's own method notes
+open by documenting that exact reader returning "0 tokens for every task". It was
+never removed; it was retained as a "lower bound", which is how it survived.
+
+It is not a lower bound. **`usage.recorded` is a Generative Surfaces v2 ledger
+event, not a per-model-call usage event on the run stream.**
+`streaming_executor` returns early on `if not surfaces_v2_enabled`, and the
+`handlers/run` emitter meters only the VIEW_SHAPING spec-generation path. On the
+ordinary run path the sum is structurally 0 forever, on every arm, in every
+build. The run's actual event stream carries `model_call_started`, `tool_result`,
+`final_response` — and no usage event of any kind.
+
+`measure()` now counts `model_call_started` and reports tokens as **`None`**,
+printed as `tokens=via rescore.py`. A number that cannot be observed should say
+so rather than print a zero, because _this_ is the third time in this program a
+zero has been mistaken for a cheap run:
+
+| #   | Instrument                        | Reported | Actually                   |
+| --- | --------------------------------- | -------- | -------------------------- |
+| 1   | first scorer, `usage.recorded`    | 0 tokens | never emitted on this path |
+| 2   | occupancy `provider_input_tokens` | 0 / null | raised inside a callback   |
+| 3   | `measure()`, retained as a bound  | `in=0`   | 20,287, per the same run   |
+
+All three are the same defect: **a signal that cannot distinguish "measured
+zero" from "never measured"**, shipped because the surrounding operation
+succeeded. The `NormalizedTokenUsage` contract already names the cure — a
+separate `provider_cache_metadata_observed` bit, so that "zero cache tokens
+without that bit must never be called a miss". Every counter this program adds
+from here should carry its own version of that bit.

@@ -41,13 +41,14 @@ a reader to "recommend trimming the stable prefix, which is exactly backwards".
 | **2**  | ~~Occupancy ledger provider/cache fields~~ ✅ landed | days   | was three defects; the middle one raised inside a callback LangChain swallows                    |
 | **3**  | Lossless JSON-schema slimming (drop `title`)         | hours  | the named next lever; ~15–20% of every args schema, and it reaches third-party tools             |
 | **4**  | Decide `artifact_family` exposure                    | —      | a decision, not code: 1,705 resident tokens on every cold run, parked pending an owner           |
-| **5**  | Run the heavy arms                                   | ~$2    | 830 LOC of validated harness never driven; 5 claims still unmeasured                             |
+| **5**  | Run the heavy arms                                   | ~$2    | re-stage DONE + validated on one task; the two paid arms remain                                  |
 | **6**  | `expires_at` + sweeper default                       | hours  | Top-8 #5, re-verified open; half-built machinery a compliance reviewer reads as implemented      |
 | **7**  | A correctness axis on the bench                      | days   | today a trimming change can degrade answers and still report 4/4                                 |
 | **8**  | Wire FTS5 conversation search                        | days   | Top-8 #6, re-verified open; we pay to maintain the index on every write                          |
 | **9**  | Desktop skill authoring                              | days   | Top-8 #8, re-verified open; on the surface CLAUDE.md calls the product                           |
 | **10** | Close the dark-wiring zero-default blind spot        | days   | a field defaulting to `0` and never produced reads as a measurement, not as absent               |
 | **11** | Grow the interactive corpus                          | —      | 13 runs on one machine is not a sample; it is the denominator for all cost work                  |
+| **12** | No per-model-call usage event on the run stream      | days   | three separate readers have now been written against an event that cannot fire on this path      |
 
 ---
 
@@ -124,10 +125,12 @@ observer to the code under test) and each mutation-checked to fail exactly the
 test naming it. Written up in
 [FINDINGS.md §7.2](../../../tools/harness-bench/FINDINGS.md).
 
-**Not yet confirmed against a live run.** The tests prove the wiring; the
-`occupancy calls carrying provider totals` line in `cache_profile.py` still reads
-`0 of 820` until a build carrying this fix writes a store. That check belongs
-with item 5's re-stage.
+**Confirmed against a live run** (2026-08-26): re-staged from this branch,
+one Anthropic task on the packaged app. `occupancy calls carrying provider
+totals` went `0 of 820` → `2 of 2`, and `runs writing cache` `0 of 442` → `1 of
+1`. Item 1's correction measured on the same run: a warm run's fresh portion is
+**938** tokens, against a pre-fix median of 21,091. See
+[FINDINGS.md §7.3](../../../tools/harness-bench/FINDINGS.md).
 
 ### 3. Lossless JSON-schema slimming — `hours`
 
@@ -171,7 +174,10 @@ denominator we have not actually measured.
 [`heavy_tasks_ab.py`](../../../tools/harness-bench/heavy_tasks_ab.py) is 830 LOC,
 `--plan`-checked, 19 offline gate tests, mutation-verified — and **no arm has ever
 been driven against a model**. It was blocked on a staged runtime four days
-behind the tree; that staleness is now much worse, so re-stage first.
+behind the tree. **That blocker is now cleared:** the runtime was re-staged from
+this branch on 2026-08-26 and validated for the price of one task
+(`HEAVY_TASKS=h1-corpus`), which is the documented pre-flight. The two full arms
+have still not been paid for.
 
 Still unmeasured, and unreachable by the four short prompts: **delegation**,
 **parallel tool execution**, the **tool-result cap**, the **per-tool-name call
@@ -246,6 +252,35 @@ _"The skill editor route isn't built on desktop yet"_. The props exist and the
 author a skill, and the library stays at 3 runtime `SKILL.md` packages.
 
 ---
+
+### 12. There is no per-model-call usage event on the run stream — `days`
+
+`usage.recorded` looks like one and is not. It is a **Generative Surfaces v2
+ledger event**: `streaming_executor` returns early on `if not
+surfaces_v2_enabled`, and the `handlers/run` emitter meters only the
+VIEW_SHAPING spec-generation path. On the ordinary run path it cannot fire.
+
+Three readers have now been written against it in the belief that it could:
+
+- the harness-program's first scorer (documented in FINDINGS.md's method notes
+  as "wrong event matcher" — the truer statement is that the event does not
+  exist for this purpose);
+- `heavy_tasks_ab.measure()`, which retained that reader as a "lower bound" and
+  printed `in=0 out=0` on a run whose store recorded 20,287 input tokens;
+- the composer's context meter, which reads the two `/context` REST endpoints
+  precisely because the `context_occupancy` run event has no emitter either.
+
+Each author independently concluded the runtime emits per-call usage on the
+stream. It does not, and nothing says so.
+
+**Fix:** either emit a real per-model-call usage event on the run path (the
+occupancy recorder already has every number at `_append_occupancy`), or document
+loudly at the event-type definition that `usage.recorded` is surfaces-only and
+name the REST endpoint that answers the question instead. The first is a
+feature; the second is an afternoon and stops the fourth reader.
+
+**Skip cost:** a fourth person writes a fourth reader against a silent event,
+and every live cost readout in the program keeps saying zero.
 
 ## 5. Root causes that outlive the individual items
 
