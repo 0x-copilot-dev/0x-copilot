@@ -1296,6 +1296,7 @@ function reduceToolResult(
       pickString(event.payload, "error_message") ??
       pickString(event.payload, "safe_message") ??
       structuredError?.safeMessage ??
+      plainTextToolError(event) ??
       prior?.errorMessage,
     provenance:
       readToolProvenance(event.payload?.["provenance"]) ?? prior?.provenance,
@@ -1499,6 +1500,56 @@ function readStructuredToolError(value: unknown):
   } catch {
     return undefined;
   }
+}
+
+/**
+ * The failure sentence a tool wrote as PLAIN TEXT in `output.content`.
+ *
+ * `readStructuredToolError` above covers the two structured shapes — an
+ * `output.error` record, and a JSON string under `output.content` carrying one.
+ * A tool that simply returns `"Error: permission denied for write on /x.csv"`
+ * matches neither, so its card had no error line at all and fell back to the
+ * backend's generic summary ("0xCopilot couldn't complete this step").
+ *
+ * That was measured, not theorised: a live run's `tool_result` frame carried
+ * exactly that sentence with `error_message` and `safe_message` both null, and
+ * the one line that would have told the reader they needed a folder grant never
+ * reached the screen.
+ *
+ * SAFETY. This is a last resort, and it is deliberately narrow:
+ *   • only on a FAILED result — a success `content` is the tool's ANSWER, and
+ *     printing it on the error line would invent a failure;
+ *   • only when nothing structured was found, so a curated `safe_message`
+ *     always wins and this can never override redacted copy with raw text;
+ *   • bounded, and single-line — the header is one row and a paragraph would
+ *     push the card's own controls out of reach.
+ *
+ * It discloses nothing new: the same string already renders verbatim in the
+ * card's raw-payload disclosure. The bug was that it was buried there.
+ */
+function plainTextToolError(event: RuntimeEventEnvelope): string | undefined {
+  if (!isFailedToolResult(event)) return undefined;
+  const content = readRecord(event.payload?.["output"])?.["content"];
+  if (typeof content !== "string") return undefined;
+  const line = content.trim().split("\n", 1)[0]?.trim() ?? "";
+  if (line === "") return undefined;
+  // The card already renders this in the error style, so the tool's own
+  // "Error:" prefix is a second label for the same fact.
+  const stripped = line.replace(/^error:\s*/i, "").trim();
+  const text = stripped === "" ? line : stripped;
+  return text.length > PLAIN_TOOL_ERROR_CAP
+    ? `${text.slice(0, PLAIN_TOOL_ERROR_CAP)}…`
+    : text;
+}
+
+const PLAIN_TOOL_ERROR_CAP = 200;
+
+/** A terminal tool frame the runtime marked as failed. */
+function isFailedToolResult(event: RuntimeEventEnvelope): boolean {
+  const status =
+    pickString(event.payload, "status") ??
+    (typeof event.status === "string" ? event.status : null);
+  return status === "failed" || status === "error";
 }
 
 function toolErrorMessage(error: Record<string, unknown>): string | undefined {
