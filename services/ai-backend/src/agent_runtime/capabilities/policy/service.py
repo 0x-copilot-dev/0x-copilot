@@ -15,7 +15,7 @@ globals, opens no connection, and never raises: the one parse it performs
 already validated its ``urn`` at construction.
 
 By the time ``decide`` runs the **source has already classified and trusted** the
-capability: ``descriptor.action`` ∈ {READ, WRITE, DESTRUCTIVE} and
+capability: ``descriptor.action`` ∈ {READ, WRITE, DESTRUCTIVE, EXECUTE} and
 ``descriptor.trust`` ∈ {TRUSTED, UNTRUSTED} are given. So the PDP does **not**
 re-run the classifier ladder — it consumes the descriptor and layers
 authorization + approval posture on top, evaluated **DENY-first**
@@ -109,7 +109,7 @@ class PdpPolicyService:
       (spec §3, "Move 1"), composed from the ``snapshot``, the per-connector
       ``overrides`` (which only ever downgrade WRITE+ASK→AUTO), and the
       ``(permission × pattern)`` rule layer, with the never-list, a workspace
-      ``BLOCK`` and the DESTRUCTIVE rung all surviving BYPASS.
+      ``BLOCK`` and the DESTRUCTIVE and EXECUTE rungs all surviving BYPASS.
       :meth:`_posture_decision` documents the ladder and why its order is the
       safety argument.
     """
@@ -139,6 +139,7 @@ class PdpPolicyService:
         APPROVAL_READ = "approval_required.read"
         APPROVAL_WRITE = "approval_required.write"
         APPROVAL_DESTRUCTIVE = "approval_required.destructive"
+        APPROVAL_EXECUTE = "approval_required.execute"
 
     #: ``descriptor.action`` (the approval axis) → the enforcement axis the
     #: snapshot is keyed on. Value-identical enums, mapped explicitly rather than
@@ -148,6 +149,7 @@ class PdpPolicyService:
         Action.READ: ToolUsePolicyKind.READ,
         Action.WRITE: ToolUsePolicyKind.WRITE,
         Action.DESTRUCTIVE: ToolUsePolicyKind.DESTRUCTIVE,
+        Action.EXECUTE: ToolUsePolicyKind.EXECUTE,
     }
 
     #: Enforcement axis → the per-axis approval reason code for a GATE.
@@ -155,6 +157,7 @@ class PdpPolicyService:
         ToolUsePolicyKind.READ: _Reason.APPROVAL_READ,
         ToolUsePolicyKind.WRITE: _Reason.APPROVAL_WRITE,
         ToolUsePolicyKind.DESTRUCTIVE: _Reason.APPROVAL_DESTRUCTIVE,
+        ToolUsePolicyKind.EXECUTE: _Reason.APPROVAL_EXECUTE,
     }
 
     def __init__(
@@ -295,9 +298,10 @@ class PdpPolicyService:
         each stage is strictly harder to lift than the one below it:
 
         ``never-list`` › ``workspace BLOCK`` › ``rule tightenings`` ›
-        ``DESTRUCTIVE`` › ``rule ALLOW`` › ``BYPASS`` › ``the axis``.
+        ``DESTRUCTIVE`` › ``rule ALLOW`` › ``EXECUTE`` › ``BYPASS`` ›
+        ``the axis``.
 
-        Two placements are the point of this ladder:
+        Three placements are the point of this ladder:
 
         * **DESTRUCTIVE sits ABOVE BYPASS**, and GATEs rather than DENYs. It used
           to sit below, which meant the destructive rung — the one rung that
@@ -319,6 +323,13 @@ class PdpPolicyService:
           3.8's per-connector override already enforces ("never DESTRUCTIVE").
           A rule's ``deny``/``ask`` sit ABOVE Bypass, because a tightening the
           user wrote down should not be undone by a posture toggle.
+
+        * **EXECUTE sits BETWEEN the rule ALLOW and BYPASS** — above 3.6 so no
+          posture pill auto-runs a shell command, below 3.5 so a run-scoped
+          always-grant (an authored ``RuleAction.ALLOW``) still answers it.
+          Exactly one slot satisfies both; see the comment on 3.5½, which is
+          where the reasoning belongs because deleting the branch is what makes
+          it false.
         """
 
         action = descriptor.action
@@ -369,6 +380,40 @@ class PdpPolicyService:
         if verdict is RuleAction.ALLOW:
             return PolicyDecision.ALLOW, self._Reason.ALLOW
 
+        # 3.5½ — EXECUTE pauses in EVERY posture unless the axis itself is AUTO.
+        #
+        # THIS BRANCH, NOT THE ENUM, IS THE BEHAVIOUR. Add ``Action.EXECUTE``,
+        # its ``_AXIS_BY_ACTION`` row and its reason code and stop here, and the
+        # next thing an EXECUTE call reaches is 3.6 — ``if posture is BYPASS:
+        # return ALLOW`` — so flipping the composer bypass pill would auto-run
+        # shell commands with no gate at all, while every enum test passed.
+        #
+        # The POSITION is as load-bearing as the branch, in both directions, and
+        # exactly one slot satisfies both constraints:
+        #
+        # * ABOVE 3.6, so no posture pill lifts it. The bypass pill means
+        #   "writes auto"; its own module says bypass "removes the approval
+        #   PAUSE. It never ... creates a second way to touch the disk"
+        #   (``execution/filesystem_bypass.py``). A command is exactly a second
+        #   way to touch the disk, so the pill must not buy a standing yes to
+        #   one. We also cannot enforce our way out of this: a command is
+        #   invisible to every path-keyed filesystem control we own, so for the
+        #   write side a human reading the literal command before it runs is
+        #   not one control among several — it is the control, and the only one
+        #   robust to a novel injection arriving through connector text.
+        #
+        # * BELOW 3.5 — ``if verdict is RuleAction.ALLOW`` — so a run-scoped
+        #   always-grant, which is an authored ``RuleAction.ALLOW`` row in
+        #   ``_rules``, still resolves to ALLOW and is not eaten by the very
+        #   gate it exists to answer. Approval fatigue is itself a security
+        #   failure; without this ordering the "don't ask me forty times about
+        #   ``pytest``" grant is unbuildable.
+        #
+        # The one lift is the axis authored to AUTO — the same "posture ≠
+        # policy" exception 3.4 makes, and what keeps this strictly additive.
+        if action is Action.EXECUTE and mode is not ToolUsePolicyMode.AUTO:
+            return PolicyDecision.GATE, self._Reason.APPROVAL_EXECUTE
+
         # 3.6 — BYPASS lifts every remaining ASK/REQUIRE gate to ALLOW: the §3
         # "Bypass" column, now correctly excluding the destructive rung as well as
         # the terminal BLOCK (§3 bypass note; §7 "posture removes the pause").
@@ -405,7 +450,11 @@ class PdpPolicyService:
 
         # 3.9 — Base mode → decision (trusted READ and WRITE under MANUAL): AUTO
         # allows; ASK/REQUIRE gate with the per-axis reason. DESTRUCTIVE can no
-        # longer reach here — 3.4 returns for it in every posture.
+        # longer reach here — 3.4 returns for it in every posture. EXECUTE
+        # reaches here only when its axis is AUTO (3.5½ returned otherwise), so
+        # it takes the ALLOW arm; the GATE arm below is unreachable for it, and
+        # ``_APPROVAL_REASON_BY_AXIS`` still carries its row so a future
+        # reordering cannot turn that into a KeyError.
         if mode is ToolUsePolicyMode.AUTO:
             return PolicyDecision.ALLOW, self._Reason.ALLOW
         return PolicyDecision.GATE, self._APPROVAL_REASON_BY_AXIS[axis]

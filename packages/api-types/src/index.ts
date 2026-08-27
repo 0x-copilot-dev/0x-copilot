@@ -2905,9 +2905,21 @@ export interface ApprovalRequestedPayload {
    * undo is `medium`). A client deciding whether to withhold one-click approval
    * needs both, and neither alone.
    *
+   * `execute` is the command lane's class (PRD-shell-execution §14.1). It is a
+   * fourth value rather than a reuse of `destructive` because on the server
+   * `op_class` answers exactly one question — *may this decision cover more
+   * than this call?* — and `ToolAccessGate._grant_options` withholds
+   * `allow_always` for `destructive` alone. A command card that reached for
+   * `destructive` to look irreversible would ship `grant_options:
+   * ["allow_once"]` on every command, and no client change could recover the
+   * "Allow for this run" control: the option the client draws is the option
+   * the server sent. Irreversibility is carried by `risk_level: "high"`
+   * instead, which is the client-side question — *may this be approved from
+   * the collapsed card?*
+   *
    * Optional because it is emitted per-lane, not on every approval.
    */
-  op_class?: "read" | "write" | "destructive" | string;
+  op_class?: "read" | "write" | "destructive" | "execute" | string;
   read_only?: boolean;
   grant_options?: string[];
   message?: string;
@@ -2929,6 +2941,48 @@ export interface ApprovalRequestedPayload {
   options?: QuestionOption[];
   multi_select?: boolean;
   allow_free_text?: boolean;
+  // Command-execution lane (PRD-shell-execution §14.1 / §15.1). Both fields
+  // ride this same `approval_requested` event with `approval_kind:
+  // "ask_a_question"` — the write gate's kind (`surfaces_v2/gate.py:132`) —
+  // rather than a bespoke kind, because a custom `api_event_type` is never
+  // collected by `StreamMessageParser.explicit_api_payloads` and the run parks
+  // on an interrupt the client is never told about.
+  //
+  // ⚠️ That choice also picks the PROJECTION ALLOW-LIST, and there are two.
+  // `_approval_requested_payload` early-returns into
+  // `_ask_a_question_requested_payload` for this kind
+  // (`runtime_api/schemas/events.py:2513-2514`), so the tuple that has to carry
+  // these keys is `events.py:2677-2702` — NOT the sibling tuple at
+  // `:2516-2543`. Adding them to the sibling list compiles, passes review, and
+  // still delivers a blank card. Not hypothetical: `op_class`, `risk_level` and
+  // `grant_options` each had to be re-added to this branch after exactly that
+  // silent strip.
+  //
+  // `command` is the VERBATIM text the process will run — the card's evidence,
+  // rendered as a text node in a monospace block, never a paraphrase and never
+  // `display_title` prose. The server's `_text` projector strips outer
+  // whitespace and drops an empty string, so an absent field means "no command
+  // block", never an empty box.
+  //
+  // `workspace_label` is the grant's opaque LABEL, never a host-absolute path:
+  // §15.1 forbids a host path in any payload on this lane, and the card names
+  // the directory it will run in by label alone.
+  command?: string;
+  /**
+   * NO CLIENT READS THIS YET, and that is deliberate rather than an oversight.
+   * The reader is already told which workspace a command runs in: the server
+   * composes it INTO the title — `Run \`{summary}\` in {label}`
+   * (`stream_events.py:611`) — and the card renders that title. So the safety
+   * fact is on screen; only this separate key is unread.
+   *
+   * It is carried anyway because the producer VALIDATES it (a path-shaped value
+   * is refused, so a full host path cannot leak into a card), and Phase 1 wants
+   * it renderable on its own once a long title has to truncate. Written down
+   * because `check_dark_wiring` cannot warn about this shape: a key the app tree
+   * never mentions takes the scan's SILENT branch, so "0 new" is not evidence
+   * that a key is wired.
+   */
+  workspace_label?: string;
   [key: string]: unknown;
 }
 
@@ -5910,7 +5964,45 @@ export interface ListAuditEventsResponse {
 // PR B1 — tool-use policy (workspace default + per-user override).
 // =====================================================================
 
-export type ToolPolicyKind = "read" | "write" | "destructive";
+/**
+ * The policy axes, mirroring `backend_app.policies.store.ToolUsePolicyKind`.
+ *
+ * `execute` is the command lane (PRD-shell-execution §6) and is a fourth axis
+ * rather than a reuse of an existing one for two reasons that are not stylistic:
+ *
+ * - Reusing `destructive` makes one knob answer two questions. Someone who sets
+ *   `destructive: block` to stop connector deletions would silently lose
+ *   `npm test`; someone who sets `destructive: require` to permit reviewed
+ *   deletions would silently gain shell execution.
+ * - Reusing `write` is disqualified outright: `write` AUTO-RUNS under the
+ *   BYPASS posture, so a command classed `write` would mean flipping the
+ *   composer's bypass pill turns on unattended command execution.
+ *
+ * ⚠️ **The enum is not the behaviour.** `execute` only pauses under BYPASS
+ * because of a ladder branch in the runtime's
+ * `capabilities/policy/service.py::_posture_decision`, positioned between the
+ * run-scoped-grant rung and the BYPASS rung. This mirror can be complete, and
+ * every enum test green, while that branch is missing and BYPASS auto-runs
+ * commands in production.
+ *
+ * Deployment default is `execute: ask` (§6) — not `block`, because the tool is
+ * already off by default and a second off-switch is the one nobody finds.
+ *
+ * Non-breaking for clients that have not learned the axis: the settings adapter
+ * looks its three axes up by name and ignores unknown rows on read, and the
+ * server's PUT is an upsert loop rather than a delete-and-replace, so a
+ * three-axis save does not clear a stored `execute` row.
+ */
+/**
+ * ⚠️ `"execute"` IS AHEAD OF ITS SERVER HALF. `backend_app.policies.store.ToolUsePolicyKind`
+ * still carries only READ / WRITE / DESTRUCTIVE, so no `execute` row can be
+ * authored or stored today and `ToolUsePolicySnapshot.from_response` can never
+ * see one. The axis therefore resolves from the runtime's hardcoded
+ * `_DEFAULT_MODES` alone, which is ASK — it fails safe (it gates), but the
+ * documented `execute: auto` lift on rung 3.5½ is unreachable until the backend
+ * enum and its deployment default land in Phase 1.
+ */
+export type ToolPolicyKind = "read" | "write" | "destructive" | "execute";
 export type ToolPolicyMode = "auto" | "ask" | "require" | "block";
 
 export interface ToolUsePolicyEntry {

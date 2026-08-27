@@ -15,11 +15,21 @@ from agent_runtime.capabilities.tools.cards import (
 
 
 class ToolUsePolicyKind(StrEnum):
-    """Policy axes that map tool side-effects to enforcement granularity."""
+    """Policy axes that map tool side-effects to enforcement granularity.
+
+    ``EXECUTE`` is the shell-command axis. It is deliberately NOT a reuse of
+    ``DESTRUCTIVE``: one knob answering two questions would mean a user who sets
+    ``destructive: block`` to stop connector deletions also loses ``npm test``,
+    and a user who sets ``destructive: require`` has silently permitted commands
+    as well. Nothing classifies a capability onto this axis yet —
+    ``_kind_for_tool_policy`` / ``kind_for_side_effects`` never return it — so
+    adding the member moves no live decision.
+    """
 
     READ = "read"
     WRITE = "write"
     DESTRUCTIVE = "destructive"
+    EXECUTE = "execute"
 
 
 class ToolUsePolicyMode(StrEnum):
@@ -79,9 +89,9 @@ class ToolUsePolicySnapshot:
 
     def mode_for_kind(self, kind: ToolUsePolicyKind) -> ToolUsePolicyMode:
         """Return the mode for an axis. Defaults match the backend's
-        deployment default (read=auto, write=ask, destructive=require)
-        when no row is present so the runtime never refuses on missing
-        policy state alone."""
+        deployment default (read=auto, write=ask, destructive=require,
+        execute=ask) when no row is present so the runtime never refuses
+        on missing policy state alone."""
 
         return self._modes.get(kind, _DEFAULT_MODES[kind])
 
@@ -108,6 +118,13 @@ _DEFAULT_MODES: dict[ToolUsePolicyKind, ToolUsePolicyMode] = {
     ToolUsePolicyKind.READ: ToolUsePolicyMode.AUTO,
     ToolUsePolicyKind.WRITE: ToolUsePolicyMode.ASK,
     ToolUsePolicyKind.DESTRUCTIVE: ToolUsePolicyMode.REQUIRE,
+    # ``ask``, not ``block``: the shell tool is already off unless four
+    # independent prerequisites hold, and a default of ``block`` on top of that
+    # is two off-switches — the second being the one nobody finds. ``ask`` is
+    # also not the thing that makes a command pause; the EXECUTE rung in
+    # ``policy/service.py::_posture_decision`` is, and it pauses in every
+    # posture unless this axis is authored to ``auto``.
+    ToolUsePolicyKind.EXECUTE: ToolUsePolicyMode.ASK,
 }
 
 

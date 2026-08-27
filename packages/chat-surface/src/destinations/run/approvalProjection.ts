@@ -148,6 +148,33 @@ export interface RunApproval {
    * like a working "always" and quietly do nothing.
    */
   readonly allowsRunScopedGrant: boolean;
+  /**
+   * The exact command a `run_command` ask will execute, verbatim off
+   * `payload.command` (PRD-shell-execution §14.1). Non-null is what makes an
+   * ask a COMMAND ask, and it is the string the card is approved OVER —
+   * `TcWriteGateRow.commandText`, which also counts as the payload-seen
+   * evidence that unlocks Approve for an irreversible write.
+   *
+   * KEYED ON ITS OWN PAYLOAD BLOCK, not on a kind — the same rule
+   * `workspaceGrant` follows, and for the same reason. The command lane rides
+   * the write gate's wire shape verbatim (`approval_kind: "ask_a_question"`,
+   * see `mapApprovalKind`), so the kind cannot tell a command apart from an MCP
+   * write; the presence of this field is the only thing that can.
+   *
+   * NOT the params frame. `buildParams` keeps primitive top-level arguments and
+   * renders them in a `<dd>` grid with no cap — the wrong shape for a
+   * multi-line string that must appear as an exact monospace block. A command
+   * that arrived only through `params` would be re-flowed, and a re-flowed
+   * command is not the command.
+   *
+   * DARK, but wired end to end. `_CommandApproval` stamps the key and
+   * `_ask_a_question_requested_payload` now projects it, so a payload reaching
+   * here really can carry a command. What is still missing is the TOOL: nothing
+   * raises the `run_command` interrupt, so no live run produces one and this
+   * reads null on every ask today — rendering exactly what the card rendered
+   * before.
+   */
+  readonly command: string | null;
   /** Inset key/value frame projected from `payload.arguments` (primitives only). */
   readonly params: readonly ActivityParam[];
   /** Connector / target preview ("#launch-aurora"); null when absent. */
@@ -231,6 +258,16 @@ const DEFAULT_REASON =
  * this is the one property that says which lane an approval is on, and both the
  * projection (which scope may be offered) and the renderer (which card to draw)
  * have to agree about it exactly.
+ *
+ * IT MARKS ONE PRODUCER, NOT A FAMILY. Exactly one place mints it —
+ * `PolicyToolMiddleware._approval_id` — and that lane is MCP-only, so the
+ * `mcp_` is accurate and not a misnomer. A parked `run_command` does NOT wear
+ * it: that producer serves LangGraph's native `action_requests` interrupt and
+ * mints `<interrupt_id>:<index>`. Read this string as "an MCP write parked by
+ * `PolicyToolMiddleware`", never as "anything parked at `ToolAccessGate`" —
+ * both gates borrow the `ask_a_question` WIRE SHAPE, and sharing a shape is not
+ * sharing an id. `allowsRunScopedGrant` documents what keys on this prefix and
+ * what a command ask keys on instead.
  */
 export const WRITE_GATE_APPROVAL_PREFIX = "mcp_write:";
 
@@ -251,6 +288,7 @@ interface MutableApproval {
   category: { vendor: string; access: string | null } | null;
   irreversible: boolean;
   grantOptions: readonly string[];
+  command: string | null;
   params: ActivityParam[];
   target: string | null;
   presentation: ApprovalPresentation | null;
@@ -413,6 +451,14 @@ function reduceRequested(
     // costs a re-ask, while inventing one widens a decision.
     grantOptions:
       buildGrantOptions(event) ?? existing?.grantOptions ?? EMPTY_GRANTS,
+    // Same replay rule as `presentation` / `workspaceGrant`: a redelivered
+    // frame that omits the command must not erase it. Sticky here is the SAFE
+    // direction and the safety-critical one: the command is what unlocks
+    // Approve on an irreversible card, so a frame that could retract it would
+    // pull the evidence out from under a decision already being made — and
+    // dropping it silently turns a command ask into a bare "Approve this
+    // action" with nothing on screen saying what runs.
+    command: stringField(payload.command) ?? existing?.command ?? null,
     // Filtered against the preview so the draft is not printed twice — once as
     // the card's preview frame and again as an untruncated `<dd>` in the params
     // grid. See `buildParams`.
@@ -493,6 +539,7 @@ function freeze(m: MutableApproval): RunApproval {
     irreversible: m.irreversible,
     grantOptions: m.grantOptions,
     allowsRunScopedGrant: allowsRunScopedGrant(m),
+    command: m.command,
     params: m.params,
     target: m.target,
     presentation: m.presentation,
@@ -544,6 +591,35 @@ function decisionFromResolve(event: RuntimeEventEnvelope): RunApprovalDecision {
   return "rejected";
 }
 
+/**
+ * The wire's `approval_kind`, as a CLOSED set — and the closure is the trap.
+ *
+ * An unlisted kind lands on `"unknown"`, which nothing errors on: the ask still
+ * draws, as the generic Approve/Decline card, minus whatever the kind was going
+ * to unlock. A lane discovering that from its own blank card is the expensive
+ * way to find out, so a new lane decides HERE first.
+ *
+ * THE COMMAND LANE ADDS NO CASE, deliberately (PRD-shell-execution §18 Phase 0,
+ * §14.1). It rides the write gate's wire shape verbatim —
+ * `approval_kind: "ask_a_question"` (`surfaces_v2/gate.py::_Values
+ * .APPROVAL_KIND_WRITE`) — and that is ONE decision with the server, not two:
+ *
+ * * **The kind IS the resume shape.** `ApprovalResumeBuilder` forwards
+ *   `decision_scope` on exactly one branch, `ask_a_question`
+ *   (`runtime_worker/handlers/approval.py`), so §8.3's run-scoped always-grant
+ *   is expressible only under this kind. A bespoke `run_command` kind would
+ *   draw an "always" whose POST the server drops — the dead-control shape.
+ * * **The kind picks the server's allow-list.** `_approval_requested_payload`
+ *   early-returns into `_ask_a_question_requested_payload` for this kind, and
+ *   only that branch projects `op_class` (`events.py:2700`) alongside
+ *   `risk_level` and `grant_options`. The sibling list carries the latter two
+ *   but not `op_class`, which is the field §14.1 keeps DECOUPLED from
+ *   `irreversible` so a command can be un-one-clickable and still earn a
+ *   run-scoped grant.
+ *
+ * So the discriminator for a command ask is not the kind — it is
+ * `RunApproval.command`, keyed on its own payload block.
+ */
 function mapApprovalKind(value: unknown): RunApprovalKind {
   switch (stringField(value)) {
     case "mcp_tool":
@@ -702,6 +778,61 @@ function buildGrantOptions(
  * that split and names the composer's bypass pill as the intended control for
  * repeated writes. Nothing here overturns that: this predicate is how the
  * client honours it.
+ *
+ * THE COMMAND LANE DOES NOT TAKE THIS PREFIX. That is not a design option that
+ * was weighed and chosen — it is a fact about the tree, and this comment used to
+ * assert the opposite (PRD-shell-execution §18 Phase 0 asks for the decision by
+ * name; this is it, recorded against the code rather than against the intent).
+ *
+ * `mcp_write:<run_id>:<tool_call_id>` is minted in exactly ONE place,
+ * `PolicyToolMiddleware._approval_id`, and that lane is MCP-only. The command
+ * producer is somewhere else entirely: `runtime_worker/stream_events.py`'s
+ * `_CommandApproval` serves LangGraph's own native `action_requests` interrupt,
+ * so it mints `<interrupt_id>:<index>` — uniform with its two sibling branches
+ * and carrying no prefix at all. Nothing in this tree mints an `mcp_write:` id
+ * AND stamps `command`, so the two lanes never shared an id shape; they share
+ * the `ask_a_question` WIRE SHAPE, which is a different thing.
+ *
+ * So this predicate returns FALSE for every command ask — and today that is the
+ * right answer rather than a gap to route around, because `_CommandApproval
+ * .GRANT_OPTIONS` is `("allow_once",)`: the server never offers `always` on a
+ * command in the first place. Both conditions above fail, and they fail
+ * AGREEING with each other. §8.3's run-scoped grant is therefore not one client
+ * edit away — it needs the server to earn `allow_always` from a tokeniser
+ * (`ToolAccessGate._grant_options(simple_command=)`) AND this predicate to stop
+ * keying on the prefix, together. Shipping either half alone draws a control
+ * whose POST changes nothing, or withholds one the server already offered.
+ *
+ * WHAT KEYS ON THE PREFIX, AND WHY HALF-TEACHING IT IS THE DANGEROUS PART.
+ * Three predicates read it and each fails a different silent way — the warning
+ * this comment carried before, kept because it is the one that came true:
+ *
+ * 1. `TcChat.isWriteGateApproval` — WHICH CARD TO DRAW. This is the one that
+ *    already bit. A command ask fell past it into `renderApprovalItem`'s
+ *    question branch and rendered a yes/no about a shell command as a FREE-TEXT
+ *    ANSWER BOX: the exact failure that branch order exists to prevent. It was
+ *    fixed WITHOUT teaching a second prefix — `TcChat.isCommandApproval` keys on
+ *    the PAYLOAD (`RunApproval.command`, non-blank), which is a fact the
+ *    producer really stamps.
+ * 2. This one — WHETHER "ALWAYS" MAY BE OFFERED. Correct today for the reason
+ *    above. Revisit it only together with the server's grant options.
+ * 3. `eventProjector.writeGateCallId` — WHICH TOOL CALL THE ASK IS BLOCKING.
+ *    ⚠️ **NAMED PHASE 1 ITEM, DELIBERATELY LEFT UNTAUGHT.** It returns null for
+ *    a command id, so the EXACT `tool_call_id` join is unavailable and
+ *    `matchAskToCall` falls through to its second join: the single RUNNING call
+ *    whose `tool_name` matches (which is why `tool_name` is on the payload and
+ *    on the server's `ask_a_question` allow-list). That fallback is right for
+ *    one command and returns `undefined` for two in flight — so with two parked
+ *    commands neither card shows "Needs you" and both keep spinning on the
+ *    run-wide signal. Nothing is broken TODAY: no tool raises the interrupt, so
+ *    no command ask exists. And a prefix could not honestly be taught here
+ *    anyway — the id's second half is an ACTION INDEX, not a call id, so a
+ *    lookalike `mcp_write:` id would hand this exact join the wrong key. Phase 1
+ *    owns it as "carry a real `tool_call_id`", never as "add a prefix".
+ *
+ * The rule those three add up to is unchanged: one discriminator cannot be
+ * half-taught. What changed is WHICH discriminator — the payload block, not the
+ * id.
  */
 function allowsRunScopedGrant(approval: {
   readonly approvalId: string;

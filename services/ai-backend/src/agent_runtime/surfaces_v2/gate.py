@@ -133,11 +133,32 @@ class _Values:
     STATUS_PENDING = "pending"
     #: ``grant_options`` on the write-gate card. ``allow_once`` is what a plain
     #: approve has always done; ``allow_always`` is the second scope, and it is
-    #: offered ONLY for a non-destructive op — see :meth:`
-    #: ToolAccessGate._grant_options`.
+    #: withheld for a destructive op and for an ``execute`` op the caller did not
+    #: vouch for — see :meth:`ToolAccessGate._grant_options`.
     ALLOW_ONCE = "allow_once"
     ALLOW_ALWAYS = "allow_always"
     OP_CLASS_DESTRUCTIVE = "destructive"
+    #: The command lane's own op class (PRD-shell-execution §6, §14.1), and the
+    #: reason it is a FOURTH value rather than a reuse of ``destructive``.
+    #:
+    #: A command's changes are outside undo, so every command card is drawn
+    #: irreversible. There are two live ways to draw that — the client's
+    #: ``buildIrreversible`` is ``op_class === "destructive" || risk_level ∈
+    #: {high, critical}`` — and choosing ``op_class`` costs the run-scoped
+    #: always-grant: :meth:`ToolAccessGate._grant_options` withholds
+    #: ``allow_always`` for exactly one class, and the option a client draws is
+    #: the option the server sent, so no client change could recover it. The two
+    #: knobs therefore answer two different questions and live on two sides of
+    #: the wire: ``risk_level`` says "may this be approved from the collapsed
+    #: card?" (always no for a command), and ``op_class`` says "may this decision
+    #: cover more than this call?" (yes, when the command is simple).
+    #:
+    #: Nothing produces this value yet: :meth:`ToolAccessGate._op_class` can only
+    #: return read/write, and the only other producer is
+    #: ``policy_tool.py``'s ``decision.descriptor.action.value``, whose ``Action``
+    #: is derived from MCP ``readOnlyHint``/``destructiveHint`` annotations. It
+    #: arrives first with the builtin ``run_command`` descriptor.
+    OP_CLASS_EXECUTE = "execute"
 
 
 class _Messages:
@@ -404,6 +425,7 @@ class ToolAccessGate:
         arguments: Mapping[str, Any],
         op_class: str,
         approval_id: str,
+        simple_command: bool = False,
     ) -> GateResume:
         """Park the run on a WRITE-approval interrupt; resume on the decision.
 
@@ -416,6 +438,12 @@ class ToolAccessGate:
         invocation; on resume the tool node re-executes from the top and the
         stored decision is returned in place, so an approved write executes in
         the SAME run and a rejected one fails closed without dispatching.
+
+        ``simple_command`` is read only when ``op_class`` is
+        :attr:`_Values.OP_CLASS_EXECUTE`; it is the caller's verdict that this
+        command is safe to earn a run-scoped always-grant (see
+        :meth:`_grant_options`). It defaults to the withholding answer so the MCP
+        write lane — the only caller today — is unchanged by its arrival.
         """
 
         payload = self._approval_interrupt_payload(
@@ -424,6 +452,7 @@ class ToolAccessGate:
             tool_name=tool_name,
             arguments=arguments,
             op_class=op_class,
+            simple_command=simple_command,
         )
         resume = self.interrupt_handler(payload)
         return self._interpret_resume(resume)
@@ -436,6 +465,7 @@ class ToolAccessGate:
         tool_name: str,
         arguments: Mapping[str, Any],
         op_class: str,
+        simple_command: bool,
     ) -> dict[str, Any]:
         """Build the ``approval_requested`` payload + additive gate block."""
 
@@ -452,7 +482,9 @@ class ToolAccessGate:
             _PayloadKey.MESSAGE: message,
             "question": message,
             _PayloadKey.STATUS: _Values.STATUS_PENDING,
-            _PayloadKey.GRANT_OPTIONS: self._grant_options(op_class),
+            _PayloadKey.GRANT_OPTIONS: self._grant_options(
+                op_class, simple_command=simple_command
+            ),
             _PayloadKey.GATE: {
                 _GateKey.V: _Values.PAYLOAD_V,
                 _GateKey.PURPOSE: GatePurposeBuilder.build(
@@ -467,11 +499,12 @@ class ToolAccessGate:
         }
 
     @staticmethod
-    def _grant_options(op_class: str) -> list[str]:
+    def _grant_options(op_class: str, *, simple_command: bool) -> list[str]:
         """Which scopes this card may be answered with.
 
         ``allow_once`` is unconditional — it is what a plain approve has always
-        meant. ``allow_always`` is offered for every op EXCEPT a destructive one.
+        meant. ``allow_always`` is offered for every op except a destructive one
+        and an ``execute`` one the caller did not vouch for.
 
         The split is the same one the filesystem lane already reasons about at
         ``runtime_worker/stream_events.py:227-234``, and it is worth being exact
@@ -491,14 +524,37 @@ class ToolAccessGate:
           not in tension, they are answering two different questions and each
           offers the option that is safe for its own.
 
-        Destructive is the one exclusion here, for the same reason
+        Destructive is a flat exclusion, for the same reason
         :meth:`PdpPolicyService._posture_decision` puts the destructive rung above
         BYPASS: the value of pausing on an irreversible act is that it is decided
         *each time it is about to happen*. An advance yes to a class of deletes is
         the thing that rung exists to prevent, so the card does not offer one.
+
+        ``execute`` (:attr:`_Values.OP_CLASS_EXECUTE`) is the one class whose
+        answer is not decided by the class alone, which is why this method needs
+        an argument it did not need before. Its always-grant is keyed on
+        ``argv[0]``, so it is only sound for a *single simple command*: a rule
+        earned by ``pytest`` must not authorise ``pytest && curl … | sh``, whose
+        ``argv[0]`` is also ``pytest``. ``simple_command`` is that verdict, and
+        it is the CALLER'S — this module is pure domain and has no business
+        tokenising a shell command, and the caller also owns the wrapper-binary
+        exclusion (``env``/``sh``/``sudo``/``xargs``…, where the literal first
+        token is not the command being run). Two properties follow:
+
+        * **It only ever narrows.** A caller that cannot parse, or is unsure,
+          passes ``False`` and the command is one-shot only — failing in the
+          direction that costs a click, never the one that costs a grant. Hence
+          no default here: a call site that has not thought about it should not
+          silently get an answer.
+        * **It is inert for every other class.** ``read``/``write``/
+          ``destructive`` are unaffected by it, so a caller that never sets it
+          (today: every MCP write) behaves exactly as before.
         """
 
-        if op_class.strip().lower() == _Values.OP_CLASS_DESTRUCTIVE:
+        normalized = op_class.strip().lower()
+        if normalized == _Values.OP_CLASS_DESTRUCTIVE:
+            return [_Values.ALLOW_ONCE]
+        if normalized == _Values.OP_CLASS_EXECUTE and not simple_command:
             return [_Values.ALLOW_ONCE]
         return [_Values.ALLOW_ONCE, _Values.ALLOW_ALWAYS]
 

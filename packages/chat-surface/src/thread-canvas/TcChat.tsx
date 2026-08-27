@@ -126,6 +126,17 @@ export type TcChatMode = "studio" | "focus";
  */
 export interface TcChatApproval {
   readonly approvalId: string;
+  /**
+   * The command a `run_command` ask is asking about, when this approval is one.
+   *
+   * CARD SELECTION KEYS ON THIS, NOT ON THE ID. The command lane's producer
+   * mints `<interrupt_id>:<index>` (it serves LangGraph's native
+   * `action_requests` shape), not `mcp_write:` — so an id-prefix test drops it
+   * into the question branch and a shell command renders as a FREE-TEXT ANSWER
+   * BOX. `RunApproval.command` already carries it; this only declares what the
+   * host was already threading through.
+   */
+  readonly command?: string | null;
   /** Verb-first card title ("Post to #launch-aurora"). */
   readonly title: string;
   /** The "why" line under the title. */
@@ -275,6 +286,20 @@ function isMcpAuthApproval(approval: TcChatApproval): boolean {
 
 function isWriteGateApproval(approval: TcChatApproval): boolean {
   return approval.approvalId.startsWith(WRITE_GATE_APPROVAL_PREFIX);
+}
+
+/**
+ * A command ask, identified by its PAYLOAD rather than its id.
+ *
+ * The two halves of this lane were built in parallel and disagreed: the
+ * producer mints `<interrupt_id>:<index>`, the client asserted `mcp_write:`,
+ * and each pinned its own shape green. Nothing in the tree mints an
+ * `mcp_write:` id AND carries a command, so the id test could never have
+ * matched. Keying on the block the producer actually stamps is the half that
+ * can be made true.
+ */
+function isCommandApproval(approval: TcChatApproval): boolean {
+  return typeof approval.command === "string" && approval.command.trim() !== "";
 }
 
 function isWorkspaceGrantApproval(approval: TcChatApproval): boolean {
@@ -1072,7 +1097,10 @@ function renderApprovalItem(
   approval: TcChatApproval,
   handlers: ApprovalHandlers,
 ): ReactNode {
-  if (!approval.resolved && isWriteGateApproval(approval)) {
+  if (
+    !approval.resolved &&
+    (isWriteGateApproval(approval) || isCommandApproval(approval))
+  ) {
     return renderAskCard(approval, handlers);
   }
   if (approval.question !== null) {
@@ -1369,6 +1397,7 @@ function renderAskCard(
     >
       <TcWriteGateRow
         title={approval.title}
+        commandText={approval.command ?? null}
         // `linear · write`. Both halves come off the same projected category,
         // so they arrive or vanish together; a non-MCP ask has neither and the
         // meta span is simply not rendered.

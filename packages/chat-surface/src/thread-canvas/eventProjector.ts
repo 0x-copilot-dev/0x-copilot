@@ -245,6 +245,26 @@ export interface ToolCallEntry {
   readonly args?: Record<string, unknown>;
   /** Result output from the `tool_result` payload, when present. */
   readonly result?: Record<string, unknown>;
+  /**
+   * The tail of a still-running call's OUTPUT, as of the newest delta frame.
+   *
+   * ⚠️ SEPARATE FROM `result` ON PURPOSE, and the separation is the point. A
+   * card reads as settled when it has a `result`; writing partial output there
+   * would make a command that is still running look finished. `reduceToolDelta`
+   * already guards the mirror-image case in the other direction ("argument
+   * updates must never turn a completed/failed card back into a running one"),
+   * and this is the same discipline pointed the other way.
+   *
+   * ⚠️ ALSO A DIFFERENT STREAM FROM `args`. Streamed ARGUMENTS arrive as the
+   * model writes them, wrapped in the `{delta: "<json so far>"}` accumulator
+   * envelope `resolveToolArgs` unwraps (`streamedToolArgs.ts`). This is OUTPUT —
+   * bytes a subprocess wrote — and it is a plain string that is never JSON and
+   * must never be routed through that parser.
+   *
+   * Clipped to `TOOL_OUTPUT_PREVIEW_CAP`, tail-kept. Ships dark: no tool emits
+   * `output_preview` today (PRD-shell-execution §18 Phase 0).
+   */
+  readonly outputPreview?: string;
   /** Backend one-line summary, when present. */
   readonly summary?: string;
   /** Safe error message on a failed/timed-out/cancelled result. */
@@ -1338,6 +1358,7 @@ interface MutableToolCall {
   status: "running" | "complete" | "error" | "unavailable";
   args?: Record<string, unknown>;
   result?: Record<string, unknown>;
+  outputPreview?: string;
   summary?: string;
   errorMessage?: string;
   provenance?: ToolCallProvenance;
@@ -1385,6 +1406,10 @@ function reduceToolStarted(
     // the streaming envelope from re-introducing the escaped-JSON card.
     args: updatedToolArgs(event, prior?.args),
     result: prior?.result,
+    // Carried, never seeded here: a started frame precedes any output, so
+    // anything already stored came from an out-of-order replay and is still the
+    // best tail we have.
+    outputPreview: prior?.outputPreview,
     summary:
       agentToolDisplayValue(event, "display_summary", "_display_summary") ??
       event.summary ??
@@ -1436,6 +1461,10 @@ function reduceToolDelta(
     status: prior?.status ?? "running",
     args: updatedToolArgs(event, prior?.args),
     result: prior?.result,
+    // The one frame that CARRIES live output. It lands beside `result` and
+    // never in it — see `ToolCallEntry.outputPreview` for why that separation
+    // is the whole design of this field.
+    outputPreview: updatedOutputPreview(event, prior?.outputPreview),
     summary:
       agentToolDisplayValue(event, "display_summary", "_display_summary") ??
       event.summary ??
@@ -1492,6 +1521,11 @@ function reduceToolResult(
       structuredError?.output ??
       readRecord(event.payload?.["output"]) ??
       prior?.result,
+    // KEPT, not cleared. The settled result is authoritative and every reader
+    // must prefer it — but a run cancelled mid-command can land a terminal
+    // frame carrying no output at all, and discarding the last live tail there
+    // would trade a stale answer for no answer.
+    outputPreview: prior?.outputPreview,
     summary:
       event.summary ??
       event.presentation?.summary ??
@@ -1533,6 +1567,9 @@ function buildToolCall(m: MutableToolCall): ToolCallEntry {
     status: m.status,
     ...(m.args !== undefined ? { args: m.args } : {}),
     ...(m.result !== undefined ? { result: m.result } : {}),
+    ...(m.outputPreview !== undefined
+      ? { outputPreview: m.outputPreview }
+      : {}),
     ...(m.summary !== undefined ? { summary: m.summary } : {}),
     ...(m.errorMessage !== undefined ? { errorMessage: m.errorMessage } : {}),
     ...(blockedBy !== undefined ? { blockedBy } : {}),
@@ -1655,6 +1692,74 @@ function updatedToolArgs(
     return prior;
   }
   return { ...(prior ?? {}), ...delta };
+}
+
+/**
+ * The live OUTPUT tail carried by a `tool_call_delta`, clipped to what a
+ * transcript may hold.
+ *
+ * ⚠️ NOT THE SAME STREAM AS `updatedToolArgs` ABOVE, and the two sit together
+ * so that is impossible to miss. `payload.args` on an intermediate delta is the
+ * MODEL writing the call's arguments one token at a time, wrapped in the
+ * `{delta: "<json so far>"}` accumulator envelope. `payload.output_preview` is
+ * the PROCESS writing stdout+stderr. Running output through `resolveToolArgs`
+ * would store `undefined` for every frame whose bytes are not valid JSON —
+ * i.e. for essentially all of them.
+ *
+ * REPLACEMENT, NOT APPEND. Each frame carries the newest tail in full — the
+ * producer is specified to send "a rolling tail (last ~8 KiB), not cumulative
+ * output" (PRD-shell-execution §14.2) — so the newest frame supersedes what is
+ * stored. Appending would re-add the overlapping bytes on every frame.
+ *
+ * The empty string keeps `prior`. A producer that opens the stream with
+ * `output_preview: ""` means "no output yet", and storing it as output is the
+ * same defect `isStreamedArgsEnvelope` records for `{delta: ""}` — a first
+ * frame taken for content.
+ */
+function updatedOutputPreview(
+  event: RuntimeEventEnvelope,
+  prior: string | undefined,
+): string | undefined {
+  const raw = event.payload?.["output_preview"];
+  if (typeof raw !== "string" || raw === "") {
+    return prior;
+  }
+  return clipOutputPreviewTail(raw);
+}
+
+/**
+ * What ONE running card may hold of a command's output.
+ *
+ * Sized to the producer's own stated budget (§14.2's ~8 KiB rolling tail), so a
+ * conforming producer is never clipped and this is purely the projector
+ * declining to trust one: `output_preview` is the first field on this wire
+ * whose contents are arbitrary process bytes rather than something the runtime
+ * composed, and a single mis-sized frame must not put megabytes into a card
+ * that is mounted for the life of the transcript.
+ *
+ * The transcript is not a terminal. The card's own view clips again, in LINES,
+ * because bytes bound memory and lines bound layout.
+ */
+export const TOOL_OUTPUT_PREVIEW_CAP = 8 * 1024;
+
+/**
+ * The last `TOOL_OUTPUT_PREVIEW_CAP` characters.
+ *
+ * TAIL, not head, matching the runtime's own rule for the settled output
+ * (§13): the error is at the end. Clipping the two ends differently would also
+ * make the card appear to rewind when the call settled.
+ *
+ * The surrogate check is the UTF-16 form of the continuation-byte walk §13
+ * specifies for the server side: slicing at a fixed offset can land between the
+ * halves of an astral codepoint, and a lone low surrogate renders as U+FFFD.
+ */
+function clipOutputPreviewTail(text: string): string {
+  if (text.length <= TOOL_OUTPUT_PREVIEW_CAP) {
+    return text;
+  }
+  const tail = text.slice(text.length - TOOL_OUTPUT_PREVIEW_CAP);
+  const first = tail.charCodeAt(0);
+  return first >= 0xdc00 && first <= 0xdfff ? tail.slice(1) : tail;
 }
 
 function readRecord(value: unknown): Record<string, unknown> | undefined {

@@ -28,6 +28,19 @@
 // is that answer as a predicate, because the caller that withholds Approve must
 // ask this file whether anything rendered rather than re-deriving it from three
 // fields it does not own.
+//
+// THE COMMAND BLOCK joined that list (PRD-shell-execution §14.1) and is the one
+// piece of evidence that is not a projection of `arguments` — a command ask
+// carries none. It is here rather than in `TcWriteGateRow` so the predicate
+// stays one answer, and so the block travels with §10.2's no-undo line.
+//
+// ⚠️ ONLY ONE OF THE TWO SURFACES PASSES IT SO FAR. `TcWriteGateCard` (the
+// Studio canvas twin) forwards `params` and `ledgerId` and neither
+// `presentation` nor `commandText`, so a command ask opened on the canvas shows
+// its title and no command. That gap predates this lane — the shaped evidence
+// has the same hole — but a command is the one payload where "the card and the
+// process disagree about what was approved" is the whole risk, so it is called
+// out here rather than left to be discovered.
 
 import type { CSSProperties, ReactElement } from "react";
 
@@ -41,6 +54,21 @@ import type { ActivityParam } from "../approvals/types";
 export const REVERSIBLE_COPY =
   "You can undo this from the connector if it's wrong.";
 export const IRREVERSIBLE_COPY = "This cannot be undone from here.";
+/**
+ * The command lane's own no-undo line (PRD-shell-execution §10.2, second of the
+ * three places the concession is stated).
+ *
+ * IT REPLACES `IRREVERSIBLE_COPY` rather than joining it, and the difference
+ * between the two sentences is the whole reason it exists. "This cannot be
+ * undone from here" is a property of the act; this names the CAUSE, and the
+ * cause is the part the reader cannot infer: a command writes files without
+ * going through `write_file`, so no `HostWriteRecord` is journaled, so the
+ * Changes tab has nothing to revert and — until AC4.1–4.3 land — nothing to
+ * list either. A card that said only "cannot be undone" would leave the reader
+ * to assume the app at least SAW it.
+ */
+export const COMMAND_NO_UNDO_COPY =
+  "Changes made by a command can't be undone from here.";
 
 export interface TcWriteGatePayloadProps {
   readonly params: readonly ActivityParam[];
@@ -52,6 +80,23 @@ export interface TcWriteGatePayloadProps {
    * what this component rendered before shapes existed.
    */
   readonly presentation?: ApprovalPresentation | null;
+  /**
+   * The exact command a `run_command` ask will execute (PRD-shell-execution
+   * §14.1). Absent-means-omitted like every other lane-specific field, so every
+   * card that is not a command ask renders byte-for-byte what it rendered
+   * before this existed.
+   *
+   * NOT `params`. `buildParams` keeps primitive top-level arguments and prints
+   * them into a `<dd>` grid with no cap and no whitespace preservation — a
+   * multi-line command re-flowed into one is not the command that will run, and
+   * the reader is being asked to consent to the exact bytes.
+   *
+   * It is also the EVIDENCE for this ask: see `hasWriteGateEvidence`. Nothing
+   * else on a command card is — the write gate's wire shape carries no
+   * `arguments` and no presentation at all — so without this the one card that
+   * must never be approved blind would have no approve control at all.
+   */
+  readonly commandText?: string | null;
   readonly irreversible: boolean;
   /**
    * `r<short>·<seq>` — the audit anchor. Optional because it is NOT derivable
@@ -81,7 +126,21 @@ export interface TcWriteGatePayloadProps {
 export function hasWriteGateEvidence(
   params: readonly ActivityParam[],
   presentation?: ApprovalPresentation | null,
+  commandText?: string | null,
 ): boolean {
+  // THE COMMAND IS THE EVIDENCE (PRD-shell-execution §14.1). A command ask
+  // arrives with zero params and no presentation — the write gate's wire shape
+  // carries neither — so answering this from those two alone returns false for
+  // exactly the card that most needs an answer, and Approve would be withheld
+  // forever on a card that is in fact showing the whole thing being consented
+  // to. Third parameter rather than a caller-side `||` for the reason this
+  // predicate exists at all: the component that DRAWS the evidence is the one
+  // that gets to say whether any rendered, and two files answering that
+  // question is how the "no approval before the payload has been seen" rule
+  // comes to mean two things depending on where you are standing.
+  if (showsCommand(commandText)) {
+    return true;
+  }
   if (params.length > 0) {
     return true;
   }
@@ -97,9 +156,43 @@ export function hasWriteGateEvidence(
   return false;
 }
 
+/**
+ * Whether there is a command to draw — the ONE predicate, used by
+ * `hasWriteGateEvidence` above, by the block that renders it below, and by
+ * `TcWriteGateRow`'s run-scoped-Approve gate.
+ *
+ * Whatever hides the command must be the same condition that shows it. Two
+ * near-identical tests would eventually disagree on some string, and the
+ * disagreement that matters points one way only: a card that counted a
+ * whitespace-only command as evidence would unlock Approve over an empty frame,
+ * which is precisely the blind approval the rule forbids.
+ *
+ * Exported for the third caller, which asks a DIFFERENT question of the same
+ * fact: "is this the command lane?". `TcWriteGateRow` needs that because the
+ * card can no longer read "irreversible" as "destructive" — §14.1 splits those
+ * onto two wire fields — and the presence of a command is the only thing on
+ * this side of the wire that separates the irreversible class the server grants
+ * a run-scoped `always` (`execute`) from the one it never will (`destructive`).
+ *
+ * Emptiness is judged on the TRIMMED string and the value is rendered
+ * UNTRIMMED. What runs is `/bin/sh -c "<command>"` with the bytes the model
+ * sent; a card that quietly tidied them would be showing a different command
+ * from the one being approved.
+ */
+export function showsCommand(
+  commandText?: string | null,
+): commandText is string {
+  return (
+    commandText !== undefined &&
+    commandText !== null &&
+    commandText.trim().length > 0
+  );
+}
+
 export function TcWriteGatePayload({
   params,
   presentation = null,
+  commandText = null,
   irreversible,
   ledgerId,
   testIdPrefix,
@@ -118,8 +211,45 @@ export function TcWriteGatePayload({
       ? presentation.preview
       : null;
   const provenance = presentation?.provenance ?? null;
+  const command = showsCommand(commandText) ? commandText : null;
   return (
     <>
+      {/* THE COMMAND LEADS, above the batch and the draft, because on a command
+          ask it is not evidence ABOUT the action — it is the action, and it is
+          the only thing on the card that is.
+
+          Rendered as a text node inside a `<pre>`: the string is model-authored
+          and may itself have come from tool output, so it never styles the
+          card. `<pre>` and not a `<p>` because the reader is consenting to
+          exact bytes — a shell command's line breaks and its runs of spaces are
+          semantic, and `pre-wrap` is what keeps them while still wrapping a
+          long line rather than pushing the frame wider than the card.
+
+          Capped AND scrollable, together, for the same reason the draft
+          preview is: a cap alone clips in silence, and a command whose tail is
+          invisible is exactly the thing consent cannot be given over. */}
+      {command === null ? null : (
+        <>
+          <pre
+            className="tc-write-gate__command"
+            data-testid={`${testIdPrefix}-command`}
+          >
+            {command}
+          </pre>
+          {/* Second of the three places §10.2 states the concession, and the
+              only one attached to the decision itself. A LINE, not a chip and
+              not a hover: it has to be readable at the moment of consent
+              without an interaction, because the fact it carries is the one
+              the rest of the app cannot make good on afterwards. */}
+          <p
+            className="tc-write-gate__no-undo"
+            data-testid={`${testIdPrefix}-no-undo`}
+          >
+            {COMMAND_NO_UNDO_COPY}
+          </p>
+        </>
+      )}
+
       {/* The batch leads: it IS the action, and every param beside it is
           context for it. Rendered read-only — the per-row Approve/Reject pair
           the design draws needs a wire that does not exist (the host seam is
@@ -198,14 +328,25 @@ export function TcWriteGatePayload({
       )}
 
       {/* Stated as a fact about the write, not as a warning about this choice —
-          a caution here would make the safe option look like the risky one. */}
-      <p
-        className="ui-caption"
-        data-testid={`${testIdPrefix}-reversibility`}
-        style={flatStyle}
-      >
-        {irreversible ? IRREVERSIBLE_COPY : REVERSIBLE_COPY}
-      </p>
+          a caution here would make the safe option look like the risky one.
+
+          SUPPRESSED ON A COMMAND ASK, because the no-undo line above already
+          said it and said it better. Stacking them would print two
+          "cannot be undone" sentences three lines apart, which reads as a bug
+          and trains people to skim the one that matters. Keyed on the command
+          rather than on `irreversible` so it also covers the degraded case: a
+          command card whose payload lost `risk_level` would otherwise print
+          REVERSIBLE_COPY — "you can undo this from the connector" — over an
+          action that has no connector and cannot be undone at all. */}
+      {command !== null ? null : (
+        <p
+          className="ui-caption"
+          data-testid={`${testIdPrefix}-reversibility`}
+          style={flatStyle}
+        >
+          {irreversible ? IRREVERSIBLE_COPY : REVERSIBLE_COPY}
+        </p>
+      )}
 
       {ledgerId !== undefined && ledgerId.length > 0 ? (
         <div style={footerStyle}>
