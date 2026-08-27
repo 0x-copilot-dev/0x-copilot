@@ -364,3 +364,70 @@ class TestModelFacingResult:
 
         assert spy.requests == []
         assert gate.parks == []
+
+
+class TestTimeoutIsExplained:
+    """AC5.4 — a timeout reports ``exit_code=None``, so it has to SAY so.
+
+    These pin a wiring, not a string. ``ShellCommandExecutor.timeout_note``
+    existed, was tested directly, and had no product caller — so a timed-out
+    command reached the model as a null exit code with no prose at all, and the
+    whole suite stayed green over it. Asserting the note THROUGH the tool is
+    what makes un-wiring it fail again.
+    """
+
+    @staticmethod
+    def _timed_out() -> SpyExecutor:
+        return SpyExecutor(
+            outcome=ShellExecutionOutcome(
+                status=ShellExecutionStatus.TIMEOUT,
+                exit_code=None,
+                output="collected 812 items",
+                duration_ms=120_000,
+            )
+        )
+
+    async def test_a_timeout_carries_a_note_naming_the_value(self) -> None:
+        tool, _, _ = _build(executor=self._timed_out())
+        assert tool is not None
+
+        result = await _call(tool, timeout_s=30)
+
+        assert result["status"] == ShellExecutionStatus.TIMEOUT.value
+        # ``exclude_none`` drops a null exit_code entirely, so on a timeout the
+        # model sees NO exit_code key at all — the note is the only signal.
+        assert "exit_code" not in result
+        note = result["exit_note"]
+        assert isinstance(note, str) and note
+        # The value has to appear, or the model cannot tell what to ask for next.
+        assert "30s" in note
+
+    async def test_the_note_names_the_RESOLVED_timeout_not_the_request(self) -> None:
+        """No ``timeout_s`` argument means the configured default is what ran."""
+
+        tool, _, _ = _build(executor=self._timed_out())
+        assert tool is not None
+
+        result = await _call(tool)
+
+        assert "120s" in str(result["exit_note"])
+
+    async def test_partial_output_survives_the_timeout(self) -> None:
+        tool, _, _ = _build(executor=self._timed_out())
+        assert tool is not None
+
+        result = await _call(tool, timeout_s=30)
+
+        assert result["output"] == "collected 812 items"
+
+    async def test_a_completed_command_carries_no_note(self) -> None:
+        """The note is for the one status that cannot speak through exit_code."""
+
+        tool, _, _ = _build()
+        assert tool is not None
+
+        result = await _call(tool)
+
+        assert result["status"] == ShellExecutionStatus.COMPLETED.value
+        assert result["exit_code"] == 0
+        assert "exit_note" not in result

@@ -30,6 +30,23 @@ Two readers, different powers
 One table, two readers — never two tables, because a second table is a second
 thing to keep correct and it is the copy that will be forgotten.
 
+The parsing under the screen is ``shlex``, not ours
+---------------------------------------------------
+"Tokenises" above used to mean ~400 lines of hand-rolled lexer in this file. It
+is now :class:`ParsedCommandLine` — ``shlex`` plus a segment split — and that
+class's docstring carries the reasoning, including which of the old lexer's
+three stated objections to ``shlex`` survived. The rule predicates are unchanged
+in behaviour; they are shorter because what is beneath them is stdlib.
+
+⚠️ **One judgement must stay off the tokens.** ``shlex`` does not model shell
+FUNCTION DEFINITIONS: ``:(){ :|:& };:`` tokenises to ``[':', '()', '{', ':',
+'|', ':', '&', '}', ';', ':']``, which is garbage for the purpose. So
+:meth:`CommandNeverList._fork_bomb` reads the RAW string and must not be
+"tidied up" onto the token stream. Any predicate whose hazard is a syntactic
+FORM rather than an executable NAME carries the same constraint; a sweep of the
+other seven found no second instance, because each of them keys on a command
+name, an operand or a flag.
+
 ⚠️ A floor row is a WHOLE-COMMAND glob, not a path pattern
 ----------------------------------------------------------
 Three mechanical facts, each verified against ``policy/rules.py`` and each the
@@ -75,6 +92,7 @@ supplies the rows, and ``test_never_list.py`` asserts the property end to end.
 from __future__ import annotations
 
 import re
+import shlex
 from dataclasses import dataclass
 from typing import ClassVar, Final
 
@@ -86,6 +104,11 @@ from agent_runtime.capabilities.policy.rules import (
 from agent_runtime.capabilities.shell.contracts import (
     ShellRefusal,
     ShellRefusalReason,
+)
+from agent_runtime.capabilities.shell.vendored_deepagents_safety import (
+    RECOMMENDED_SAFE_SHELL_COMMANDS,
+    contains_dangerous_patterns,
+    is_shell_command_allowed,
 )
 
 
@@ -99,9 +122,10 @@ class _Note:
     ``reason`` code stays ``COMMAND_NOT_PERMITTED`` for every one of these, so
     nothing about deployment configuration is distinguishable; what differs is
     the sentence that tells the model *which shape* it hit, which is the
-    difference between one retry and six. Every line says the refusal is
-    permanent, because a deterministic refusal described as temporary sends a
-    model into a loop it cannot win.
+    difference between one retry and six. Every line about a well-formed command
+    says the refusal is permanent, because a deterministic refusal described as
+    temporary sends a model into a loop it cannot win. :data:`UNPARSEABLE` is
+    the one exception and says why.
     """
 
     _SUFFIX: Final = (
@@ -123,6 +147,17 @@ class _Note:
         "permitted." + _SUFFIX
     )
     FORK_BOMB: Final = "That command is a fork bomb and is never permitted." + _SUFFIX
+    #: The one note that does NOT end in :data:`_SUFFIX`, and deliberately so.
+    #: Every other sentence here describes a permanent judgement about a
+    #: well-formed command; this one describes a command we could not read.
+    #: Telling the model "retrying will not change it" would be false — closing
+    #: the quote changes it — and a refusal note that misdescribes the fix is
+    #: how a model burns a turn re-sending the identical broken string.
+    UNPARSEABLE: Final = (
+        "That command has an unbalanced quote or a dangling escape, so it could "
+        "not be read and nothing was run. Re-sending the same text will not "
+        "change it; send the command again with the quoting closed."
+    )
     PIPE_TO_INTERPRETER: Final = (
         "Piping a download straight into an interpreter is never permitted. "
         "Download to a file, and the file can then be read before anything "
@@ -248,240 +283,24 @@ class SensitivePathPolicy:
 
 
 @dataclass(frozen=True, slots=True)
-class CommandToken:
-    """One lexed token: a word, or a control/redirection operator.
-
-    ``text`` is the token with quoting and escaping removed — the string the
-    shell would actually pass to ``execve`` — and ``raw`` is the token exactly
-    as written. Both are kept because they answer different questions:
-    ``"sudo" rm -rf /`` really does invoke ``sudo`` (so hazard detection reads
-    ``text``), while a run-scoped grant may only be offered for a command whose
-    literal text is what a glob will later be matched against (so
-    :meth:`CommandNeverList.always_grant_patterns` requires ``raw == text``).
-    """
-
-    text: str
-    raw: str
-    is_operator: bool = False
-
-    @property
-    def is_quoted(self) -> bool:
-        """True when quoting or escaping changed the token."""
-
-        return self.raw != self.text
-
-
-class CommandLexer:
-    """A total POSIX-ish tokeniser: quotes, escapes, operators, substitutions.
-
-    Total by construction, not by ``try``: an unterminated quote runs to the end
-    of the string and a trailing backslash is kept as a literal. Nothing here
-    raises, because the Protocol this module implements requires the narrowing
-    answer rather than an exception on the tool path — a lexer that threw would
-    turn a malformed command into a broken run instead of a refusal.
-
-    Deliberately not ``shlex``: ``shlex.split`` raises on an unbalanced quote,
-    discards operators entirely (so ``&&`` and ``|`` become invisible, which is
-    the one distinction §8.3 is built on), and cannot report the raw spelling of
-    a token.
-    """
-
-    #: Multi-character operators, longest-first so ``&&`` wins over ``&``.
-    #: ``$(`` is handled separately because its first character is not an
-    #: operator character; ``${`` is NOT an operator — a parameter expansion is
-    #: part of the word — but it is still tracked as an expansion for §8.3.
-    _OPERATORS: Final = (
-        "&&",
-        "||",
-        ";;",
-        "|&",
-        ">>",
-        "<<",
-        ">&",
-        "<&",
-        ";",
-        "|",
-        "&",
-        "<",
-        ">",
-        "(",
-        ")",
-        "`",
-        "\n",
-        "\r",
-    )
-
-    _COMMAND_SUBSTITUTION: Final = "$("
-    _PARAMETER_EXPANSION: Final = "${"
-    _WHITESPACE: Final = " \t"
-    _SINGLE: Final = "'"
-    _DOUBLE: Final = '"'
-    _ESCAPE: Final = "\\"
-    #: Inside double quotes a backslash only escapes these four.
-    _DOUBLE_ESCAPABLE: Final = '\\"$`'
-
-    @classmethod
-    def tokenize(cls, command: str) -> tuple[CommandToken, ...]:
-        """Split ``command`` into words and operators. Never raises."""
-
-        tokens: list[CommandToken] = []
-        text: list[str] = []
-        raw: list[str] = []
-        index = 0
-        size = len(command)
-
-        def flush() -> None:
-            if raw:
-                tokens.append(CommandToken(text="".join(text), raw="".join(raw)))
-                text.clear()
-                raw.clear()
-
-        while index < size:
-            char = command[index]
-            if char in cls._WHITESPACE:
-                flush()
-                index += 1
-                continue
-            if char == cls._ESCAPE:
-                escaped = command[index + 1 : index + 2]
-                raw.append(char + escaped)
-                text.append(escaped)
-                index += 2 if escaped else 1
-                continue
-            if char == cls._SINGLE:
-                index = cls._read_single(command, index, text, raw)
-                continue
-            if char == cls._DOUBLE:
-                index = cls._read_double(command, index, text, raw)
-                continue
-            if command.startswith(cls._COMMAND_SUBSTITUTION, index):
-                flush()
-                tokens.append(
-                    CommandToken(
-                        text=cls._COMMAND_SUBSTITUTION,
-                        raw=cls._COMMAND_SUBSTITUTION,
-                        is_operator=True,
-                    )
-                )
-                index += len(cls._COMMAND_SUBSTITUTION)
-                continue
-            operator = cls._operator_at(command, index)
-            if operator is not None:
-                flush()
-                tokens.append(
-                    CommandToken(text=operator, raw=operator, is_operator=True)
-                )
-                index += len(operator)
-                continue
-            raw.append(char)
-            text.append(char)
-            index += 1
-
-        flush()
-        return tuple(tokens)
-
-    @classmethod
-    def _read_single(
-        cls, command: str, index: int, text: list[str], raw: list[str]
-    ) -> int:
-        """Consume a ``'...'`` run; an unterminated quote runs to end of string."""
-
-        close = command.find(cls._SINGLE, index + 1)
-        end = len(command) if close == -1 else close
-        text.append(command[index + 1 : end])
-        raw.append(command[index : end + 1])
-        return end + 1
-
-    @classmethod
-    def _read_double(
-        cls, command: str, index: int, text: list[str], raw: list[str]
-    ) -> int:
-        """Consume a ``"..."`` run, honouring the four escapes the shell honours."""
-
-        cursor = index + 1
-        size = len(command)
-        while cursor < size:
-            char = command[cursor]
-            if (
-                char == cls._ESCAPE
-                and command[cursor + 1 : cursor + 2] in cls._DOUBLE_ESCAPABLE
-                and cursor + 1 < size
-            ):
-                text.append(command[cursor + 1])
-                cursor += 2
-                continue
-            if char == cls._DOUBLE:
-                break
-            text.append(char)
-            cursor += 1
-        raw.append(command[index : cursor + 1])
-        return cursor + 1
-
-    @classmethod
-    def _operator_at(cls, command: str, index: int) -> str | None:
-        """The longest operator starting at ``index``, or ``None``."""
-
-        for operator in cls._OPERATORS:
-            if command.startswith(operator, index):
-                return operator
-        return None
-
-    @classmethod
-    def has_parameter_expansion(cls, command: str) -> bool:
-        """True when ``${`` appears anywhere.
-
-        ``${VAR}`` is part of a word, not an operator, so it never shows up in
-        :meth:`tokenize`'s operator stream — but §8.3 lists it among the
-        metacharacters that forfeit a run-scoped grant, because the text a human
-        approved and the text the shell runs are then different strings.
-        """
-
-        return cls._PARAMETER_EXPANSION in command
-
-
-@dataclass(frozen=True, slots=True)
 class CommandSegment:
     """One command in the line, plus the operator that introduced it.
 
     ``lead`` is ``""`` for the first segment and otherwise the operator token
-    that preceded it, which is how :meth:`CommandNeverList._pipe_to_interpreter`
-    tells a pipeline (``|``) from a list (``&&``, ``;``) without re-lexing.
+    that preceded it, which is how
+    :meth:`CommandNeverList._pipe_to_interpreter` tells a pipeline (``|``) from
+    a list (``&&``, ``;``) without re-parsing. ``argv`` is already dequoted —
+    ``shlex`` in POSIX mode removed the quoting, which is exactly what hazard
+    detection wants (``"sudo" rm`` really does invoke ``sudo``) and exactly what
+    :meth:`CommandNeverList.always_grant_patterns` must NOT have, so that method
+    reads :attr:`ParsedCommandLine.first_word` instead.
     """
 
-    lead: str
-    words: tuple[CommandToken, ...]
-    redirect_targets: tuple[str, ...]
-
-    @property
-    def argv(self) -> tuple[str, ...]:
-        """The dequoted word texts, redirection targets already removed."""
-
-        return tuple(word.text for word in self.words)
-
-
-class ParsedCommandLine:
-    """Command-position structure over a lexed line.
-
-    The one property the ``_never`` floor cannot express and this class exists
-    to supply: **command position**. It is what separates ``sudo rm -rf /`` from
-    ``git commit -m "no sudo here"``, and a glob with no word boundaries cannot
-    tell a binary from a substring (Hermes solves the same problem with its
-    ``_CMDPOS`` regex, ``approval.py:381-392``).
-    """
-
-    #: Operators after which the next word starts a new command.
-    _SEPARATORS: Final = frozenset(
-        {"&&", "||", ";;", ";", "|", "|&", "&", "(", ")", "`", "$(", "\n", "\r"}
-    )
-    #: Operators whose next word is a redirection TARGET, never a command. Kept
-    #: apart so ``echo x > sudo`` does not read as running ``sudo``, and so the
-    #: target is available to the raw-device check.
-    _REDIRECTIONS: Final = frozenset({">", ">>", "<", "<<", ">&", "<&"})
     #: Reserved words and wrapper binaries that are followed by the command
     #: actually being run. Skipping them WIDENS hazard detection (``time sudo
     #: x`` is a ``sudo`` invocation) and is safe in that direction only — §8.3's
     #: always-grant deliberately does NOT see through them.
-    _INTRODUCERS: Final = frozenset(
+    INTRODUCERS: ClassVar[frozenset[str]] = frozenset(
         {
             "if",
             "then",
@@ -505,17 +324,9 @@ class ParsedCommandLine:
     )
     _ASSIGNMENT: ClassVar[re.Pattern[str]] = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 
-    __slots__ = ("_segments", "_tokens")
-
-    def __init__(self, tokens: tuple[CommandToken, ...]) -> None:
-        self._tokens = tokens
-        self._segments = self._split(tokens)
-
-    @classmethod
-    def of(cls, command: str) -> "ParsedCommandLine":
-        """Lex and structure ``command``."""
-
-        return cls(CommandLexer.tokenize(command))
+    lead: str
+    argv: tuple[str, ...]
+    redirect_targets: tuple[str, ...] = ()
 
     @classmethod
     def is_assignment(cls, word: str) -> bool:
@@ -523,128 +334,384 @@ class ParsedCommandLine:
 
         return cls._ASSIGNMENT.match(word) is not None
 
-    @classmethod
-    def is_introducer(cls, word: str) -> bool:
-        """True for a reserved word or wrapper that precedes the real command."""
-
-        return word in cls._INTRODUCERS
-
     @property
-    def tokens(self) -> tuple[CommandToken, ...]:
-        return self._tokens
+    def candidates(self) -> tuple[str, ...]:
+        """The words in this segment that could be the command being run.
 
-    @property
-    def segments(self) -> tuple[CommandSegment, ...]:
-        return self._segments
-
-    @property
-    def words(self) -> tuple[CommandToken, ...]:
-        """Every word token in the line, including redirection targets."""
-
-        return tuple(token for token in self._tokens if not token.is_operator)
-
-    @property
-    def operators(self) -> tuple[str, ...]:
-        return tuple(token.text for token in self._tokens if token.is_operator)
-
-    def command_candidates(self, segment: CommandSegment) -> tuple[str, ...]:
-        """The words in ``segment`` that could be the command being run.
+        Command position is the one property the ``_never`` floor cannot
+        express, and it is what separates ``sudo rm -rf /`` from
+        ``git commit -m "no sudo here"``: a glob with no word boundaries cannot
+        tell a binary from a substring.
 
         Assignment prefixes are skipped (``FOO=1 sudo x`` runs ``sudo``), and so
-        is each :data:`_INTRODUCERS` word together with its own flags, so the
+        is each :data:`INTRODUCERS` word together with its own flags, so the
         walk keeps going until it reaches something that is not a wrapper. Every
-        word it passed through is returned, not just the last, because
-        ``xargs`` is itself worth refusing in some classes and ``sudo`` is worth
-        refusing in all of them.
+        word it passed through is returned, not just the last, because ``xargs``
+        is itself worth refusing in some classes and ``sudo`` is worth refusing
+        in all of them.
         """
 
-        candidates: list[str] = []
+        found: list[str] = []
         walking = False
-        for word in segment.argv:
+        for word in self.argv:
             if self.is_assignment(word) or word.startswith("-"):
                 continue
             if walking and word[:1].isdigit():
                 # A wrapper's own operand: the ``5`` in ``nice -n 5 pytest``,
                 # the ``30`` in ``timeout 30 pytest``. Only skipped once a
-                # wrapper has been passed, so a command whose name starts with
-                # a digit (``7z``) is still read as the command.
+                # wrapper has been passed, so a command whose name starts with a
+                # digit (``7z``) is still read as the command.
                 continue
-            candidates.append(word)
-            if not self.is_introducer(word):
+            found.append(word)
+            if word not in self.INTRODUCERS:
                 break
             walking = True
-        return tuple(candidates)
+        return tuple(found)
 
-    def operands(self, segment: CommandSegment, *, after: str) -> tuple[str, ...]:
-        """Non-flag words following the ``after`` word in ``segment``.
+    def operands(self, after: str) -> tuple[str, ...]:
+        """Non-flag words following the ``after`` word.
 
         Everything after a bare ``--`` is an operand, matching the convention
         every one of these binaries follows.
         """
 
-        argv = segment.argv
-        if after not in argv:
+        if after not in self.argv:
             return ()
-        operands: list[str] = []
+        found: list[str] = []
         end_of_flags = False
-        for word in argv[argv.index(after) + 1 :]:
+        for word in self.argv[self.argv.index(after) + 1 :]:
             if word == "--":
                 end_of_flags = True
                 continue
             if not end_of_flags and word.startswith("-"):
                 continue
-            operands.append(word)
-        return tuple(operands)
+            found.append(word)
+        return tuple(found)
 
-    def short_flags(self, segment: CommandSegment) -> frozenset[str]:
+    @property
+    def short_flags(self) -> frozenset[str]:
         """Every letter in every ``-abc`` cluster, plus every ``--long`` word."""
 
         letters: set[str] = set()
-        for word in segment.argv:
+        for word in self.argv:
             if word.startswith("--"):
                 letters.add(word)
             elif word.startswith("-") and len(word) > 1:
                 letters.update(word[1:])
         return frozenset(letters)
 
+
+class ParsedCommandLine:
+    """Command-position structure over a ``shlex``-tokenised line.
+
+    **Nothing here is a hand-rolled lexer, and that is the point.** It used to
+    be: ~400 lines of ``CommandToken`` / ``CommandLexer`` / ``_read_single`` /
+    ``_read_double`` / ``_operator_at`` / ``_split``, carrying a docstring that
+    gave three reasons ``shlex`` would not do. Two of the three dissolved under
+    inspection and the third costs four lines:
+
+    1. *"shlex.split raises on an unbalanced quote."* It does — and the answer
+       is to CATCH it and fail **closed** (:attr:`malformed`). A line the shell
+       itself would reject as a syntax error is not a line we owe a parse, and
+       refusing it is strictly safer than the old lexer's run-to-end-of-string.
+       Upstream ``deepagents_code`` catches the same ``ValueError`` and returns
+       "not allowed" for the same reason.
+    2. *"shlex discards operators, and* ``&&`` *vs* ``|`` *is the distinction
+       §8.3 is built on."* True only of the ``shlex.split`` convenience wrapper.
+       ``shlex.shlex(punctuation_chars=…)`` emits operators as their own tokens,
+       so the distinction survives.
+
+       ⚠️ It does **not** survive upstream's four-line
+       ``re.split(r"&&|\\|\\||[|;]", …)``-then-``shlex.split`` composition, and
+       this is the one place we deliberately do NOT copy ``deepagents_code``.
+       Splitting the raw string first splits **inside quotes**, so each half
+       carries an unbalanced quote and the parse fails — every one of the seven
+       ordinary commands in
+       ``test_never_list.py::TestWhyNotUpstreamsFourLineComposition``
+       (``git commit -m "fix; drop the table"``, ``grep -R "foo|bar" .``,
+       ``echo "a && b"`` among them) comes back ``ValueError`` under it. For
+       upstream that is harmless, because failing closed on an ALLOW-list only
+       means "ask the human". Here it would mean :meth:`CommandNeverList.screen`
+       refusing a well-quoted command unappealably, with a note telling the
+       author to fix quoting that was never broken. Quoting must be applied
+       FIRST; that is the whole reason this is ``shlex.shlex`` and not the
+       shorter composition.
+    3. *"shlex cannot report the raw spelling of a token."* This one **survives**
+       — and it costs a second ``_lex`` at ``posix=False`` rather than a lexer.
+       Both streams are load-bearing in opposite directions: only the verbatim
+       one still reads ``cat C:\\Users\\me\\.ssh\\id_rsa`` as a path (POSIX mode
+       eats the backslashes), and only the dequoted one sees ``.env`` in
+       ``cat '.env'``. See :attr:`spellings` and :attr:`first_word`.
+
+       The second stream turned out to be load-bearing for a fourth reason
+       nobody predicted, and it is the one that would have shipped a hole:
+       **the POSIX stream cannot tell a quoted operator from a real one**, so
+       segmenting it alone passed ``rm -rf '|' /``. :attr:`segments` carries
+       both parses because of it.
+
+    ``punctuation_chars`` is extended past ``shlex``'s default ``();<>|&`` with
+    the backtick and the two line terminators, because all three open a command
+    position and none is punctuation to ``shlex``. ``whitespace`` is narrowed to
+    space and tab for the same reason — a newline must reach the token stream as
+    a separator rather than be eaten as whitespace, or ``pytest\\nsudo ls`` reads
+    as one command with two arguments.
+    """
+
+    #: Characters ``shlex`` returns as their own tokens. Consecutive runs come
+    #: back as ONE token (``&&``, ``>>``, ``()``, ``|||``), which is why the
+    #: classifiers below test characters rather than whole strings.
+    _PUNCTUATION: Final = "();<>|&`\n\r"
+    #: Narrowed from ``shlex``'s default ``" \t\r\n"`` so ``\n`` and ``\r`` stay
+    #: punctuation instead of being eaten as whitespace.
+    _TOKEN_WHITESPACE: Final = " \t"
+    #: A punctuation run containing either of these is a REDIRECTION, whose next
+    #: word is a target and never a command — so ``echo x > sudo`` does not read
+    #: as running ``sudo``, and so the target is available to the raw-device
+    #: check. Tested BEFORE the separator case, so ``>&`` is a redirection.
+    _REDIRECTION_CHARS: Final = "<>"
+
+    __slots__ = ("_malformed", "_operators", "_raw_words", "_segments", "_words")
+
+    def __init__(self, command: str) -> None:
+        posix = self._lex(command, posix=True)
+        verbatim = self._lex(command, posix=False)
+        # ``malformed`` is the POSIX answer alone, deliberately. It means "the
+        # shell itself would reject this line", and only the POSIX lex is
+        # faithful enough to say so: the verbatim lex raises on ordinary
+        # commands such as ``rm -rf x'|'y /`` (see :meth:`_lex`), and a
+        # verbatim-driven refusal would be an unappealable no to a line that is
+        # perfectly valid.
+        self._malformed = posix is None
+        posix_tokens = posix or ()
+        # The operator list answers "is this ONE simple command", which is a
+        # question about the line the SHELL sees — so it reads the POSIX stream,
+        # where quoting has been applied.
+        self._operators = tuple(
+            token for token in posix_tokens if self._is_operator(token)
+        )
+        self._words = tuple(
+            token for token in posix_tokens if not self._is_operator(token)
+        )
+        verbatim_tokens = verbatim or ()
+        self._raw_words = tuple(
+            token for token in verbatim_tokens if not self._is_operator(token)
+        )
+        # Both parses, but only once when they agree — which is the ordinary
+        # case, since the two differ only over quoting that contains an
+        # operator character. A verbatim lex that RAISED contributes nothing:
+        # its empty segment would carry no candidates, and ``malformed`` has
+        # already decided that a genuinely unparseable line is refused.
+        # See :attr:`segments`.
+        faithful = self._split(posix_tokens, verbatim=False)
+        second = () if verbatim is None else self._split(verbatim_tokens, verbatim=True)
+        self._segments = faithful if second in ((), faithful) else faithful + second
+
     @classmethod
-    def _split(cls, tokens: tuple[CommandToken, ...]) -> tuple[CommandSegment, ...]:
-        """Group tokens into segments, pulling redirection targets aside."""
+    def of(cls, command: str) -> "ParsedCommandLine":
+        """Tokenise and structure ``command``. Never raises."""
+
+        return cls(command)
+
+    @property
+    def malformed(self) -> bool:
+        """True when the line does not tokenise — unbalanced quote, dangling escape.
+
+        The narrowing answer rather than an exception: the ``CommandNeverList``
+        Protocol ``policy_gate`` declares is total, so a line we cannot parse
+        becomes a REFUSAL upstream, never a broken run.
+        """
+
+        return self._malformed
+
+    @property
+    def segments(self) -> tuple[CommandSegment, ...]:
+        """Both parses' segments, concatenated. A hazard in **either** is a hazard.
+
+        ⚠️ This is not belt-and-braces. The two streams get quoting wrong in
+        OPPOSITE directions, and each direction has a measured case where the
+        error cuts an operand away from its command and the hazard stops being
+        visible at all:
+
+        * the POSIX stream has already discarded the quotes, so ``rm -rf '|' /``
+          arrives as ``('rm', '-rf', '|', '/')``, the third token reads as a
+          real pipe, and ``/`` lands in a different segment from ``rm``. The old
+          hand-rolled lexer refused that line; segmenting the POSIX stream alone
+          passed it;
+        * the verbatim stream keeps the quotes, but ``shlex`` in non-POSIX mode
+          only enters quote state at the START of a token — so a MID-word quote
+          is copied literally and ``awk -F';' …`` splits at a ``;`` the shell
+          would never see, which cuts operands away exactly the same way.
+
+        Neither stream dominates, so the fail-closed reading is the union.
+        Detectors iterate this tuple and stop at the first hit, so a hazard seen
+        in either parse is refused. The cost is over-refusal on lines where the
+        two disagree — measured, that is escaped operators (``echo a\\;sudo``) —
+        which is the direction tier NEVER is allowed to err in.
+
+        The concatenation is safe for :meth:`CommandNeverList._pipe_to_interpreter`,
+        whose ``fetched`` flag carries across segments, because :meth:`_split`
+        always emits its first segment with an empty ``lead`` — so the second
+        parse resets the carry rather than joining the first parse's tail.
+        """
+
+        return self._segments
+
+    @property
+    def operators(self) -> tuple[str, ...]:
+        """Every control / redirection operator token, in order."""
+
+        return self._operators
+
+    @property
+    def spellings(self) -> tuple[str, ...]:
+        """Every word, in BOTH the dequoted and the verbatim spelling.
+
+        The two credential detectors ask "does any word name a credential",
+        which is a set question — so this is a flat concatenation rather than an
+        aligned pairing, and it has to be, because the two streams are not
+        alignable in general (``a\\ b`` is one token in POSIX mode and two
+        without it). It is deliberately NOT deduplicated: the union is also what
+        ``test_never_list.py`` subtracts from the command to assert that no
+        character of the input is invisible to this scan, and a dedup would make
+        that property untestable to save nothing on a list this short.
+
+        Both spellings are load-bearing, in OPPOSITE directions, and each has a
+        test pinning the case only it catches:
+
+        * POSIX mode strips the escapes from ``C:\\Users\\me\\.ssh\\id_rsa``
+          exactly as the shell does, leaving ``C:Usersme.sshid_rsa`` — so only
+          the **verbatim** spelling still reads as a path;
+        * the verbatim spelling of ``cat '.env'`` keeps the quotes, so ``.env``
+          is not the leaf name — only the **dequoted** spelling matches.
+        """
+
+        return (*self._words, *self._raw_words)
+
+    @property
+    def first_word(self) -> tuple[str, str] | None:
+        """``argv[0]`` as ``(dequoted, verbatim)``, or ``None`` when there is none.
+
+        The one place the two spellings are COMPARED rather than unioned. §8.3
+        may only offer a run-scoped grant for a command whose literal text is
+        what a glob will later be matched against, so a head that quoting
+        changed — ``"sudo" rm``, ``s'u'do rm`` — forfeits it. Both of those
+        dequote to ``sudo``, which is why comparing the two spellings is the
+        check and a prefix test on the raw string is not.
+        """
+
+        if not self._words or not self._raw_words:
+            return None
+        return self._words[0], self._raw_words[0]
+
+    @classmethod
+    def _lex(cls, command: str, *, posix: bool) -> tuple[str, ...] | None:
+        """``shlex`` tokens, or ``None`` when the line cannot be parsed.
+
+        ⚠️ ``commenters`` is cleared, and that line is load-bearing. ``shlex``
+        defaults it to ``#`` and implements a comment by calling
+        ``instream.readline()`` — which swallows the rest of the line
+        **including its newline**. Since a newline is a separator here and not
+        whitespace (see :data:`_TOKEN_WHITESPACE`), the default made
+        ``echo hi #c\\nsudo rm -rf /`` tokenise as ONE segment with ``sudo`` in
+        argument position rather than command position, and the screen passed
+        it. Machine-checked, and pinned by ``test_never_list.py``. With ``#``
+        an ordinary word character the same line splits at the newline and
+        ``sudo`` is refused; a genuine trailing comment merely becomes an
+        operand, which no detector reads as a command.
+        """
+
+        lexer = shlex.shlex(command, posix=posix, punctuation_chars=cls._PUNCTUATION)
+        lexer.whitespace = cls._TOKEN_WHITESPACE
+        lexer.whitespace_split = True
+        lexer.commenters = ""
+        try:
+            return tuple(lexer)
+        except ValueError:
+            return None
+
+    @staticmethod
+    def _dequote(token: str) -> str:
+        """One verbatim token with its quoting removed, or unchanged on failure.
+
+        A verbatim token contains no unquoted whitespace by construction, so
+        ``shlex.split`` returns exactly one element or raises. The failure case
+        is a dangling escape (``a\\``), which the whole-line POSIX lex has
+        already reported as :attr:`malformed`; returning the token unchanged
+        keeps this total rather than adding a second way to signal the same
+        thing.
+        """
+
+        try:
+            return "".join(shlex.split(token))
+        except ValueError:
+            return token
+
+    @classmethod
+    def _is_operator(cls, token: str) -> bool:
+        """True for a token made entirely of punctuation characters.
+
+        Correct on the verbatim stream and only approximate on the POSIX one,
+        which is the asymmetry :attr:`segments` exists to absorb: a token that
+        is a QUOTED operator and nothing else (``echo '|'``) has already had its
+        quotes removed by POSIX tokenising and is indistinguishable here from a
+        real one. Splitting there is not merely a widening — it also cuts the
+        operands that follow away from the command that owns them, which is how
+        ``rm -rf '|' /`` came to pass a screen the old lexer refused. The
+        verbatim stream still holds ``"'|'"``, which is not a punctuation run,
+        so asking both parses recovers it.
+        """
+
+        return bool(token) and all(char in cls._PUNCTUATION for char in token)
+
+    @classmethod
+    def _is_redirection(cls, token: str) -> bool:
+        """True for a punctuation run that redirects rather than separates."""
+
+        return any(char in cls._REDIRECTION_CHARS for char in token)
+
+    @classmethod
+    def _split(
+        cls, tokens: tuple[str, ...], *, verbatim: bool
+    ) -> tuple[CommandSegment, ...]:
+        """Group one token stream into segments; dequote words if ``verbatim``.
+
+        A redirection does NOT start a new segment: it consumes exactly the one
+        word that follows it and the rest of the line stays with the command it
+        belongs to, so ``rm -rf > /tmp/log /`` still has ``/`` among ``rm``'s
+        operands.
+
+        On the verbatim stream the classification happens BEFORE the dequoting,
+        which is the whole reason that stream is segmented at all — see
+        :attr:`segments` for why one stream is not enough.
+        """
 
         segments: list[CommandSegment] = []
         lead = ""
-        words: list[CommandToken] = []
+        argv: list[str] = []
         targets: list[str] = []
-        pending_redirection = False
+        pending_target = False
 
         for token in tokens:
-            if token.is_operator:
-                if token.text in cls._REDIRECTIONS:
-                    pending_redirection = True
+            if cls._is_operator(token):
+                if cls._is_redirection(token):
+                    pending_target = True
                     continue
-                if token.text in cls._SEPARATORS:
-                    segments.append(
-                        CommandSegment(
-                            lead=lead,
-                            words=tuple(words),
-                            redirect_targets=tuple(targets),
-                        )
+                segments.append(
+                    CommandSegment(
+                        lead=lead, argv=tuple(argv), redirect_targets=tuple(targets)
                     )
-                    lead = token.text
-                    words = []
-                    targets = []
-                    pending_redirection = False
+                )
+                lead, argv, targets, pending_target = token, [], [], False
                 continue
-            if pending_redirection:
-                targets.append(token.text)
-                pending_redirection = False
+            word = cls._dequote(token) if verbatim else token
+            if pending_target:
+                targets.append(word)
+                pending_target = False
                 continue
-            words.append(token)
+            argv.append(word)
 
         segments.append(
-            CommandSegment(
-                lead=lead, words=tuple(words), redirect_targets=tuple(targets)
-            )
+            CommandSegment(lead=lead, argv=tuple(argv), redirect_targets=tuple(targets))
         )
         return tuple(segments)
 
@@ -654,8 +721,27 @@ class CommandNeverList:
 
     Implements the ``CommandNeverList`` Protocol that
     ``capabilities/shell/policy_gate.py`` declares. Every method is total; a
-    tokeniser that cannot parse returns the narrowing answer rather than raising
-    into the tool path.
+    line that cannot be parsed returns the narrowing answer
+    (:attr:`ParsedCommandLine.malformed` ⇒ a refusal) rather than raising into
+    the tool path.
+
+    ⚠️ **Three tiers, and only two of them live here.** The names in this file
+    and the names in ``vendored_deepagents_safety`` answer different questions,
+    and reading one as the other would ship a severe regression:
+
+    ``NEVER``
+        Refuse outright; no human may approve. :meth:`screen` and :meth:`floor`.
+        Credential paths, ``sudo``, ``rm -rf /``, fork bombs, ``mkfs``,
+        pipe-to-interpreter.
+    ``ASK``
+        Run it, but a human approves it. **This is where** ``pytest``,
+        ``npm test``, ``git status`` **and** ``make`` **live**, and it is the
+        whole product promise of Phase 1. Everything not caught by tier NEVER is
+        in this tier today.
+    ``AUTO``
+        Safe enough to run without asking — :meth:`auto_approvable`, and
+        **nothing in this repository consults it yet**. See that method for why
+        wiring it as the gate would be a blocker-grade regression.
     """
 
     # -- hazard vocabulary -------------------------------------------------
@@ -771,6 +857,11 @@ class CommandNeverList:
     #: from. ``*`` and ``?`` are the only two ``_compile`` treats as
     #: metacharacters, so either would silently widen the grant to everything.
     _PATTERN_METACHARACTERS: Final = "*?"
+    #: Tier AUTO's allow-list, upstream's table verbatim. Held as a list because
+    #: that is ``is_shell_command_allowed``'s parameter type, and built once so
+    #: the vendored predicate is not handed a fresh list per call. Consulted
+    #: ONLY by :meth:`auto_approvable` — see that method for why.
+    _AUTO_SAFE: ClassVar[list[str]] = list(RECOMMENDED_SAFE_SHELL_COMMANDS)
 
     _floor_rules: ClassVar[PermissionRuleset | None] = None
 
@@ -806,6 +897,14 @@ class CommandNeverList:
                 return self._refusal(note)
         if self._fork_bomb(command):
             return self._refusal(_Note.FORK_BOMB)
+        if line.malformed:
+            # Fail CLOSED, after the raw-string check that does not need tokens.
+            # The old hand-rolled lexer was total by running an unterminated
+            # quote to the end of the string and guessing; refusing is at least
+            # as safe and is what upstream's `is_shell_command_allowed` does on
+            # the same `ValueError`. Nothing is lost: the shell would reject the
+            # same line as a syntax error.
+            return self._refusal(_Note.UNPARSEABLE)
         if depth >= self._MAX_NESTED_DEPTH:
             return None
         for payload in self._command_strings(line):
@@ -844,27 +943,78 @@ class CommandNeverList:
         by ``fullmatch`` over the whole command line, and the trailing space is
         the only word boundary the vocabulary has. Without it a ``pytest`` grant
         would also cover ``pytest-watch --exec "curl … | sh"`` (§8.3).
+
+        ⚠️ **This is tier ASK, not tier AUTO** — the name is the trap. What it
+        offers is written only after a human answers ``always`` on a card they
+        read, and it expires with the run. Gating it on
+        :meth:`auto_approvable`'s twenty-five-reader allow-list would mean a
+        human could never say "always" to ``pytest``, which is §8.3's own worked
+        example.
+
+        The metacharacter guard IS upstream's, though, and that is a real
+        improvement rather than a rename. ``contains_dangerous_patterns`` covers
+        everything the hand-rolled operator scan covered, plus four shapes that
+        were live holes — a bare ``$VAR``, ANSI-C ``$'…'``, a here-string, and a
+        bare tab. ``pytest $EXTRA`` and ``pytest $IFS`` both used to earn a
+        standing grant, because the old check only looked for the braced
+        ``${``: the text the human approved and the text the shell runs were
+        different strings.
         """
 
+        if contains_dangerous_patterns(command):
+            return ()
         line = ParsedCommandLine.of(command)
-        if line.operators or CommandLexer.has_parameter_expansion(command):
+        if line.malformed or line.operators:
             return ()
-        words = line.words
-        if not words:
+        head = line.first_word
+        if head is None:
             return ()
-        head = words[0]
-        name = head.text
-        if head.is_quoted or not name:
+        name, verbatim = head
+        # Quoting changed the head, so the literal text a glob will be matched
+        # against is not the binary name. ``"sudo" rm`` and ``s'u'do rm`` both
+        # dequote to ``sudo``; comparing the two spellings catches both, where a
+        # prefix test on the raw string catches only the first.
+        if not name or name != verbatim:
             return ()
-        if ParsedCommandLine.is_assignment(name):
+        if CommandSegment.is_assignment(name):
             return ()
         if any(char in name for char in self._PATTERN_METACHARACTERS):
             return ()
-        if name in self._WRAPPER_BINARIES or ParsedCommandLine.is_introducer(name):
+        if name in self._WRAPPER_BINARIES or name in CommandSegment.INTRODUCERS:
             return ()
         if self.screen(command) is not None:
             return ()
         return (name, f"{name} *")
+
+    # -- tier AUTO, which is not this module's gate -------------------------
+
+    @classmethod
+    def auto_approvable(cls, command: str) -> bool:
+        """Upstream's **auto-approve** judgement — tier AUTO. ⚠️ **NOT the gate.**
+
+        ``RECOMMENDED_SAFE_SHELL_COMMANDS`` holds twenty-five readers (``ls``,
+        ``cat``, ``grep``, ``ps``, ``wc``) and **no** ``pytest``, ``npm``,
+        ``git`` or ``make``. Two ways to misread it, both of which this
+        docstring exists to stop:
+
+        * **As tier NEVER's gate.** Swapping :meth:`screen`'s deny-list for this
+          allow-list looks like a large, principled deletion and is a
+          blocker-grade regression: the agent could no longer run your test
+          suite at all, which is the entire product promise of Phase 1.
+        * **As tier NEVER's whole answer.** It is a COMMAND allow-list, so
+          ``is_shell_command_allowed("cat ~/.ssh/id_rsa", …)`` is ``True`` —
+          ``cat`` is an allowed reader. Every path rule in
+          :class:`SensitivePathPolicy` must survive independently of it, or
+          approving a reader hands over ``id_rsa``.
+
+        Nothing consults this yet, and that is honest rather than dead: Phase 1
+        asks for a card on every command, so tier AUTO has no rung to sit on. It
+        is here so the tier boundary is machine-checked
+        (``test_never_list.py::TestTheThreeTiers``) rather than asserted in a
+        comment, and so the vendored table has one named home.
+        """
+
+        return is_shell_command_allowed(command, cls._AUTO_SAFE)
 
     # -- the rows ----------------------------------------------------------
 
@@ -992,11 +1142,11 @@ class CommandNeverList:
         """
 
         for segment in line.segments:
-            candidates = line.command_candidates(segment)
+            candidates = segment.candidates
             if self._PRIVILEGE & set(candidates):
                 return _Note.PRIVILEGE
             if self._PRIVILEGE & set(segment.argv) and (
-                self._STDIN_PASSWORD_FLAG in line.short_flags(segment)
+                self._STDIN_PASSWORD_FLAG in segment.short_flags
             ):
                 return _Note.PRIVILEGE
         return None
@@ -1011,11 +1161,11 @@ class CommandNeverList:
         """
 
         for segment in line.segments:
-            if self._REMOVE not in line.command_candidates(segment):
+            if self._REMOVE not in segment.candidates:
                 continue
-            if not (self._RECURSIVE_FLAGS & line.short_flags(segment)):
+            if not (self._RECURSIVE_FLAGS & segment.short_flags):
                 continue
-            for operand in line.operands(segment, after=self._REMOVE):
+            for operand in segment.operands(self._REMOVE):
                 if self._normalise_operand(operand) in self._CATASTROPHIC_ROOTS:
                     return _Note.DESTRUCTIVE_DELETE
         return None
@@ -1024,7 +1174,7 @@ class CommandNeverList:
         """``mkfs*``, ``dd of=`` under ``/dev/``, or a redirect to a raw device."""
 
         for segment in line.segments:
-            for candidate in line.command_candidates(segment):
+            for candidate in segment.candidates:
                 if candidate.startswith(self._MKFS):
                     return _Note.FILESYSTEM_DESTRUCTION
                 if candidate != self._DD:
@@ -1043,16 +1193,15 @@ class CommandNeverList:
         """``shutdown`` / ``reboot`` / ``halt`` / ``poweroff``, ``init 0|6``, ``systemctl``."""
 
         for segment in line.segments:
-            candidates = set(line.command_candidates(segment))
+            candidates = set(segment.candidates)
             if self._MACHINE_STATE & candidates:
                 return _Note.MACHINE_STATE
             if self._INIT in candidates and (
-                self._INIT_RUNLEVELS & set(line.operands(segment, after=self._INIT))
+                self._INIT_RUNLEVELS & set(segment.operands(self._INIT))
             ):
                 return _Note.MACHINE_STATE
             if self._SYSTEMCTL in candidates and (
-                self._SYSTEMCTL_TARGETS
-                & set(line.operands(segment, after=self._SYSTEMCTL))
+                self._SYSTEMCTL_TARGETS & set(segment.operands(self._SYSTEMCTL))
             ):
                 return _Note.MACHINE_STATE
         return None
@@ -1069,7 +1218,7 @@ class CommandNeverList:
         for segment in line.segments:
             if segment.lead not in self._PIPE_OPERATORS:
                 fetched = False
-            candidates = line.command_candidates(segment)
+            candidates = segment.candidates
             if fetched and any(self._is_interpreter(name) for name in candidates):
                 return _Note.PIPE_TO_INTERPRETER
             if self._FETCHERS & set(candidates):
@@ -1077,25 +1226,22 @@ class CommandNeverList:
         return None
 
     def _credential_path(self, line: ParsedCommandLine) -> str | None:
-        """Any word naming a path under a credential directory."""
+        """Any word naming a path under a credential directory.
 
-        for word in line.words:
-            if any(
-                SensitivePathPolicy.has_sensitive_segment(spelling)
-                for spelling in (word.text, word.raw)
-            ):
-                return _Note.CREDENTIAL_PATH
+        Both spellings, because they lose different things: POSIX tokenising
+        removes the ``\\`` from ``C:\\Users\\me\\.ssh\\id_rsa`` exactly as the
+        shell does, and the verbatim spelling is what still reads as a path.
+        """
+
+        if any(map(SensitivePathPolicy.has_sensitive_segment, line.spellings)):
+            return _Note.CREDENTIAL_PATH
         return None
 
     def _credential_file(self, line: ParsedCommandLine) -> str | None:
         """Any word whose leaf name satisfies ``isSensitiveFileName``."""
 
-        for word in line.words:
-            if any(
-                SensitivePathPolicy.leaf_is_sensitive(spelling)
-                for spelling in (word.text, word.raw)
-            ):
-                return _Note.CREDENTIAL_FILE
+        if any(map(SensitivePathPolicy.leaf_is_sensitive, line.spellings)):
+            return _Note.CREDENTIAL_FILE
         return None
 
     def _command_strings(self, line: ParsedCommandLine) -> tuple[str, ...]:
@@ -1108,7 +1254,7 @@ class CommandNeverList:
 
         payloads: list[str] = []
         for segment in line.segments:
-            if not (self._SHELL_BINARIES & set(line.command_candidates(segment))):
+            if not (self._SHELL_BINARIES & set(segment.candidates)):
                 continue
             argv = segment.argv
             for index, word in enumerate(argv):
@@ -1187,10 +1333,8 @@ class CommandNeverList:
 
 
 __all__ = [
-    "CommandLexer",
     "CommandNeverList",
     "CommandSegment",
-    "CommandToken",
     "ParsedCommandLine",
     "SensitivePathPolicy",
 ]

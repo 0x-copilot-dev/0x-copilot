@@ -3,27 +3,41 @@
 This module is the single source of truth for what the model may say and what it
 is told back. Every value that crosses the tool boundary is a frozen
 ``RuntimeContract``, so model output is coerced and validated at the edge rather
-than trusted.
+than trusted. Each structural property is argued once, on the class or validator
+that enforces it, rather than a second time here.
 
-Three properties are enforced structurally here rather than by convention:
+WHY THIS IS NOT ``deepagents.backends.protocol.ExecuteResponse``
+---------------------------------------------------------------
+Upstream ships a result shape for exactly this job, and it was checked rather
+than assumed. ``ExecuteResponse`` is a three-field plain dataclass — ``output``,
+``exit_code``, ``truncated`` — with no validation and, decisively, **no status
+field**. ``LocalShellBackend.execute`` therefore has nowhere to put "how this
+ended", so it encodes a timeout as ``exit_code=124`` plus the English sentence
+``"Error: Command timed out after N seconds..."`` inside ``output``, and a failed
+spawn as ``exit_code=1`` plus ``f"Error executing command ({type(e).__name__}):
+{e}"``. Those are the two things this package exists to refuse: a model inferring
+failure from prose (§4.3, AC1.3), and an exception interpolated into
+model-visible text. A command that legitimately printed ``Error:`` would be
+indistinguishable from a runtime that never spawned one.
 
-* **The model cannot name a path, an environment variable, or a shell.**
-  :class:`RunCommandInput` has exactly three fields and ``extra="forbid"``. A
-  model that emits ``env=`` or ``cwd=`` fails at ``model_validate`` — it does not
-  get its command run with the extra field silently dropped, which would put an
-  argument in front of the human that the approval card never rendered (§4.2).
-* **The card and the process can never disagree.** A NUL truncates the string at
-  the exec boundary while the card renders the whole of it, so the C0 range
-  (other than tab/newline/carriage-return) is refused at validation, above every
-  approval control.
-* **Failure is a field, not prose.** ``exit_code`` is an integer on the result,
-  so a model never has to infer failure from English (§4.3, AC1.3).
+So ours is a superset, and these are the added fields rather than a restyled
+copy. :class:`ShellExecutionOutcome` adds ``status`` (the five-way outcome),
+``output_total_bytes`` (the true total, which is what lets a truncation notice
+say "the last 64 KiB of 4.2 MB" honestly after those bytes are gone),
+``duration_ms``, and the two spill flags. :class:`RunCommandResult` adds, beyond
+those, ``reason`` — a closed ten-code refusal taxonomy — plus ``exit_note``,
+``workspace`` (the label, never the host path) and ``output_ref``. Nothing here
+re-declares a field ``ExecuteResponse`` already carries usefully; the three it
+does carry are kept under their upstream names on purpose.
 
-Two shapes are ours rather than the PRD's, and both are called out in the class
-docstrings: :class:`ShellExecutionRequest` / :class:`ShellExecutionOutcome` are
-the *executor's* IO, one layer below :class:`RunCommandResult`, and they exist so
-the executor never has to know a workspace label, a scratch layout, or a policy
-decision.
+**Two shapes look like each other and must not be merged.**
+:class:`ShellExecutionRequest` / :class:`ShellExecutionOutcome` are the
+*executor's* IO, one layer below :class:`RunCommandResult`. The overlap is six
+field names, and it is not duplication: the executor knows no workspace label,
+no scratch layout and no policy decision, and its ``output_total_bytes`` is an
+unconditional count while the result's is half of a truncation notice and absent
+without one. Collapsing them would push labels and refusal codes into the one
+module that must stay able to just spawn, bound and reap.
 """
 
 from __future__ import annotations
@@ -55,6 +69,22 @@ class _Text:
 
     MAX_COMMAND_CHARS: Final = 8192
     MAX_LABEL_CHARS: Final = 128
+
+    @classmethod
+    def reject_control_characters(cls, value: str, *, control: str, blank: str) -> str:
+        """Refuse the C0 range bar tab/newline/CR, and a whitespace-only value.
+
+        One scan, applied to both the command and the workspace label: they are
+        the same rule with different messages, and a second copy of a
+        security-relevant scan is how a fix lands on one of them only.
+        """
+
+        for character in value:
+            if character < cls.C0_CEILING and character not in cls.ALLOWED_CONTROL:
+                raise ValueError(control)
+        if not value.strip():
+            raise ValueError(blank)
+        return value
 
 
 class _Message:
@@ -170,6 +200,21 @@ class ShellStatusGroups:
         {ShellExecutionStatus.REFUSED, ShellExecutionStatus.UNAVAILABLE}
     )
 
+    @staticmethod
+    def check_exit_code(status: ShellExecutionStatus, exit_code: int | None) -> None:
+        """Raise unless ``exit_code`` is present for exactly ``COMPLETED``.
+
+        One invariant, read by both the executor's outcome and the model-facing
+        result. Stated once because two copies are how the two shapes drift
+        into disagreeing about what a timeout reports.
+        """
+
+        if status is ShellExecutionStatus.COMPLETED:
+            if exit_code is None:
+                raise ValueError(_Message.MISSING_EXIT_CODE)
+        elif exit_code is not None:
+            raise ValueError(_Message.EXIT_CODE_ON_NON_COMPLETED)
+
 
 class ShellRefusalReason(StrEnum):
     """Closed vocabulary for why a call produced no process.
@@ -266,12 +311,11 @@ class RunCommandInput(ShellContract):
         rule enforced in the wrong layer. §16.3 owns the rendering half.
         """
 
-        for character in value:
-            if character < _Text.C0_CEILING and character not in _Text.ALLOWED_CONTROL:
-                raise ValueError(_Message.CONTROL_CHARACTERS)
-        if not value.strip():
-            raise ValueError(_Message.BLANK_COMMAND)
-        return value
+        return _Text.reject_control_characters(
+            value,
+            control=_Message.CONTROL_CHARACTERS,
+            blank=_Message.BLANK_COMMAND,
+        )
 
     @field_validator("workspace")
     @classmethod
@@ -287,12 +331,11 @@ class RunCommandInput(ShellContract):
 
         if value is None:
             return None
-        for character in value:
-            if character < _Text.C0_CEILING and character not in _Text.ALLOWED_CONTROL:
-                raise ValueError(_Message.LABEL_CONTROL_CHARACTERS)
-        if not value.strip():
-            raise ValueError(_Message.BLANK_LABEL)
-        return value
+        return _Text.reject_control_characters(
+            value,
+            control=_Message.LABEL_CONTROL_CHARACTERS,
+            blank=_Message.BLANK_LABEL,
+        )
 
 
 class RunCommandResult(ShellContract):
@@ -305,12 +348,10 @@ class RunCommandResult(ShellContract):
     not in the event payload, and not in the transcript — the same rule the
     sandbox lane holds itself to for its own event sink.
 
-    One deviation from §4.3, made deliberately: ``workspace`` carries a default
-    of ``""`` instead of being unconditionally required, because a refusal can
-    happen before any workspace is bound (a disabled capability, an unknown
-    label) and requiring the field there would force the code to invent a label.
-    The invariant is kept as a validator instead — anything that reached a
-    process must name its workspace.
+    One deviation from §4.3, made deliberately: ``workspace`` defaults to ``""``
+    rather than being unconditionally required, because a refusal can happen
+    before any workspace is bound and requiring it there would force the code to
+    invent a label. :meth:`_check_status_invariants` keeps the real rule.
     """
 
     status: ShellExecutionStatus
@@ -350,11 +391,7 @@ class RunCommandResult(ShellContract):
         """Keep the status and the rest of the row from disagreeing."""
 
         spawned = self.status in ShellStatusGroups.SPAWNED
-        if self.status is ShellExecutionStatus.COMPLETED:
-            if self.exit_code is None:
-                raise ValueError(_Message.MISSING_EXIT_CODE)
-        elif self.exit_code is not None:
-            raise ValueError(_Message.EXIT_CODE_ON_NON_COMPLETED)
+        ShellStatusGroups.check_exit_code(self.status, self.exit_code)
 
         if spawned:
             if self.reason is not None:
@@ -508,11 +545,7 @@ class ShellExecutionOutcome(ShellContract):
 
     @model_validator(mode="after")
     def _check_exit_code_matches_status(self) -> "ShellExecutionOutcome":
-        if self.status is ShellExecutionStatus.COMPLETED:
-            if self.exit_code is None:
-                raise ValueError(_Message.MISSING_EXIT_CODE)
-        elif self.exit_code is not None:
-            raise ValueError(_Message.EXIT_CODE_ON_NON_COMPLETED)
+        ShellStatusGroups.check_exit_code(self.status, self.exit_code)
         if self.status not in ShellStatusGroups.SPAWNED:
             raise ValueError(_Message.OUTCOME_STATUS)
         return self

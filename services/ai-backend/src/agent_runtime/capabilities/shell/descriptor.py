@@ -1,49 +1,30 @@
 """The PDP inputs for ``run_command`` — identity, principal, allowlist (§4.1, §8.1).
 
 ``run_command`` is the **first non-MCP capability through the PDP**
-(:class:`~agent_runtime.capabilities.policy.service.PdpPolicyService`), and the
-PDP's authorization stage was written connector-shaped. This module supplies the
-three builtin analogues PRD-shell-execution §8.1 (OQ-1) says are needed, each one
-argued rather than defaulted:
-
-* **``ConnectorState``** — fixed from the *sealed enablement* (§7.4), so a live
-  capability is ``LIVE`` and a withdrawn one is ``OFF``. This is what makes
-  §7.2's call-time recheck flow **through** the PDP rather than around it: a
-  grant detached mid-run rebuilds the descriptor as ``OFF``, Stage 1 denies with
-  ``connector_unavailable``, and there is exactly one place a command can be
-  refused rather than two that must agree.
-* **``descriptor.scopes``** — empty. The authority for a command is the
-  workspace grant, not an OAuth scope; there is no token whose scope set could
-  say anything about it. Declaring a scope we do not check would be a claim the
-  code does not make.
-* **The allowlist port** — an empty :class:`ConnectorAllowlist`, i.e. no
-  restriction. Org/user allowlists are a *connector-registry* fact keyed by URN;
-  a builtin has no registry row, so the honest answer is "this port imposes
-  nothing", stated once here rather than left to a ``None`` that each reader
-  folds differently.
-
-**The one trap, and why this module exists at all.**
-:meth:`PdpPolicyService._has_scopes` is fail-closed at the *connector* level: a
-connector absent from ``principal.connector_scopes`` is unauthorized **even when
-nothing is required** (``connector_scopes.get(connector) is None`` ⇒ ``False``).
-A run's ``connector_scopes`` is keyed by MCP connector slug and will never carry
-``shell``, so a naive principal makes Stage 2 deny **every** command with
-``permission_denied`` — a dead capability that looks like a policy decision.
-:class:`ShellPrincipal` overlays exactly one entry, ``{"shell": frozenset()}``,
-which grants nothing (the required set is empty on both sides) and only makes the
-stage total for a capability whose authority lives elsewhere. This is the same
-move, for the same reason, that
-:class:`~agent_runtime.capabilities.mcp.policy_allowlist.McpConnectorPrincipal`
-already makes for MCP dispatch.
-
-Nothing here decides anything. The decision is
-:meth:`PdpPolicyService.decide`; the enforcement point is
+(:class:`~agent_runtime.capabilities.policy.service.PdpPolicyService`), whose
+authorization stage was written connector-shaped. This module supplies the three
+builtin analogues §8.1 (OQ-1) asks for: a ``ConnectorState``, an empty
+``scopes`` tuple, and an allowlist port. Nothing here decides anything — the
+decision is ``PdpPolicyService.decide``, the enforcement point is
 :mod:`agent_runtime.capabilities.shell.policy_gate`.
+
+**The trap, and why this module exists at all.** ``PdpPolicyService._has_scopes``
+is fail-closed at the *connector* level: ``connector_scopes.get(connector) is
+None`` ⇒ ``False``, so a connector absent from the map is unauthorized **even
+when nothing is required**. A run's ``connector_scopes`` is keyed by MCP
+connector slug and will never carry ``shell``, so a naive principal makes Stage 2
+deny every command with ``permission_denied`` — a dead capability that looks like
+a policy decision.
+
+It is smaller than the MCP descriptor source it is modelled on
+(``mcp/descriptor_source.py``, 357 lines) because that one must *derive* action,
+trust and connector state from a catalog kind, tool annotations, and
+health-plus-pause-plus-access-mode. All three are constants for a builtin, so
+the code that would compute them is absent rather than stubbed.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import Final
 
 from agent_runtime.capabilities.policy.contracts import (
@@ -51,6 +32,7 @@ from agent_runtime.capabilities.policy.contracts import (
     CapabilityDescriptor,
     CapabilityUrn,
     ConnectorState,
+    Principal,
     Trust,
 )
 from agent_runtime.capabilities.policy.service import ConnectorAllowlist
@@ -61,13 +43,12 @@ from agent_runtime.execution.contracts import AgentRuntimeContext
 class ShellCapability:
     """The one identity ``run_command`` is policed under.
 
-    ``NAMESPACE`` is ``shell`` and ``OP`` is ``run_command`` — deliberately
-    **not** ``execute``. That name is already claimed in all three occupancy
-    declarations by deepagents' filesystem placeholder
+    ``OP`` is deliberately **not** ``execute``: that name is already claimed in
+    all three occupancy declarations by deepagents' filesystem placeholder
     (``capabilities/operations/conformance.py``, ``builtin_operation_catalog.json``,
     ``operation_descriptors.json``), and a collision there is a silent identity
-    merge in the policy layer: two different capabilities would resolve to one
-    URN and inherit each other's rules.
+    merge — two capabilities resolving to one URN and inheriting each other's
+    rules.
     """
 
     #: The middle URN segment. ``server_slug`` normalises it, so the constant and
@@ -104,9 +85,9 @@ class RunCommandDescriptor:
         ``trust`` is ``TRUSTED`` and that costs nothing: :class:`Trust` is read
         by exactly one rung of the ladder (3.7, the untrusted-READ gate), which
         an ``EXECUTE`` action never reaches. Declaring ``UNTRUSTED`` would read
-        as a second, inert safety control and invite someone to rely on it.
-        The control for a command is the EXECUTE rung at 3.5½, which pauses in
-        every posture unless the axis itself is authored to ``auto``.
+        as a second, inert safety control and invite someone to rely on it. The
+        control for a command is the EXECUTE rung at 3.5½, which pauses in every
+        posture unless the axis itself is authored to ``auto``.
         """
 
         return CapabilityDescriptor(
@@ -121,58 +102,52 @@ class RunCommandDescriptor:
         )
 
 
-@dataclass(frozen=True)
 class ShellPrincipal:
-    """A :class:`Principal` for one command, seeded so Stage 2 is total.
+    """The run's :class:`Principal` for one command, seeded so Stage 2 is total.
 
-    Structurally satisfies the P0 ``Principal`` Protocol. Identity, roles and the
-    session scope set are copied verbatim from the run context; only
-    ``connector_scopes`` is overlaid, with a single empty entry for the ``shell``
-    connector (see the module docstring for what happens without it).
+    The overlay is exactly one entry, ``{"shell": frozenset()}``, which grants
+    nothing — the required set is empty on both sides — and only makes the stage
+    total for a capability whose authority lives elsewhere (see the module
+    docstring's trap).
 
-    The overlay is applied **over** the run's real ``connector_scopes``, so every
-    genuinely-present MCP connector entry survives untouched — this principal is
-    only ever handed to a ``builtin:shell:run_command`` decision, but building it
-    destructively would make that a fact about the call site instead of a fact
-    about the object.
+    **Deliberately not a dataclass of its own.** ``AgentRuntimeContext`` already
+    *is* the production ``Principal`` and carries exactly the five fields the PDP
+    reads, so re-declaring them here would be a third copy of one row — the
+    context, this class, and ``mcp.policy_allowlist.McpConnectorPrincipal``,
+    which is that shape spelled out field-by-field with a different overlay
+    value. ``model_copy`` is non-destructive in both directions: present
+    connector entries survive, and the caller's context is not mutated.
     """
 
-    user_id: str
-    org_id: str
-    roles: frozenset[str]
-    permission_scopes: frozenset[str]
-    connector_scopes: dict[str, frozenset[str]]
+    __slots__ = ()
 
-    @classmethod
-    def for_run(cls, context: AgentRuntimeContext) -> "ShellPrincipal":
-        """Build the principal for this run's command lane."""
+    @staticmethod
+    def for_run(context: AgentRuntimeContext) -> Principal:
+        """Overlay the one empty ``shell`` entry onto this run's principal."""
 
-        scopes = dict(context.connector_scopes)
-        scopes[ShellCapability.CONNECTOR] = frozenset()
-        return cls(
-            user_id=context.user_id,
-            org_id=context.org_id,
-            roles=context.roles,
-            permission_scopes=context.permission_scopes,
-            connector_scopes=scopes,
+        return context.model_copy(
+            update={
+                "connector_scopes": {
+                    **context.connector_scopes,
+                    ShellCapability.CONNECTOR: frozenset(),
+                }
+            }
         )
 
 
 class BuiltinCapabilityAllowlist:
     """A ``ConnectorAllowlistPort`` that imposes no org/user restriction.
 
-    Total by construction: every URN — the shell one, a malformed one, someone
-    else's — returns the empty :class:`ConnectorAllowlist`, which the PDP reads
-    as "no restriction". It never raises.
+    Total by construction — the shell URN, a malformed one, someone else's, all
+    return the empty :class:`ConnectorAllowlist` the PDP reads as "no
+    restriction", and it never raises.
 
-    Why this is not a hole. The org/user allowlist exists to answer *which
-    tenants may reach a registered connector*, and it is read from the connector
-    registry by URN. A builtin has no registry row, so there is no allowlist to
-    read and no tenant question to answer — the question a command actually
-    raises ("may this workspace run commands at all?") is answered upstream, by
-    the per-workspace grant flag and the deployment gate (§7.1), before a
-    descriptor is ever built. Returning empty here is stating that plainly, in
-    one place, rather than passing ``None`` and having each reader decide.
+    Not a hole. The org/user allowlist answers *which tenants may reach a
+    registered connector*, read from the connector registry by URN; a builtin has
+    no registry row, so there is no allowlist to read. The question a command
+    actually raises — may this workspace run commands at all — is answered
+    upstream by the per-workspace grant flag and the deployment gate (§7.1),
+    before a descriptor exists.
     """
 
     __slots__ = ()

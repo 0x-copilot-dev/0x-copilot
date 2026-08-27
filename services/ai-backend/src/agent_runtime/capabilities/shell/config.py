@@ -8,16 +8,21 @@ per-request override for any of it: a request-supplied environment is a way to
 smuggle a credential into a child process, and a request-supplied shell is a way
 to reintroduce rc-file sourcing.
 
-(The docstring rule is copied from
-:mod:`agent_runtime.capabilities.sandbox.config`, which resolves its own
-deployment-trusted values the same way.)
+**This is not a second settings mechanism and must not be folded into
+``RuntimeSettings``**, which is the *process* composition root — merged once at
+boot and injected everywhere. A capability config gates whether one capability
+exists at all, so it must resolve from a bare mapping in a test and its parse
+failure must disable that capability rather than refuse to boot the service.
+Twelve other ``from_env`` capability configs in ``agent_runtime`` resolve theirs
+the same way (``sandbox``, ``interpreter``, ``desktop``, ``mcp.credentials``,
+``surfaces``, ``api.connector_policy_client``, …): this is the house pattern,
+not a fork of it — and unlike ``sandbox.config`` it keeps its readers inside the
+class, per this service's "no module-level helper functions" rule.
 
 Gating: the capability is OFF unless ``RUNTIME_ENABLE_SHELL_EXECUTION`` holds an
 enabling token. The parse fails closed in both directions — an unrecognised
 enable token leaves it disabled, and **any** malformed numeric override disables
-the capability outright rather than silently falling back to a default. A
-misconfiguration can never produce a running-commands deployment that nobody
-intended, and it can never produce a quietly-wrong ceiling either.
+the capability outright rather than silently falling back to a default.
 
 The three numbers are the ones this repo already uses, so there is one house
 answer rather than two: 120 s matches ``RemoteSandboxConfig.command_timeout_s``,
@@ -43,7 +48,13 @@ from agent_runtime.execution.contracts import RuntimeContract
 
 
 class _EnvFields:
-    """Environment variable names (single source of truth)."""
+    """Environment variable names (single source of truth).
+
+    There is deliberately no ``RUNTIME_SHELL_PATH``. ``shell_path`` is a
+    constructor field so a test can point at a stub, but it is never derived
+    from the environment: an env-settable shell is one export away from being
+    the user's login shell, which is the exact thing §11.4 refuses.
+    """
 
     ENABLE: Final = "RUNTIME_ENABLE_SHELL_EXECUTION"
     DEFAULT_TIMEOUT_S: Final = "RUNTIME_SHELL_DEFAULT_TIMEOUT_S"
@@ -51,15 +62,23 @@ class _EnvFields:
     OUTPUT_PREVIEW_BYTES: Final = "RUNTIME_SHELL_OUTPUT_PREVIEW_BYTES"
     MAX_COMMANDS_PER_RUN: Final = "RUNTIME_SHELL_MAX_COMMANDS_PER_RUN"
 
-    #: Mirrors ``RemoteSandboxConfig``'s enabling tokens, so one spelling turns
-    #: on either capability.
-    TRUTHY: Final = frozenset({"1", "true", "yes", "on"})
+    #: Model field → environment variable, for every numeric override. The
+    #: defaults are deliberately absent: they live on the fields themselves, so
+    #: ``from_env`` omits an unset key rather than re-stating its value.
+    NUMERIC: Final = {
+        "default_timeout_s": DEFAULT_TIMEOUT_S,
+        "max_timeout_s": MAX_TIMEOUT_S,
+        "combined_output_preview_bytes": OUTPUT_PREVIEW_BYTES,
+        "max_commands_per_run": MAX_COMMANDS_PER_RUN,
+    }
 
-    #: There is deliberately no ``RUNTIME_SHELL_PATH``. ``shell_path`` is a
-    #: constructor field so a test can point at a stub, but it is never derived
-    #: from the environment: an env-settable shell is one export away from being
-    #: the user's login shell, which is the exact thing §11.4 refuses.
-    NO_SHELL_PATH_OVERRIDE: Final = True
+    #: Mirrors ``RemoteSandboxConfig``'s enabling tokens, so one spelling turns
+    #: on either capability. Copied rather than imported: importing would make
+    #: ``shell`` depend on ``sandbox`` for four string literals. The real fix is
+    #: one shared token set for all 18 copies in this service (``settings.
+    #: _BOOL_TRUTHY`` among them), which is a change to files this module does
+    #: not own.
+    TRUTHY: Final = frozenset({"1", "true", "yes", "on"})
 
 
 class _Note:
@@ -140,31 +159,28 @@ class ShellExecutionConfig(RuntimeContract):
         if not enabled:
             return cls()
         try:
-            return cls(
-                enabled=True,
-                default_timeout_s=cls._read_int(
-                    source, _EnvFields.DEFAULT_TIMEOUT_S, 120
-                ),
-                max_timeout_s=cls._read_int(source, _EnvFields.MAX_TIMEOUT_S, 600),
-                combined_output_preview_bytes=cls._read_int(
-                    source, _EnvFields.OUTPUT_PREVIEW_BYTES, 64 * 1024
-                ),
-                max_commands_per_run=cls._read_int(
-                    source, _EnvFields.MAX_COMMANDS_PER_RUN, 64
-                ),
-            )
+            overrides: dict[str, int] = {
+                field: value
+                for field, key in _EnvFields.NUMERIC.items()
+                if (value := cls._read_int(source, key)) is not None
+            }
+            return cls(enabled=True, **overrides)
         except (ValueError, TypeError, ValidationError):
             # Fail closed: an unreadable limit is not a limit.
             return cls()
 
     @staticmethod
-    def _read_int(source: Mapping[str, str], key: str, default: int) -> int:
-        """Parse one integer override, raising on anything malformed."""
+    def _read_int(source: Mapping[str, str], key: str) -> int | None:
+        """Parse one integer override, or ``None`` when the variable is unset.
+
+        Raising on anything malformed is what :meth:`from_env` converts into a
+        disabled config. ``None`` for "unset" is deliberate: the field's own
+        ``Field(default=...)`` then applies, so each of the four numbers is
+        written in exactly one place instead of once here and once there.
+        """
 
         raw = (source.get(key) or "").strip()
-        if not raw:
-            return default
-        return int(raw)
+        return int(raw) if raw else None
 
     def resolve_timeout_s(self, requested: int | None) -> int:
         """Return the timeout for one call, refusing anything above the ceiling.
@@ -237,12 +253,15 @@ class ShellCommandBudget:
 
         return max(self._limit - self._spent, 0)
 
-    def consume(self) -> None:
-        """Claim one command, or raise the typed refusal when the run is out.
+    def require_available(self) -> None:
+        """Raise the typed refusal when the run has no allowance left.
 
-        Claimed *before* the spawn, so a command that hangs and is killed still
-        counts. Counting completions instead would let a run that times out
-        repeatedly spawn without bound.
+        The read half of :meth:`consume`, so the caller can check before a human
+        is shown a card and claim only after the decision — asking someone to
+        approve a command the run has no allowance left to spawn is a card that
+        cannot lead anywhere. Lives here rather than at the call site because
+        ``spent >= limit`` is the counter's own business; a caller that had to
+        spell it out would be a second place to get the comparison wrong.
         """
 
         if self._spent >= self._limit:
@@ -252,4 +271,14 @@ class ShellCommandBudget:
                     _Note.BUDGET_EXHAUSTED.format(limit=self._limit),
                 )
             )
+
+    def consume(self) -> None:
+        """Claim one command, or raise the typed refusal when the run is out.
+
+        Claimed *before* the spawn, so a command that hangs and is killed still
+        counts. Counting completions instead would let a run that times out
+        repeatedly spawn without bound.
+        """
+
+        self.require_available()
         self._spent += 1

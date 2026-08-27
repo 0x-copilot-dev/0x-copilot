@@ -432,6 +432,167 @@ KNOWN_OVER_REFUSALS: Final = (
 )
 
 
+#: The ``shlex`` migration, case by case. When ~400 lines of hand-rolled lexer
+#: were replaced by ``shlex``, a 3,967-command differential sweep of the old
+#: parser against the new one found **exactly one** behavioural divergence, in
+#: the narrowing direction. This table records the outcome of each interesting
+#: case explicitly — the ones that moved AND the ones that pointedly did not —
+#: because "we deleted a parser and nothing changed" is a claim that has to be
+#: readable rather than asserted.
+#:
+#: ``before`` is the old hand-rolled lexer's verdict, measured; ``screen`` /
+#: ``floor`` are today's and are live assertions.
+@dataclass(frozen=True, slots=True)
+class MigrationCase(Case):
+    """One command, plus what the hand-rolled lexer used to say about it."""
+
+    before_screen: bool = False
+    before_grant: bool = False
+
+    @property
+    def moved(self) -> bool:
+        return self.before_screen is not self.screen
+
+
+PARSER_MIGRATION: Final = (
+    # -- CHANGED: the one divergence, and it fails CLOSED ------------------
+    MigrationCase(
+        "cat 'unbalanced",
+        True,
+        False,
+        "objection (a) dissolving. The old lexer ran the unterminated quote to "
+        "end-of-string, read `cat` + one word, PASSED the screen and offered a "
+        "standing `cat *` grant off that guess. `shlex` raises, we catch, we "
+        "refuse. A line the shell would reject as a syntax error is not a line "
+        "we owe a parse",
+        before_screen=False,
+        before_grant=True,
+    ),
+    MigrationCase(
+        "echo 'never closed",
+        True,
+        False,
+        "the same divergence on the other quote character",
+        before_screen=False,
+        before_grant=True,
+    ),
+    # -- UNCHANGED: quoting normalisation, which shlex does for free -------
+    MigrationCase(
+        '"sudo" rm -rf /',
+        True,
+        True,
+        "still a hit. The old lexer carried a `raw`/`text` pair to get here; "
+        "`shlex` in POSIX mode dequotes as the shell does, so `argv[0]` simply "
+        "IS `sudo`",
+        before_screen=True,
+    ),
+    MigrationCase(
+        "s'u'do rm -rf /",
+        True,
+        True,
+        "SPLIT quoting — the case a hand-rolled prefix check gets wrong, because "
+        "the quote is mid-word. Still a hit, and now for a structural reason "
+        "rather than an enumerated one",
+        before_screen=True,
+    ),
+    MigrationCase(
+        "ls;rm -rf ~",
+        True,
+        True,
+        "objection (b) dissolving: the operator distinction survives, with no "
+        "whitespace around the `;`",
+        before_screen=True,
+    ),
+    MigrationCase(
+        ":(){ :|:& };:",
+        True,
+        True,
+        "the LIMIT of stdlib parsing, and the reason `_fork_bomb` still reads "
+        "the raw string. Our tokens are `[':', '()', '{', ':', '|', ':', '&', "
+        "'}', ';', ':']` and `shlex.split`'s are `[':(){', ':|:&', '};:']` — "
+        "both garbage for the purpose, because neither models a function "
+        "DEFINITION. The screen holds because `_fork_bomb` never went near the "
+        "tokens; the floor holds because `*:(){*};:*` is a literal glob and "
+        "never went near a parser either",
+        before_screen=True,
+    ),
+    # -- CHANGED: two refusals the first shlex draft lost, and got back -----
+    MigrationCase(
+        "rm -rf '|' /",
+        True,
+        False,
+        "a QUOTED operator. POSIX tokenising has already dropped the quotes, so "
+        "segmenting that stream alone read `|` as a real pipe, cut `/` away from "
+        "`rm`'s operands and PASSED a catastrophic delete the old lexer refused. "
+        "Segmenting the verbatim stream too is what holds it",
+        before_screen=True,
+    ),
+    MigrationCase(
+        "echo hi #c\nsudo rm -rf /",
+        True,
+        True,
+        "the floor caught this one all along — `*sudo *` compiles with "
+        "`re.DOTALL`, so the newline is just another character to it. It is the "
+        "SCREEN that had the hole, and the floor holding is exactly the "
+        "'survives a bug in the screen' property §9 claims for it. "
+        "`shlex.commenters` defaults to `#` and implements a comment with "
+        "`readline()`, which swallowed the NEWLINE separator too — so `sudo` "
+        "landed in `echo`'s arguments instead of command position. Clearing "
+        "`commenters` restores the split. The old lexer had no comment concept, "
+        "so it never had this hole",
+        before_screen=True,
+    ),
+    MigrationCase(
+        "cat ~/.ssh/id_rsa",
+        True,
+        True,
+        "still a hit, and it MUST be: upstream's command allow-list admits this "
+        "line (`cat` is an allowed reader), so tier NEVER's path rules are what "
+        "is holding here and cannot be deleted as redundant",
+        before_screen=True,
+    ),
+    MigrationCase(
+        "s=sud; ${s}o ls",
+        False,
+        False,
+        "still a MISS, and stdlib parsing does not change that. The command NAME "
+        "is built at expansion time; nothing lexical can see it. Also in "
+        "KNOWN_MISSES",
+        before_screen=False,
+    ),
+)
+
+
+class TestParserMigration(NeverListProbeMixin):
+    """What the ``shlex`` rewrite changed, per case. Mostly: nothing."""
+
+    @pytest.mark.parametrize("case", PARSER_MIGRATION, ids=str)
+    def test_todays_outcome_is_as_recorded(self, case: MigrationCase) -> None:
+        assert self.screen_refuses(case.command) is case.screen, case.why
+        assert self.floor_refuses(case.command) is case.floor, case.why
+
+    @pytest.mark.parametrize("case", [c for c in PARSER_MIGRATION if c.moved], ids=str)
+    def test_every_move_is_toward_refusing(self, case: MigrationCase) -> None:
+        # The direction that matters. Deleting a parser may tighten the screen;
+        # it may never loosen it. The sweep found no case moving the other way.
+        assert case.before_screen is False and case.screen is True, case.why
+
+    @pytest.mark.parametrize(
+        "case", [c for c in PARSER_MIGRATION if c.before_grant], ids=str
+    )
+    def test_a_guessed_parse_no_longer_earns_a_standing_yes(
+        self, case: MigrationCase
+    ) -> None:
+        # The sharper half of the fix: the old lexer did not merely pass these,
+        # it offered a run-scoped ALWAYS grant keyed on a token it had guessed.
+        assert self.never_list.always_grant_patterns(case.command) == (), case.why
+
+    def test_the_table_records_unchanged_cases_too(self) -> None:
+        # A migration table holding only the diffs is a table that cannot say
+        # "and everything else stayed put".
+        assert sum(1 for case in PARSER_MIGRATION if not case.moved) >= 5
+
+
 class TestCatastrophicShapes(NeverListProbeMixin):
     """Nothing in this list may reach an approval card."""
 

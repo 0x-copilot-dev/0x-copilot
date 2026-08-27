@@ -1,9 +1,14 @@
 """The model-facing ``run_command`` tool boundary (§4.1, §7.2, §13).
 
-This is a LangChain boundary and nothing else. It resolves the workspace label,
-hands the call to the PEP (:mod:`agent_runtime.capabilities.shell.policy_gate`),
-and — only if the PEP returned permission — builds the environment and calls the
-one executor. It decides nothing about whether the command may run.
+A LangChain boundary and nothing else: it resolves the workspace label, hands
+the call to the PEP (:mod:`agent_runtime.capabilities.shell.policy_gate`), and —
+only if the PEP returned permission — builds the environment and calls the one
+executor. It decides nothing about whether the command may run, reads no process
+environment, chooses no shell, picks no cwd and sizes no timeout (all four are
+deployment facts resolved in ``config`` and ``environment``), and opens no
+socket — the policy snapshot it decides from was sealed onto the run context at
+run-create (root ``CLAUDE.md``'s "never put a per-call HTTP hop on the tool
+path").
 
 THE ORDER, AND WHY EACH STEP IS WHERE IT IS
 -------------------------------------------
@@ -11,34 +16,28 @@ THE ORDER, AND WHY EACH STEP IS WHERE IT IS
    before this module sees anything, so NUL and the C0 range are already gone
    and the string the approval card renders is the string ``execve`` receives.
 2. **Bind the workspace label.** A label, never a path, and never a fallback
-   root: an unknown label is refused rather than silently run somewhere else
-   (§4.2). This is also the §7.2 recheck — the binding re-reads the grant at
-   call time — and its answer is threaded into the PDP as ``available`` rather
-   than short-circuited here, so a grant withdrawn mid-run is denied by Stage 1
-   of the same decision every other call flows through. One gate, not two that
-   have to agree.
+   root (§4.2). This is also the §7.2 recheck, and its answer is threaded into
+   the PDP as ``available`` rather than short-circuited here, so a grant
+   withdrawn mid-run is denied by Stage 1 of the same decision every other call
+   flows through. One gate, not two that have to agree.
 3. **The timeout ceiling and the per-run budget**, both from deployment config
    the model cannot influence. Checked before the decision because refusing a
    call the deployment would not run anyway costs the human nothing; neither
    check can turn a refusal into permission.
 4. **:meth:`ShellCommandPolicyGate.authorize`** — the never-list screen, then
-   the PDP, then (on GATE) the approval card. It returns a
-   :class:`ShellAuthorization` or raises.
+   the PDP, then (on GATE) the approval card.
 5. **Only then** the environment is built and the executor is called.
 
-There is no arm of this function that spawns without a
-:class:`ShellAuthorization` in hand, and that object has no constructor outside
-the two post-decision arms of the PEP. That is the structural form of "no path
+No arm of :meth:`RunCommandTool._authorized_call` spawns without a
+``ShellAuthorization`` in hand, and that object has no constructor outside the
+two post-decision arms of the PEP. That is the structural form of "no path
 returns ALLOW without a decision".
 
-WHAT THIS MODULE DOES NOT DO
-----------------------------
-It does not read the process environment, choose a shell, pick a cwd, or size a
-timeout — all four are deployment facts resolved once in
-:mod:`agent_runtime.capabilities.shell.config` and
-:mod:`agent_runtime.capabilities.shell.environment`. It opens no socket: the
-policy snapshot it decides from was sealed onto the run context at run-create
-(root ``CLAUDE.md``'s "never put a per-call HTTP hop on the tool path").
+Almost none of this is LangChain boilerplate: ``StructuredTool.from_function``
+does the schema work, the only framework code is the six-line ``arun`` override,
+and :class:`RunCommandTool` is the house adapter shape — a frozen dataclass of
+run-scoped dependencies wrapped by a ``StructuredTool`` in a factory, as
+``ListConnectedServersTool`` and ``SuggestMcpConnectorTool`` already are.
 """
 
 from __future__ import annotations
@@ -60,6 +59,7 @@ from agent_runtime.capabilities.shell.contracts import (
     RunCommandInput,
     RunCommandResult,
     ShellCommandCancelled,
+    ShellExecutionOutcome,
     ShellExecutionRequest,
     ShellExecutionStatus,
     ShellRefusal,
@@ -146,13 +146,11 @@ class ShellWorkspaceBinding(Protocol):
     A port, not a class, because the answer is owned by the desktop grant lane
     and this package must not learn to read grants.
 
-    THE TWO METHODS ANSWER TWO DIFFERENT QUESTIONS, ONE SEALED AND ONE LIVE.
-    :meth:`sealed_labels` is the run-start seal (§7.4) — turning shell access on
-    mid-run must not retro-authorize a run the user started without it — and it
-    is what registration reads. :meth:`resolve` is the call-time recheck (§7.2):
-    a grant detached mid-run must disappear from it, which is how turning shell
-    access OFF mid-run *does* take effect. The asymmetry is deliberate and
-    fail-closed in both directions.
+    THE TWO METHODS ANSWER TWO DIFFERENT QUESTIONS, ONE SEALED AND ONE LIVE, and
+    the asymmetry is fail-closed in both directions. :meth:`sealed_labels` is the
+    run-start seal (§7.4), so turning shell access ON mid-run cannot
+    retro-authorize a run the user started without it; :meth:`resolve` is the
+    call-time recheck (§7.2), so turning it OFF mid-run does take effect.
 
     Both are total. A binding that cannot answer returns the narrowing answer —
     no labels, no workspace — rather than raising into the tool path.
@@ -175,10 +173,16 @@ class ShellWorkspaceBinding(Protocol):
 
 
 #: LangChain's per-call ``tool_call_id``, captured at :meth:`arun` and read by
-#: the coroutine. The same mechanism ``PolicyGatedMcpTool`` uses, for the same
-#: reason: the id is framework plumbing rather than a tool argument, so it must
-#: not appear in ``RunCommandInput`` (which is ``extra="forbid"`` and is the
-#: schema the model sees).
+#: the coroutine.
+#:
+#: **Not a hand-rolled ``InjectedToolCallId``**: measured against the installed
+#: ``langchain_core``, ``BaseTool._parse_input`` raises ``ValueError`` whenever
+#: ``tool_call_id is None``, so that field would refuse **any** invocation that
+#: is not a full ``ToolCall`` envelope — contradicting
+#: ``ShellCommandPolicyGate._approval_id``, whose ``str | None`` signature exists
+#: so the lane stays total. ``arun`` capture is total; the field is not. (The two
+#: likelier-sounding reasons are both false there: the field does not reach the
+#: model, and a model cannot forge the id.)
 _TOOL_CALL_ID: ContextVar[str | None] = ContextVar(
     "shell_run_command_tool_call_id", default=None
 )
@@ -188,10 +192,9 @@ class _RunCommandTool(StructuredTool):
     """A ``StructuredTool`` that remembers which tool call it is serving.
 
     The approval id must be **deterministic across the park→resume replay** and
-    **unique per call in a run** (see ``ShellCommandPolicyGate._approval_id``).
-    Only LangChain knows the id that satisfies both, and it passes it to
-    ``arun`` rather than into the arguments — so this override is the one place
-    it can be read without polluting the model-facing schema.
+    **unique per call in a run** (``ShellCommandPolicyGate._approval_id``), and
+    only LangChain knows an id satisfying both. Why it is read here rather than
+    from an injected schema field is measured at :data:`_TOOL_CALL_ID`.
     """
 
     async def arun(  # type: ignore[override]
@@ -212,8 +215,206 @@ class _RunCommandTool(StructuredTool):
             _TOOL_CALL_ID.reset(token)
 
 
+@dataclass(frozen=True)
+class RunCommandTool:
+    """Adapter wrapped by LangChain's ``StructuredTool`` in the factory.
+
+    The run-scoped dependencies are **fields**, not parameters threaded through a
+    closure — the shape the other builtins already use, and the reason the
+    seven-dependency bundle is written once rather than at every call site.
+    Frozen for the same reason they are: a tool that could be re-pointed at
+    another workspace or budget mid-run would make the §7.4 seal a convention
+    rather than a property.
+    """
+
+    config: ShellExecutionConfig
+    binding: ShellWorkspaceBinding
+    policy_gate: ShellCommandPolicyGate
+    budget: ShellCommandBudget
+    executor: ShellCommandExecutor
+    environment: ShellEnvironmentBuilder
+    env_source: Mapping[str, str] | None = None
+
+    async def ainvoke(
+        self,
+        command: str,
+        workspace: str | None = None,
+        timeout_s: int | None = None,
+    ) -> str:
+        """One call, from validated arguments to a JSON result string.
+
+        Every exit is a :class:`RunCommandResult`. :class:`ShellRefusedError` is
+        caught exactly once — here — and projected, which is what lets every
+        rule below raise at the point that makes the decision instead of
+        returning a union some caller can forget to inspect.
+        """
+
+        try:
+            return await self._authorized_call(command, workspace, timeout_s)
+        except ShellRefusedError as refused:
+            return self._json(refused.refusal.as_result())
+
+    async def _authorized_call(
+        self, command: str, workspace: str | None, timeout_s: int | None
+    ) -> str:
+        """The permitted path. Every refusal leaves by raising, never returning."""
+
+        self.config.require_enabled()
+        bound = await self._bind(workspace)
+        resolved_timeout_s = self.config.resolve_timeout_s(timeout_s)
+        # Read, not consumed: a command the human declines must not spend the
+        # run's allowance. The claim happens after the decision.
+        self.budget.require_available()
+        authorization = await self.policy_gate.authorize(
+            command=command,
+            workspace_label=bound.label if bound is not None else (workspace or ""),
+            available=bound is not None,
+            tool_call_id=_TOOL_CALL_ID.get(),
+        )
+        if bound is None:  # pragma: no cover - Stage 1 denies before this
+            # Unreachable by construction: ``available=False`` makes the PDP's
+            # availability stage DENY, which raises above. Asserted rather than
+            # assumed, because the alternative to this branch is spawning a
+            # command with no bound directory.
+            raise ShellRefusedError(
+                ShellRefusal.unavailable(
+                    ShellRefusalReason.WORKSPACE_UNAVAILABLE, _Note.NO_WORKSPACE
+                )
+            )
+
+        logger.info(
+            "shell.run_command.authorized basis=%s workspace=%s approval=%s",
+            authorization.basis.value,
+            bound.label,
+            authorization.approval_id or "-",
+        )
+        self.budget.consume()
+        request = ShellExecutionRequest(
+            command=command,
+            cwd=bound.root,
+            timeout_s=resolved_timeout_s,
+            env=self.environment.build(
+                bound_root=bound.root,
+                scratch_dir=bound.scratch_dir,
+                source=self.env_source,
+            ),
+            shell_path=self.config.shell_path,
+            output_cap_bytes=self.config.combined_output_preview_bytes,
+            # Phase 1 keeps no spill file: overflow is counted and dropped, and
+            # the truncation notice says so without offering a ref. §13's
+            # scratch-backed spill needs a virtual path minted from the agent's
+            # own scratch, which is the seam this argument becomes.
+            spill_path=None,
+        )
+        try:
+            outcome = await self.executor.run(request)
+        except ShellCommandCancelled as cancelled:
+            # The executor already killed the process group. The partial output
+            # is answered rather than discarded (AC5.2): a user who cancels a
+            # command still gets to see what it printed.
+            outcome = cancelled.outcome
+        return self._json(self._result(outcome, bound.label, resolved_timeout_s))
+
+    async def _bind(self, requested: str | None) -> BoundWorkspace | None:
+        """Resolve the label, or refuse — never fall back to another root.
+
+        Returns ``None`` for "the workspace went away", which the caller threads
+        into the PDP as ``available=False`` so that denial is the PDP's and not a
+        second gate beside it. An unknown LABEL is different in kind: it is a
+        malformed argument rather than a policy question, and it is refused here
+        with the labels that do exist, so the model can correct itself in one
+        turn instead of guessing.
+        """
+
+        view = await self.binding.resolve(requested)
+        if not view.labels:
+            raise ShellRefusedError(
+                ShellRefusal.unavailable(
+                    ShellRefusalReason.NO_WRITABLE_WORKSPACE, _Note.NO_WORKSPACE
+                )
+            )
+        if requested is None:
+            # Ambiguous, and picking for the model would run a command in a
+            # folder nobody named.
+            if len(view.labels) != 1:
+                raise self._unknown_workspace(view.labels)
+        elif requested not in view.labels:
+            raise self._unknown_workspace(view.labels)
+        return view.workspace
+
+    @staticmethod
+    def _unknown_workspace(labels: tuple[str, ...]) -> ShellRefusedError:
+        """One refusal for both ways a label fails to name a workspace.
+
+        "Named nothing, several on offer" and "named one that is not on offer"
+        need the same thing from the model: the closed set, so it can correct
+        itself in one turn.
+        """
+
+        return ShellRefusedError(
+            ShellRefusal.refused(
+                ShellRefusalReason.UNKNOWN_WORKSPACE,
+                _Note.UNKNOWN_WORKSPACE.format(labels=", ".join(labels)),
+            )
+        )
+
+    @staticmethod
+    def _result(
+        outcome: ShellExecutionOutcome, label: str, timeout_s: int
+    ) -> RunCommandResult:
+        """Project one execution outcome into the model-facing result.
+
+        The workspace LABEL is attached here and the host path is not — the
+        result, the event payload and the transcript all carry the label only.
+
+        ``output_total_bytes`` is the one field that does not pass straight
+        through: the outcome always counts the true total, while the result
+        carries it only alongside ``truncated``, because there it is half of a
+        truncation notice rather than a statistic.
+
+        A timeout is the one status that has to SAY something. It reports
+        ``exit_code=None``, so a model reading only the exit code cannot tell a
+        timeout apart from a refusal — it has to be told, in prose, that the
+        command was stopped and that a larger ``timeout_s`` is available (AC5.4).
+        That sentence is :meth:`ShellCommandExecutor.timeout_note`, and this is
+        its one caller.
+        """
+
+        return RunCommandResult(
+            status=outcome.status,
+            exit_code=outcome.exit_code,
+            output=outcome.output,
+            truncated=outcome.truncated,
+            output_total_bytes=(
+                outcome.output_total_bytes if outcome.truncated else None
+            ),
+            duration_ms=outcome.duration_ms,
+            workspace=label,
+            exit_note=(
+                ShellCommandExecutor.timeout_note(timeout_s)
+                if outcome.status is ShellExecutionStatus.TIMEOUT
+                else None
+            ),
+        )
+
+    @staticmethod
+    def _json(result: RunCommandResult) -> str:
+        """Serialise the result, dropping absent fields.
+
+        ``exclude_none`` costs nothing in fidelity — every field it drops is
+        genuinely absent — and a model reading ``exit_code: 0`` still sees it,
+        because zero is not ``None``.
+        """
+
+        return result.model_dump_json(exclude_none=True)
+
+
 class RunCommandToolFactory:
     """Build the model-visible ``run_command`` tool, or return ``None``.
+
+    Separate from :class:`RunCommandTool` because the two answer different
+    questions: this one is "may a shell exist for this run at all", asked once;
+    that one is "may this command run", asked per call.
 
     ``None`` is not an error path — it is the default posture. Three of §7.1's
     four prerequisites are checked here (the deployment flag, a command-capable
@@ -224,10 +425,10 @@ class RunCommandToolFactory:
     about this run. Any one missing ⇒ no tool in the model's list ⇒
     ``NO_SHELL_EXECUTE_GUIDANCE`` ships instead (§17).
 
-    Registration is checked twice on purpose. The tool is absent when the
-    capability is off, AND :meth:`ShellExecutionConfig.require_enabled` fires
-    inside the call — so a future second call path that reaches this coroutine
-    without going through ``build`` still refuses.
+    Registration is checked twice on purpose: the tool is absent when the
+    capability is off, AND ``ShellExecutionConfig.require_enabled`` fires inside
+    the call, so a future second call path that reaches
+    :meth:`RunCommandTool.ainvoke` without going through ``build`` still refuses.
     """
 
     @classmethod
@@ -253,213 +454,26 @@ class RunCommandToolFactory:
             # shell it cannot use.
             return None
 
-        run_executor = executor or ShellCommandExecutor()
-        env_builder = environment or ShellEnvironmentBuilder()
-
-        async def _run_command(
-            command: str,
-            workspace: str | None = None,
-            timeout_s: int | None = None,
-        ) -> str:
-            return await cls._invoke(
-                command=command,
-                workspace=workspace,
-                timeout_s=timeout_s,
-                config=config,
-                binding=binding,
-                policy_gate=policy_gate,
-                budget=budget,
-                executor=run_executor,
-                environment=env_builder,
-                env_source=env_source,
-            )
-
+        tool = RunCommandTool(
+            config=config,
+            binding=binding,
+            policy_gate=policy_gate,
+            budget=budget,
+            executor=executor or ShellCommandExecutor(),
+            environment=environment or ShellEnvironmentBuilder(),
+            env_source=env_source,
+        )
         return _RunCommandTool.from_function(
-            coroutine=_run_command,
+            coroutine=tool.ainvoke,
             name=TOOL_NAME,
             description=TOOL_DESCRIPTION,
             args_schema=RunCommandInput,
         )
 
-    @classmethod
-    async def _invoke(
-        cls,
-        *,
-        command: str,
-        workspace: str | None,
-        timeout_s: int | None,
-        config: ShellExecutionConfig,
-        binding: ShellWorkspaceBinding,
-        policy_gate: ShellCommandPolicyGate,
-        budget: ShellCommandBudget,
-        executor: ShellCommandExecutor,
-        environment: ShellEnvironmentBuilder,
-        env_source: Mapping[str, str] | None,
-    ) -> str:
-        """One call, from validated arguments to a JSON result string.
-
-        Every exit is a :class:`RunCommandResult`. :class:`ShellRefusedError` is
-        caught exactly once, here, and projected — raised at the point that
-        makes the decision so no caller can drop it by forgetting to inspect a
-        union.
-        """
-
-        try:
-            config.require_enabled()
-            bound = await cls._bind(binding=binding, requested=workspace)
-            resolved_timeout_s = config.resolve_timeout_s(timeout_s)
-            # Read, not consumed: a command the human declines must not spend
-            # the run's allowance. The claim happens after the decision.
-            cls._require_budget(budget)
-            authorization = await policy_gate.authorize(
-                command=command,
-                workspace_label=bound.label if bound is not None else (workspace or ""),
-                available=bound is not None,
-                tool_call_id=_TOOL_CALL_ID.get(),
-            )
-        except ShellRefusedError as refused:
-            return cls._json(refused.refusal.as_result())
-
-        if bound is None:  # pragma: no cover - Stage 1 denies before this
-            # Unreachable by construction: ``available=False`` makes the PDP's
-            # availability stage DENY, which raises above. Asserted rather than
-            # assumed, because the alternative to this branch is spawning a
-            # command with no bound directory.
-            return cls._json(
-                ShellRefusal.unavailable(
-                    ShellRefusalReason.WORKSPACE_UNAVAILABLE, _Note.NO_WORKSPACE
-                ).as_result()
-            )
-
-        logger.info(
-            "shell.run_command.authorized basis=%s workspace=%s approval=%s",
-            authorization.basis.value,
-            bound.label,
-            authorization.approval_id or "-",
-        )
-        try:
-            budget.consume()
-        except ShellRefusedError as refused:
-            return cls._json(refused.refusal.as_result())
-
-        request = ShellExecutionRequest(
-            command=command,
-            cwd=bound.root,
-            timeout_s=resolved_timeout_s,
-            env=environment.build(
-                bound_root=bound.root,
-                scratch_dir=bound.scratch_dir,
-                source=env_source,
-            ),
-            shell_path=config.shell_path,
-            output_cap_bytes=config.combined_output_preview_bytes,
-            # Phase 1 keeps no spill file: overflow is counted and dropped, and
-            # the truncation notice says so without offering a ref. §13's
-            # scratch-backed spill needs a virtual path minted from the agent's
-            # own scratch, which is the seam this argument becomes.
-            spill_path=None,
-        )
-        try:
-            outcome = await executor.run(request)
-        except ShellRefusedError as refused:
-            return cls._json(refused.refusal.as_result())
-        except ShellCommandCancelled as cancelled:
-            # The executor already killed the process group. The partial output
-            # is returned rather than discarded (AC5.2): a user who cancels a
-            # command still gets to see what it printed.
-            return cls._json(cls._result(cancelled.outcome, bound.label))
-        return cls._json(cls._result(outcome, bound.label))
-
-    @staticmethod
-    async def _bind(
-        *, binding: ShellWorkspaceBinding, requested: str | None
-    ) -> BoundWorkspace | None:
-        """Resolve the label, or refuse — never fall back to another root.
-
-        Returns ``None`` for "the workspace went away", which the caller threads
-        into the PDP as ``available=False`` so that denial is the PDP's and not a
-        second gate beside it. An unknown LABEL is different in kind: it is a
-        malformed argument rather than a policy question, and it is refused here
-        with the labels that do exist, so the model can correct itself in one
-        turn instead of guessing.
-        """
-
-        view = await binding.resolve(requested)
-        if not view.labels:
-            raise ShellRefusedError(
-                ShellRefusal.unavailable(
-                    ShellRefusalReason.NO_WRITABLE_WORKSPACE, _Note.NO_WORKSPACE
-                )
-            )
-        if requested is None:
-            if len(view.labels) != 1:
-                # Ambiguous, and picking for the model would run a command in a
-                # folder nobody named.
-                raise ShellRefusedError(
-                    ShellRefusal.refused(
-                        ShellRefusalReason.UNKNOWN_WORKSPACE,
-                        _Note.UNKNOWN_WORKSPACE.format(labels=", ".join(view.labels)),
-                    )
-                )
-            return view.workspace
-        if requested not in view.labels:
-            raise ShellRefusedError(
-                ShellRefusal.refused(
-                    ShellRefusalReason.UNKNOWN_WORKSPACE,
-                    _Note.UNKNOWN_WORKSPACE.format(labels=", ".join(view.labels)),
-                )
-            )
-        return view.workspace
-
-    @staticmethod
-    def _require_budget(budget: ShellCommandBudget) -> None:
-        """Refuse an exhausted run before a human is asked about a command.
-
-        Separate from :meth:`ShellCommandBudget.consume` so the ordering is
-        visible: check before the card, claim after the decision. Asking someone
-        to approve a command the run has no allowance left to spawn is a card
-        that cannot lead anywhere.
-        """
-
-        if budget.remaining <= 0:
-            budget.consume()  # raises the typed refusal, with its authored note
-
-    @staticmethod
-    def _result(outcome: object, label: str) -> RunCommandResult:
-        """Project one execution outcome into the model-facing result.
-
-        The workspace LABEL is attached here and the host path is not — the
-        result, the event payload and the transcript all carry the label only.
-        """
-
-        status: ShellExecutionStatus = outcome.status  # type: ignore[attr-defined]
-        truncated: bool = outcome.truncated  # type: ignore[attr-defined]
-        return RunCommandResult(
-            status=status,
-            exit_code=outcome.exit_code,  # type: ignore[attr-defined]
-            output=outcome.output,  # type: ignore[attr-defined]
-            truncated=truncated,
-            output_total_bytes=(
-                outcome.output_total_bytes if truncated else None  # type: ignore[attr-defined]
-            ),
-            duration_ms=outcome.duration_ms,  # type: ignore[attr-defined]
-            workspace=label,
-        )
-
-    @staticmethod
-    def _json(result: RunCommandResult) -> str:
-        """Serialise the result, dropping absent fields.
-
-        ``exclude_none`` costs nothing in fidelity — every field it drops is
-        genuinely absent — and a model reading ``exit_code: 0`` still sees it,
-        because zero is not ``None``.
-        """
-
-        return result.model_dump_json(exclude_none=True)
-
 
 __all__ = [
     "BoundWorkspace",
+    "RunCommandTool",
     "RunCommandToolFactory",
     "ShellWorkspaceBinding",
     "WorkspaceBindingView",
