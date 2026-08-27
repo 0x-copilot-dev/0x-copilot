@@ -192,6 +192,7 @@ def current_capability_registrations() -> tuple[CapabilityRegistration, ...]:
         ("builtin", "run_code_mode", "execution.factory._model_visible_tools"),
         ("builtin", "run_tool_program", "execution.factory._model_visible_tools"),
         ("builtin", "run_in_sandbox", "execution.factory._model_visible_tools"),
+        ("builtin", "run_command", "execution.factory._model_visible_tools"),
         ("builtin", "stage_rowset_write", "execution.factory._model_visible_tools"),
         ("builtin", "write_todos", "langchain.agents.middleware.TodoListMiddleware"),
         ("builtin", "execute", "deepagents.middleware.filesystem.FilesystemMiddleware"),

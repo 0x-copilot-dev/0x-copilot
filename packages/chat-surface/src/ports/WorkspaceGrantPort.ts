@@ -59,6 +59,23 @@ export interface WorkspaceGrant {
   readonly mount: string;
   readonly label: string;
   readonly mode: WorkspaceGrantMode;
+  /**
+   * Whether the agent may RUN COMMANDS in this workspace
+   * (PRD-shell-execution §7.3). Off for every workspace until a human turns it
+   * on for that one folder, in Settings.
+   *
+   * It is NOT a fourth `WorkspaceGrantMode`. The three modes are ordered file
+   * access and a fourth member would read as "more than read_write", which is
+   * the wrong shape twice: running a command is a different kind of authority,
+   * and it is not a superset of write (a read-only folder the user chooses to
+   * run a build in is a coherent thing to want).
+   *
+   * REQUIRED so a host cannot ship a grant list whose command-capability is
+   * `undefined`. A surface that has to fold `undefined` itself is a surface
+   * that eventually folds it the wrong way, and the wrong way here reads as
+   * "commands allowed" on a workspace nobody enabled.
+   */
+  readonly shellEnabled: boolean;
 }
 
 /**
@@ -97,6 +114,20 @@ export type WorkspaceRevokeOutcome =
   | { readonly status: "revoked" }
   | { readonly status: "failed"; readonly message: string };
 
+/**
+ * The result of asking to change one workspace's command permission.
+ *
+ * `applied` carries what the host ACTUALLY holds now, not what was asked for.
+ * The host may honour a request to turn commands OFF on a grant it will not
+ * honour a request to turn them ON for (a revoked or expired workspace), and a
+ * toggle that reported its own optimism as success is how a control ends up
+ * claiming an authority the machine never recorded. A caller compares `applied`
+ * against what it asked and says so when they differ.
+ */
+export type WorkspaceShellAccessOutcome =
+  | { readonly status: "ok"; readonly applied: boolean }
+  | { readonly status: "failed"; readonly message: string };
+
 export interface WorkspaceGrantPort {
   /**
    * Ask the user for a folder. Resolves `granted` with the minted grant,
@@ -116,4 +147,22 @@ export interface WorkspaceGrantPort {
 
   /** Take one grant away. The agent loses that mount on its next read. */
   revokeGrant(grantId: string): Promise<WorkspaceRevokeOutcome>;
+
+  /**
+   * Turn command execution on or off for ONE workspace (§7.3).
+   *
+   * OPTIONAL, and its absence is the whole gate on the control: a host that has
+   * not wired shell execution supplies no implementation, and every surface in
+   * this package renders no toggle rather than a toggle that cannot work — the
+   * same contract that keeps the folder bar off the web. Web will never
+   * implement it; there is no shell in a browser tab.
+   *
+   * It states a VALUE rather than flipping one. "Toggle" makes the outcome
+   * depend on state the caller does not hold, so a retry after a dropped reply,
+   * or two clicks racing, can land on "on" when the user's last act was "off".
+   */
+  setShellEnabled?(
+    grantId: string,
+    enabled: boolean,
+  ): Promise<WorkspaceShellAccessOutcome>;
 }

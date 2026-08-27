@@ -90,6 +90,15 @@
     "model_visible": true
   },
   {
+    "tool_name": "run_command",
+    "capability": "builtin",
+    "op": "run_command",
+    "source": "capabilities.shell.run_command_tool",
+    "kind": "builtin",
+    "execution": "internal",
+    "model_visible": true
+  },
+  {
     "tool_name": "stage_rowset_write",
     "capability": "builtin",
     "op": "stage_rowset_write",

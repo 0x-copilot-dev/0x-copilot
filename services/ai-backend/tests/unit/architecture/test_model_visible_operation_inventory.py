@@ -53,6 +53,10 @@ _PINNED_MODEL_VISIBLE_TOOL_ORDER = (
     "suggest_mcp_connector",
     "run_code_mode",
     "run_in_sandbox",
+    # PRD-shell-execution Phase 1. Composed immediately after the sandbox tool:
+    # the two execution tools sit together, and both stay behind every other
+    # model tool so neither is privileged out of the ordinary middleware lane.
+    "run_command",
     "stage_rowset_write",
     "publish_artifact",
     # Appended last by design: the program is built over the tools composed
@@ -109,6 +113,7 @@ def _fully_enabled_factory_tools(
         mcp_discovery_cache=None,
         code_mode_tool=_tool("run_code_mode"),
         sandbox_execute_tool=_tool("run_in_sandbox"),
+        run_command_tool=_tool("run_command"),
         stage_rowset_write_tool=_FeatureTool("stage_rowset_write"),
         publish_artifact_tool=_FeatureTool("publish_artifact"),
         tool_program_factory=ToolProgramToolFactory(

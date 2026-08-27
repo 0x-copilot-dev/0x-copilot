@@ -90,6 +90,7 @@ export {
 export {
   mostRecentFirst,
   useWorkspaceFolderGrants,
+  WORKSPACE_SHELL_ACCESS_NOTICE,
   type WorkspaceFolderGrantsState,
 } from "./useWorkspaceFolderGrants";
 // === end Workspace folder grants ===

@@ -321,6 +321,20 @@ export {
   DEFAULT_APPROVAL_POLICY,
   type ApprovalPolicyPort,
 } from "./data/toolUsePolicy";
+// Per-workspace shell enablement (PRD-shell-execution §7.3, §14.4). The
+// section body only; the grant list and the setter are host-owned and arrive
+// from `useWorkspaceFolderGrants`, so a host with no
+// `WorkspaceGrantPort.setShellEnabled` mounts nothing.
+export {
+  WorkspaceShellAccess,
+  WORKSPACE_SHELL_ACCESS_TITLE,
+  WORKSPACE_SHELL_ACCESS_META,
+  WORKSPACE_SHELL_ACCESS_EMPTY,
+  WORKSPACE_SHELL_ACCESS_CONFIRM_LABEL,
+  WORKSPACE_SHELL_ACCESS_CANCEL_LABEL,
+  workspaceShellAccessConfirmPrompt,
+  type WorkspaceShellAccessProps,
+} from "./WorkspaceShellAccess";
 // === end Phase 5 (PR-5.6) ===
 
 // === Phase 5 (PR-5.9) — Advanced group (Key storage & app lock · Developer

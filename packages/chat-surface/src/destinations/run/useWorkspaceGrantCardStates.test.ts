@@ -21,6 +21,7 @@ const DOWNLOADS: WorkspaceGrant = {
   mount: "m_9f2c",
   label: "Downloads",
   mode: "read_only",
+  shellEnabled: false,
 };
 
 const ASK: WorkspaceGrantRequest = {
@@ -57,6 +58,12 @@ describe("useWorkspaceGrantCardStates", () => {
     await waitFor(() =>
       expect(result.current.states["appr-fs-1"]).toBe("granted"),
     );
+    // EXACTLY these three keys. `WorkspaceGrantRequestInput` deliberately has
+    // no `shellEnabled` (PRD-shell-execution §7.3): attaching a folder is not
+    // how command execution gets turned on, and a mid-run ask — authored by the
+    // model, answered in one dialog about SHARING a folder — is the last place
+    // that decision should be reachable. `toHaveBeenCalledWith` is exact, so
+    // this assertion fails if the field is ever smuggled onto the request.
     expect(port.requestGrant).toHaveBeenCalledWith({
       path: "/Users/ada/Downloads",
       mode: "read_only",

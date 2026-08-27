@@ -240,6 +240,9 @@ describe("desktop Run cockpit — the mid-run folder ask", () => {
         mode: "read_only",
         label: "Downloads",
         status: "active",
+        // Exact key set — see `parseGrant`. A freshly minted grant is never
+        // command-capable (`CreateGrantInput` has no way to say otherwise).
+        shellEnabled: false,
       },
       [CAPABILITY_CHANNELS.listGrants]: [],
     });

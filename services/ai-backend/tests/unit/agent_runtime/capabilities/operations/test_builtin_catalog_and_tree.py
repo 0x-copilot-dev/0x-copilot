@@ -46,6 +46,7 @@ class TestBuiltinOperationCatalog:
             "publish_artifact",
             "read",
             "run_code_mode",
+            "run_command",
             "run_in_sandbox",
             "run_tool_program",
             "stage_rowset_write",

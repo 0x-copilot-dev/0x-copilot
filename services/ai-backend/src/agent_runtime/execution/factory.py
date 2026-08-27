@@ -36,6 +36,7 @@ from agent_runtime.execution.deep_agent_builder import (
     FILESYSTEM_IS_NOT_SHELL_GUIDANCE,
     NO_SHELL_EXECUTE_GUIDANCE,
     SANDBOX_EXECUTE_GUIDANCE,
+    SHELL_EXECUTE_GUIDANCE,
     WORKSPACE_ACCESS_GUIDANCE,
     WORKSPACE_STAGED_WRITE_GUIDANCE,
     DeepAgentBuildRequest,
@@ -389,6 +390,7 @@ async def _assemble_harness(
             mcp_discovery_cache=runtime_dependencies.mcp_discovery_cache,
             code_mode_tool=runtime_dependencies.code_mode_tool,
             sandbox_execute_tool=runtime_dependencies.sandbox_execute_tool,
+            run_command_tool=runtime_dependencies.run_command_tool,
             tool_program_factory=runtime_dependencies.tool_program_factory,
             stage_rowset_write_tool=runtime_dependencies.stage_rowset_write_tool,
             publish_artifact_tool=runtime_dependencies.publish_artifact_tool,
@@ -450,6 +452,7 @@ async def _assemble_harness(
             code_mode_active=runtime_dependencies.code_mode_tool is not None,
             sandbox_execute_active=runtime_dependencies.sandbox_execute_tool
             is not None,
+            shell_execute_active=runtime_dependencies.run_command_tool is not None,
             control_binding=control_binding,
             task_policy_binding=task_policy_binding,
         )
@@ -1083,6 +1086,7 @@ def _model_visible_tools(
     mcp_discovery_cache: object | None,
     code_mode_tool: object | None = None,
     sandbox_execute_tool: object | None = None,
+    run_command_tool: object | None = None,
     tool_program_factory: object | None = None,
     stage_rowset_write_tool: object | None = None,
     publish_artifact_tool: object | None = None,
@@ -1290,6 +1294,24 @@ def _model_visible_tools(
                 owner=ModelToolOwner.SANDBOX,
             )
         )
+    # PRD-shell-execution — ``run_command``. Appended beside the other gated
+    # capability tools and NOT before them, because it must receive the same
+    # tool-policy / approval / budget middleware every other model tool does:
+    # the one tool in this list that runs a process on the user's own machine is
+    # the last one that should be privileged out of the ordinary lane. Its own
+    # PEP (``capabilities.shell.policy_gate``) is bound inside the tool, so a
+    # call is decided even on a composition that somehow reached the model
+    # without this append site.
+    if run_command_tool is not None:
+        model_tools.append(
+            ModelToolDeclaration.declared(
+                wrap_model_tool_for_shadow(
+                    run_command_tool,
+                    capability="builtin",
+                ),
+                owner=ModelToolOwner.SHELL,
+            )
+        )
     # PRD-D3 — the gated bulk row-set staging tool. Injected as a domain adapter
     # (the worker builds it per run when SURFACES_V2 is on) and wrapped here with
     # its typed schema, like the other builtin tools. Flag off ⇒ `None` ⇒ absent.
@@ -1401,6 +1423,7 @@ def _prompt_assembly_plan(
     workspace_effect_staging: bool,
     code_mode_active: bool,
     sandbox_execute_active: bool,
+    shell_execute_active: bool = False,
     control_binding: RunControlBinding | None,
     task_policy_binding: TaskPolicyRuntimeBinding | None,
 ) -> PromptAssemblyPlan:
@@ -1446,6 +1469,7 @@ def _prompt_assembly_plan(
             instructions="",
             code_mode_active=code_mode_active,
             sandbox_execute_active=sandbox_execute_active,
+            shell_execute_active=shell_execute_active,
         )
     )
     profile_fingerprint = _prompt_scope_fingerprint(
@@ -2834,12 +2858,20 @@ def _instructions_with_capability_tools(
     instructions: str,
     code_mode_active: bool,
     sandbox_execute_active: bool,
+    shell_execute_active: bool = False,
 ) -> str:
     """Append the exact capability boundary for this run.
 
     Positive guidance remains gated on a tool actually being present. The
     filesystem-vs-shell distinction is always stated because the built-in file
-    APIs otherwise tempt models to claim terminal execution they do not have.
+    APIs otherwise tempt models to claim terminal execution they do not have —
+    and it stays true, and still ships, when ``run_command`` IS present (§17).
+
+    ``NO_SHELL_EXECUTE_GUIDANCE`` is the else of BOTH execution tools, not of
+    the sandbox alone. Shipping "this run has no shell/terminal command tool"
+    beside a live ``run_command`` would be the prompt telling the model the
+    opposite of its own tool list, which is how a model talks a user out of a
+    capability it actually has.
     """
 
     blocks = [instructions, FILESYSTEM_IS_NOT_SHELL_GUIDANCE]
@@ -2847,7 +2879,9 @@ def _instructions_with_capability_tools(
         blocks.append(CODE_MODE_GUIDANCE)
     if sandbox_execute_active:
         blocks.append(SANDBOX_EXECUTE_GUIDANCE)
-    else:
+    if shell_execute_active:
+        blocks.append(SHELL_EXECUTE_GUIDANCE)
+    if not (sandbox_execute_active or shell_execute_active):
         blocks.append(NO_SHELL_EXECUTE_GUIDANCE)
     return "\n\n".join(blocks)
 

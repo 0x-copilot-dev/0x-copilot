@@ -423,6 +423,39 @@ class BrokerGrant(_BrokerModel):
     status: Literal["active", "revoked"] = "active"
     mount: str
     root: str | None = None
+    shell_enabled: bool = Field(default=False, alias="shellEnabled", strict=True)
+    """Whether the user enabled SHELL EXECUTION for this workspace.
+
+    PRD-shell-execution §7.3 puts the flag on the grant rather than on the app,
+    because "I trust the agent to run commands in ~/code/my-project" is a
+    different sentence from "I trust the agent to run commands". This field is
+    the runtime's whole read of that decision — §7.1's prerequisite 3 — taken off
+    the active-grant snapshot the worker already pins at run start. There is no
+    new broker verb, and specifically no execution verb: the broker reports what
+    the user chose, it does not run anything.
+
+    DEFAULTS TO FALSE, and that default is load-bearing three times over. The
+    model is ``extra="ignore"`` (see :class:`_BrokerModel`), so an Electron main
+    that predates the field sends nothing and lands here as ``False``. A grant
+    minted before the field existed decodes on the TypeScript side as ``false``
+    and is projected as ``false``. And ``toBrokerGrant`` omits it entirely for a
+    revoked or expired grant, which arrives here as ``False`` again. Every route
+    by which the fact can be missing therefore means "this workspace cannot run
+    commands" — never "it can".
+
+    ``strict=True`` IS THE POINT, and it is the one field on this model that
+    carries it. :class:`_BrokerModel` is lax, and Pydantic's lax bool coercion
+    accepts the JSON strings ``"true"``, ``"yes"``, ``"on"`` and the integer
+    ``1`` — so without it, a wire value of ``"yes"`` decoded to command
+    authority. That is fail-OPEN at the one boundary where the answer decides
+    whether an agent may run code on someone's machine. Strict here refuses
+    anything that is not a JSON ``true``/``false``, and a refusal is a
+    ``ValidationError`` the snapshot read already treats as a protocol failure —
+    i.e. no grants, therefore no command capability. Deliberately scoped to this
+    field rather than the model: making the whole model strict would change how
+    every other field decodes (``capturedAt`` would stop accepting an integer)
+    for reasons that have nothing to do with this flag.
+    """
 
 
 class BrokerGrantSnapshot(_BrokerModel):

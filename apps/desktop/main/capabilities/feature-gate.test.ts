@@ -123,6 +123,7 @@ const fakeCapability = {
   requestFolderGrant: async () => null,
   listGrants: async () => [],
   revokeGrant: async () => null,
+  setGrantShellEnabled: async () => null,
 };
 
 function registerWithGate(env: Record<string, string | undefined>) {
@@ -144,11 +145,12 @@ function registerWithGate(env: Record<string, string | undefined>) {
 }
 
 describe("capability subsystem gate → IPC registration (G4)", () => {
-  it("default (flag unset): all three capability channels are registered", () => {
+  it("default (flag unset): all four capability channels are registered", () => {
     const ipcMain = registerWithGate({});
     expect(ipcMain.has(CAPABILITY_CHANNELS.requestFolderGrant)).toBe(true);
     expect(ipcMain.has(CAPABILITY_CHANNELS.listGrants)).toBe(true);
     expect(ipcMain.has(CAPABILITY_CHANNELS.revokeGrant)).toBe(true);
+    expect(ipcMain.has(CAPABILITY_CHANNELS.setGrantShellEnabled)).toBe(true);
   });
 
   it("explicit opt-out: capability channels are NOT registered (calls fail closed)", () => {
@@ -156,6 +158,11 @@ describe("capability subsystem gate → IPC registration (G4)", () => {
     expect(ipcMain.has(CAPABILITY_CHANNELS.requestFolderGrant)).toBe(false);
     expect(ipcMain.has(CAPABILITY_CHANNELS.listGrants)).toBe(false);
     expect(ipcMain.has(CAPABILITY_CHANNELS.revokeGrant)).toBe(false);
+    // PRD-shell-execution §7.3. With the capability subsystem off there are no
+    // grants, so there is nothing to enable commands ON — and the one channel
+    // that can turn command execution on must not outlive the subsystem that
+    // owns the authority list it writes to.
+    expect(ipcMain.has(CAPABILITY_CHANNELS.setGrantShellEnabled)).toBe(false);
   });
 
   it("unreadable flag value: also NOT registered (fail closed, not fail open)", () => {
@@ -163,6 +170,7 @@ describe("capability subsystem gate → IPC registration (G4)", () => {
     expect(ipcMain.has(CAPABILITY_CHANNELS.requestFolderGrant)).toBe(false);
     expect(ipcMain.has(CAPABILITY_CHANNELS.listGrants)).toBe(false);
     expect(ipcMain.has(CAPABILITY_CHANNELS.revokeGrant)).toBe(false);
+    expect(ipcMain.has(CAPABILITY_CHANNELS.setGrantShellEnabled)).toBe(false);
   });
 });
 

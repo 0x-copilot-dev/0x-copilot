@@ -10,6 +10,9 @@ function grant(overrides: Partial<Grant> = {}): Grant {
     root: "/data/private",
     mode: "read_write",
     label: "private",
+    // Default OFF, stated explicitly: a fixture that omitted it would be the
+    // one place absence is allowed to mean something other than "no commands".
+    shellEnabled: false,
     status: "active",
     createdAt: 1,
     updatedAt: 1,

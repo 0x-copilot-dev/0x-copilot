@@ -485,3 +485,91 @@ describe("<ModelBehaviorPage>", () => {
     expect(onRetry).toHaveBeenCalledTimes(1);
   });
 });
+
+// PRD-shell-execution §7.3 / §14.4 — the "Run commands" list is MOUNTED under
+// the approval policy, and only when the host supplies it.
+//
+// The section's own behaviour is pinned in `WorkspaceShellAccess.test.tsx`.
+// What these two assert is the thing an export alone does not: that the surface
+// is reachable from the page a user actually opens, and that it disappears
+// cleanly on a host that has no shell. A component that is exported, tested and
+// never rendered is the "landed, not wired" defect — and here it would mean the
+// only control that can turn command execution on does not exist in the product.
+describe("<ModelBehaviorPage> — Run commands (§14.4)", () => {
+  it("omits the section entirely when the host supplies nothing", () => {
+    render(
+      <ModelBehaviorPage
+        value={BASE_VALUE}
+        onChange={vi.fn()}
+        controller={makeController()}
+      />,
+    );
+    expect(
+      screen.queryByTestId("workspace-shell-access"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("omits it again when the host supplies a list but no setter", () => {
+    // Two independent gates. The host may know the grants (it renders the
+    // composer's folder bar from the same hook) and still have no way to change
+    // this flag — web is exactly that shape.
+    render(
+      <ModelBehaviorPage
+        value={BASE_VALUE}
+        onChange={vi.fn()}
+        controller={makeController()}
+        workspaceShellAccess={{
+          grants: [
+            {
+              grantId: "g_atlas",
+              mount: "m_atlas",
+              label: "atlas",
+              mode: "read_write",
+              shellEnabled: false,
+            },
+          ],
+          onSetShellEnabled: null,
+        }}
+      />,
+    );
+    expect(
+      screen.queryByTestId("workspace-shell-access"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("renders it after the approval policy when the host wires it", () => {
+    render(
+      <ModelBehaviorPage
+        value={BASE_VALUE}
+        onChange={vi.fn()}
+        controller={makeController()}
+        workspaceShellAccess={{
+          grants: [
+            {
+              grantId: "g_atlas",
+              mount: "m_atlas",
+              label: "atlas",
+              mode: "read_write",
+              shellEnabled: false,
+            },
+          ],
+          onSetShellEnabled: vi.fn(),
+        }}
+      />,
+    );
+    const section = screen.getByTestId("workspace-shell-access");
+    expect(section).toBeInTheDocument();
+    expect(
+      screen.getByTestId("workspace-shell-toggle-g_atlas"),
+    ).not.toBeChecked();
+
+    // ORDER, not just presence. §14.4 places it under the tool-policy surface;
+    // a control that grants command authority must not sit above the policy
+    // that governs how each command is approved.
+    const policy = screen.getByTestId("approval-policy");
+    expect(
+      policy.compareDocumentPosition(section) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+});

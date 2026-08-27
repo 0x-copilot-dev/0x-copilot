@@ -65,6 +65,7 @@ const DOWNLOADS: WorkspaceGrant = {
   mount: "m_9f2c",
   label: "Downloads",
   mode: "read_only",
+  shellEnabled: false,
 };
 
 /** A host that HAS the folder capability — what gates the bar above the frame. */

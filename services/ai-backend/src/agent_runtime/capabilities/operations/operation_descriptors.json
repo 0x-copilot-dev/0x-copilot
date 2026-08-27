@@ -196,6 +196,23 @@
   {
     "descriptor": {
       "capability": "builtin",
+      "op": "run_command",
+      "executor": "builtin",
+      "effect_class": "internal_reversible",
+      "result_kind": "activity",
+      "supports_prepare": false,
+      "supports_reconcile": false,
+      "required_gate_kinds": ["capability", "policy"],
+      "max_inline_result_bytes": 65536
+    },
+    "descriptor_version": "2026-07-24.1",
+    "display_name": "shell command",
+    "timeout_ms": 600000,
+    "unknown_arguments_tighten_to_unknown": true
+  },
+  {
+    "descriptor": {
+      "capability": "builtin",
       "op": "stage_rowset_write",
       "executor": "builtin",
       "effect_class": "external_reversible",

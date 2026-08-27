@@ -31,6 +31,13 @@
 import type { CSSProperties, ReactElement, ReactNode } from "react";
 
 import { Icon } from "../icons/Icon";
+// The package's one byte formatter, reused rather than re-derived. It is a pure
+// function with no substrate touchpoints and no tokens (its own header says
+// so), and the alternative is a THIRD copy of the same eight lines — there is
+// already one in `settings/` and one in `artifacts/useArtifactSurface`. Binary
+// units labelled KB/MB, which is the house answer; picking a different one here
+// would make the same 4.2 MB read two ways in two surfaces.
+import { formatBytes } from "../settings/localModelsFormat";
 import type { ToolCallEntry } from "./eventProjector";
 import { computeLineDiff } from "./lineDiff";
 import { TcFileDiff } from "./TcFileDiff";
@@ -223,15 +230,31 @@ const SEARCH_MAX_ROWS = 40;
  * TWO SOURCES, AND THE LIFECYCLE PICKS. While the call is open there is no
  * result, only `outputPreview` — the rolling tail the projector holds from
  * `tool_call_delta` frames. Once it settles, the tool's own result is
- * authoritative: the runtime tail-keeps it to 64 KiB and puts its truncation
- * notice inside the string (§13), so it says more than the live tail ever can.
- * The preview stays as the fallback for the one case where the result is
- * missing — a run cancelled mid-command — rather than being preferred.
+ * authoritative: the runtime tail-keeps it to 64 KiB and carries the truncation
+ * and exit facts as structured fields (§4.3), so it says more than the live
+ * tail ever can. The preview stays as the fallback for the one case where the
+ * result is missing — a run cancelled mid-command — rather than being
+ * preferred.
  *
- * THE EXIT CODE IS RENDERED, in three states not two. `status === "error"`
- * means the TOOL failed; a non-zero exit means the tool worked and the command
- * did not, and OpenCode showing neither is the defect §14.3 cites. Non-zero is
- * amber, never the destructive hue: `grep` exits 1 on no matches.
+ * THE OUTCOME IS RENDERED, in FOUR states, not two. `status === "error"` on
+ * the card means the TOOL failed; below it,
+ *
+ *   exit 0        the command ran and succeeded            success token
+ *   exit N        the command ran and reported something   WARNING token
+ *   timed out /   the command never produced an exit code  neutral token
+ *   cancelled /
+ *   refused /
+ *   unavailable
+ *   (no chip)     nothing has settled yet
+ *
+ * The middle two are the ones worth being careful about. A non-zero exit is
+ * frequently the POINT — a failing test suite is information, `grep` exits 1 on
+ * no matches — so it is amber and never the destructive hue (§14.3), and
+ * OpenCode showing neither code nor chip is the defect that section cites. And
+ * "the command could not run" is a DIFFERENT fact from "the command returned
+ * 1": §4.3 gives `exit_code: None` to every status but `completed`, so drawing
+ * nothing for those four left a settled timeout looking exactly like a command
+ * still running. The chip is what separates them.
  */
 function CommandBody({ toolCall }: ToolViewBodyProps): ReactElement | null {
   const command = commandText(toolCall);
@@ -246,7 +269,13 @@ function CommandBody({ toolCall }: ToolViewBodyProps): ReactElement | null {
   // Nothing known yet — arguments still streaming, no output, no result. An
   // empty bordered frame claims there is something to look at.
   if (command === null && output === null) return null;
-  const exitCode = settled?.exitCode ?? null;
+  // Only ever said ABOUT the settled output. When the frame below is showing
+  // the live tail instead, the runtime's byte truncation is a fact about a
+  // string that is not on screen, and printing it there would attach the wrong
+  // volumetric claim to the wrong text.
+  const truncation =
+    settled !== null && output !== null ? truncationNote(settled) : null;
+  const exitNote = settled?.exitNote ?? null;
 
   return (
     <div style={panelStyle} data-testid="tc-tool-command">
@@ -260,23 +289,145 @@ function CommandBody({ toolCall }: ToolViewBodyProps): ReactElement | null {
           <code style={commandTextStyle} data-testid="tc-tool-command-text">
             {command}
           </code>
-          {exitCode === null ? null : (
-            <span
-              style={exitCode === 0 ? exitOkStyle : exitNonZeroStyle}
-              data-testid="tc-tool-command-exit"
-              // The state, stamped, so a journey asserts which of the three it
-              // is without reading a colour or a word — the same discipline as
-              // `data-tool-blocked` on the card root.
-              data-exit={exitCode === 0 ? "ok" : "nonzero"}
-            >
-              exit {exitCode}
-            </span>
-          )}
+          <OutcomeChip outcome={settled} />
         </div>
       )}
-      {output === null ? null : <CommandOutput text={output} />}
+      {/* The runtime's own sentence about the exit code ("grep exit 1 means no
+          matches", §4.3). It sits ABOVE the output rather than inside it,
+          because the command it most needs to explain is the one that printed
+          NOTHING — and that command has no output frame for it to live in. */}
+      {exitNote === null ? null : (
+        <p
+          style={output === null ? commandNoteStyle : commandNoteRuledStyle}
+          data-testid="tc-tool-command-exit-note"
+        >
+          {exitNote}
+        </p>
+      )}
+      {output === null ? null : (
+        <CommandOutput text={output} truncation={truncation} />
+      )}
     </div>
   );
+}
+
+/**
+ * The outcome chip — an exit code when there is one, otherwise WHY there is
+ * not.
+ *
+ * Two testids, deliberately, rather than one that changes meaning:
+ * `…-command-exit` keeps saying exactly what it said before this existed — the
+ * process ran and this is its code — and `…-command-status` is the new fact.
+ * A reader (or a journey) asking "did this command exit non-zero" gets the same
+ * answer it always did, and a timeout can no longer answer it by silence.
+ */
+function OutcomeChip({
+  outcome,
+}: {
+  readonly outcome: CommandOutcome | null;
+}): ReactElement | null {
+  if (outcome === null) return null;
+  if (outcome.exitCode !== null) {
+    const ok = outcome.exitCode === 0;
+    return (
+      <span
+        style={ok ? exitOkStyle : exitNonZeroStyle}
+        data-testid="tc-tool-command-exit"
+        // The state, stamped, so a journey asserts which of the three it is
+        // without reading a colour or a word — the same discipline as
+        // `data-tool-blocked` on the card root.
+        data-exit={ok ? "ok" : "nonzero"}
+      >
+        exit {outcome.exitCode}
+      </span>
+    );
+  }
+  const status = didNotCompleteStatus(outcome.status);
+  if (status === null) return null;
+  return (
+    <span
+      style={statusChipStyle}
+      data-testid="tc-tool-command-status"
+      // The raw wire token, not the label — a journey should assert the fact,
+      // and the label is copy that is allowed to be rewritten.
+      data-command-status={status.token}
+      data-exit="none"
+    >
+      {status.label}
+    </span>
+  );
+}
+
+/**
+ * The four §4.3 statuses that carry no exit code, as a chip label — or `null`
+ * when there is nothing honest to draw.
+ *
+ * `completed` returns null on purpose: a completed run whose `exit_code` was
+ * lost in transit has no outcome to report, and "completed" in the slot the
+ * exit code should occupy would read as a success claim nobody made.
+ *
+ * An UNRECOGNISED token renders as itself rather than as nothing, which is this
+ * file's standing rule pointed at an enum instead of a payload shape. The
+ * runtime's `status` is a closed `Literal`, so a token that is not one of these
+ * five means the contract grew — and a chip reading a word the client does not
+ * know is a smaller failure than a settled command that looks like it is still
+ * running. Clipped, because it is still a string off a wire.
+ */
+function didNotCompleteStatus(
+  status: string | null,
+): { readonly token: string; readonly label: string } | null {
+  if (status === null) return null;
+  const token = status.trim();
+  if (token === "" || token === "completed") return null;
+  const label = DID_NOT_COMPLETE_LABELS[token];
+  return {
+    token: token.slice(0, COMMAND_STATUS_TOKEN_CAP),
+    label: label ?? token.slice(0, COMMAND_STATUS_TOKEN_CAP),
+  };
+}
+
+/** Copy for the four §4.3 non-`completed` statuses. Lower case, so the chip
+ *  reads as a state beside "exit 1" rather than as a heading. */
+const DID_NOT_COMPLETE_LABELS: Readonly<Record<string, string>> = {
+  timeout: "timed out",
+  cancelled: "cancelled",
+  refused: "refused",
+  unavailable: "unavailable",
+};
+
+const COMMAND_STATUS_TOKEN_CAP = 24;
+
+/**
+ * "Output truncated — this is the tail of 4.2 MB. The full output was saved."
+ *
+ * WHY THE CARD SAYS THIS AT ALL, when §13 has the runtime put the same sentence
+ * inside `output`: the runtime PREPENDS it, and this view keeps the LAST
+ * `COMMAND_MAX_LINES` — so on any output long enough to be truncated, the
+ * in-string notice is the first thing the line clip throws away. The reader
+ * would lose the fact exactly where it matters most. Read from the structured
+ * fields instead (§4.3 `truncated` / `output_total_bytes` / `output_ref`), it
+ * survives the clip because it is not part of the clipped text.
+ *
+ * It can therefore be said twice — once here, once in the surviving head of the
+ * output — on the narrow class of outputs that hit 64 KiB in under 200 lines
+ * (i.e. averaging 327+ bytes a line). Saying a true thing twice is the right
+ * side to err on against losing it entirely, and de-duplicating would mean
+ * substring-matching a sentence the runtime owns.
+ *
+ * "The full output was saved" is gated on `output_ref` actually being present,
+ * because a promise that a file exists is not one to make from a default.
+ * The virtual path itself is not rendered: `read_file` is the model's way back
+ * to it (§13), and it is not an address a human here can use.
+ */
+function truncationNote(outcome: CommandOutcome): string | null {
+  if (!outcome.truncated) return null;
+  const size =
+    outcome.totalBytes === null ? null : formatBytes(outcome.totalBytes);
+  const head =
+    size === null
+      ? "Output truncated — this is the tail."
+      : `Output truncated — this is the tail of ${size}.`;
+  return outcome.savedFullOutput ? `${head} The full output was saved.` : head;
 }
 
 /** Text worth a frame, or `null`. A command that printed only a newline has
@@ -304,19 +455,43 @@ function nonEmpty(text: string | undefined): string | null {
  * no escapes at all. Quietly STRIPPING them instead would be the worst of the
  * three options: it makes the missing feature look shipped.
  */
-function CommandOutput({ text }: { readonly text: string }): ReactElement {
+function CommandOutput({
+  text,
+  truncation,
+}: {
+  readonly text: string;
+  readonly truncation: string | null;
+}): ReactElement {
   const lines = text.split("\n");
   const shown =
     lines.length > COMMAND_MAX_LINES
       ? lines.slice(lines.length - COMMAND_MAX_LINES)
       : lines;
   const omitted = lines.length - shown.length;
+  // TWO CUTS, TWO SENTENCES, and they are not the same fact. The runtime cut
+  // BYTES at 64 KiB before the string ever left the process; this view cut
+  // LINES to bound what it mounts. Merging them into one line would have to
+  // pick a number, and neither number describes the other cut.
+  //
+  // Both sit ABOVE the output, unlike the read/search footnotes: the tail is
+  // what was kept, so the reader meets "there was more before this" before the
+  // text rather than after scrolling to the bottom of it.
+  const notes = truncation !== null || omitted > 0;
   return (
     <div style={commandOutputWrapStyle}>
-      {omitted > 0 ? (
-        <p style={commandClipNoteStyle} data-testid="tc-tool-command-clipped">
-          {omitted} earlier {omitted === 1 ? "line" : "lines"} not shown
-        </p>
+      {notes ? (
+        <div style={commandNoteStripStyle}>
+          {truncation === null ? null : (
+            <p style={commandNoteStyle} data-testid="tc-tool-command-truncated">
+              {truncation}
+            </p>
+          )}
+          {omitted > 0 ? (
+            <p style={commandNoteStyle} data-testid="tc-tool-command-clipped">
+              {omitted} earlier {omitted === 1 ? "line" : "lines"} not shown
+            </p>
+          ) : null}
+        </div>
       ) : null}
       <pre style={preStyle} data-testid="tc-tool-command-output">
         {shown.join("\n")}
@@ -365,11 +540,23 @@ function commandSubtitle(toolCall: ToolCallEntry): string | null {
  * `output` is always a string — the empty one when the command printed nothing,
  * which is a fact and not an absence. `exitCode` is genuinely nullable: §4.3
  * defines it as `None` for every status other than `completed`, so a timeout
- * has no exit code to show.
+ * has no exit code to show — which is why `status` is carried beside it rather
+ * than used only as a shape gate. The two together are what let the card say
+ * "returned 1" and "could not run" in different words.
+ *
+ * `savedFullOutput` is a BOOLEAN, not the `output_ref` path. §4.3 makes that
+ * path a virtual agent-scratch address the model resolves with `read_file`; it
+ * is not something a reader here can open, so the card keeps the only part of
+ * it that is addressed to a human — that there is one.
  */
 interface CommandOutcome {
+  readonly status: string | null;
   readonly output: string;
   readonly exitCode: number | null;
+  readonly exitNote: string | null;
+  readonly truncated: boolean;
+  readonly totalBytes: number | null;
+  readonly savedFullOutput: boolean;
 }
 
 /**
@@ -392,7 +579,28 @@ function readCommandOutcome(toolCall: ToolCallEntry): CommandOutcome | null {
   if (direct !== null) return direct;
   const text = resultText(toolCall);
   if (text === undefined || text.trim() === "") return null;
-  return parseCommandResult(text) ?? { output: text, exitCode: null };
+  return parseCommandResult(text) ?? unrecognisedResult(text);
+}
+
+/**
+ * A result whose shape this file does not know, carried as its own text and
+ * nothing else.
+ *
+ * Every claim-bearing field is null/false rather than defaulted, so an
+ * unrecognised string can only ever produce the output frame — never an exit
+ * chip, never a "could not run", never a volumetric sentence about a size
+ * nobody reported.
+ */
+function unrecognisedResult(text: string): CommandOutcome {
+  return {
+    status: null,
+    output: text,
+    exitCode: null,
+    exitNote: null,
+    truncated: false,
+    totalBytes: null,
+    savedFullOutput: false,
+  };
 }
 
 /**
@@ -401,20 +609,46 @@ function readCommandOutcome(toolCall: ToolCallEntry): CommandOutcome | null {
  * Gated on `status` AND `output` — both required by the contract — because a
  * command whose own stdout happens to be JSON would otherwise be mistaken for
  * the envelope and rendered as its own metadata.
+ *
+ * `status` is checked as a SHAPE (a string) and not for membership in the
+ * §4.3 literal set. A payload that arrives with a status word this build has
+ * not heard of is still a `RunCommandResult` and its output is still the
+ * command's output; rejecting the record over the enum would drop the whole
+ * thing back to the raw-text path, losing the exit code and the truncation
+ * facts to a field that was never the point of the gate.
  */
 function readCommandResultRecord(
   record: Record<string, unknown>,
 ): CommandOutcome | null {
-  if (typeof record["status"] !== "string") return null;
+  const status = record["status"];
+  if (typeof status !== "string") return null;
   const output = record["output"];
   if (typeof output !== "string") return null;
   const exitCode = record["exit_code"];
+  const exitNote = record["exit_note"];
+  const totalBytes = record["output_total_bytes"];
+  const outputRef = record["output_ref"];
   return {
+    status,
     output,
     exitCode:
       typeof exitCode === "number" && Number.isInteger(exitCode)
         ? exitCode
         : null,
+    exitNote:
+      typeof exitNote === "string" && exitNote.trim() !== "" ? exitNote : null,
+    // `=== true`, never truthiness: a truncation claim is a claim about how
+    // much of the command's output the reader is NOT seeing, and "1" or "yes"
+    // arriving where a boolean was contracted means the producer changed shape
+    // rather than that the answer is yes.
+    truncated: record["truncated"] === true,
+    totalBytes:
+      typeof totalBytes === "number" &&
+      Number.isFinite(totalBytes) &&
+      totalBytes > 0
+        ? totalBytes
+        : null,
+    savedFullOutput: typeof outputRef === "string" && outputRef.trim() !== "",
   };
 }
 
@@ -694,18 +928,48 @@ const exitNonZeroStyle: CSSProperties = {
   color: "var(--color-warning)",
 };
 
+/**
+ * NEITHER of the other two, and that is the whole point of a third style.
+ *
+ * "Timed out", "cancelled", "refused", "unavailable" are not results the
+ * command reported — they are the app, the user, or a configured bound saying
+ * the process never got to report one. Success green would claim an outcome;
+ * amber would put a command that a policy correctly refused, or one the user
+ * chose to stop, in the same register as a failing test run. The quiet token
+ * says "no result" without editorialising about whose decision it was.
+ */
+const statusChipStyle: CSSProperties = {
+  ...exitChipStyle,
+  borderColor: "var(--color-border)",
+  color: "var(--color-text-muted)",
+};
+
 const commandOutputWrapStyle: CSSProperties = {
   display: "flex",
   flexDirection: "column",
   minWidth: 0,
 };
 
-/** The clip notice sits ABOVE the output, unlike the read/search footnotes: the
- *  tail is what was kept, so the reader meets "there was more before this"
- *  before the text rather than after scrolling to the bottom of it. Hence the
- *  border flips sides — the command row above already draws one. */
-const commandClipNoteStyle: CSSProperties = {
-  ...footNoteStyle,
+/** One quiet line of card-authored commentary — the runtime's exit note, the
+ *  truncation sentence, the line clip. Borderless on its own; the strip below
+ *  draws the single rule, so N notes never stack N hairlines. */
+const commandNoteStyle: CSSProperties = {
+  color: "var(--color-text-subtle)",
+  fontFamily: "var(--font-mono)",
+  fontSize: "var(--font-size-mono-9-5)",
+  lineHeight: "14px",
+  margin: 0,
+  padding: "5px 10px",
+};
+
+/** The exit note when output follows it, so the two are separated. Omitted when
+ *  it is the last thing in the panel — a bottom border there would draw a
+ *  second hairline directly above the panel's own. */
+const commandNoteRuledStyle: CSSProperties = {
+  ...commandNoteStyle,
   borderBottom: "1px solid var(--color-border)",
-  borderTop: 0,
+};
+
+const commandNoteStripStyle: CSSProperties = {
+  borderBottom: "1px solid var(--color-border)",
 };

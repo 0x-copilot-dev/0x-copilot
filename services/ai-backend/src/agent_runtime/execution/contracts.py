@@ -724,6 +724,18 @@ class RuntimeDependencies(RuntimeContract):
     # to the model-visible tool set and adds its prompt guidance. ``None``
     # everywhere else, so non-desktop / disabled runs are byte-identical.
     sandbox_execute_tool: object | None = None
+    # Optional gated ``run_command`` tool (PRD-shell-execution Phase 1). Built
+    # per run by ``runtime_worker.shell_composition`` only when ALL FOUR of §7.1
+    # hold: ``RUNTIME_ENABLE_SHELL_EXECUTION``, ``single_user_desktop``, at least
+    # one attached workspace that is writable AND shell-enabled by the user, and
+    # a loadable never-list. ``None`` everywhere else, which is the default
+    # posture rather than a failure — the model's tool surface is then
+    # byte-identical and ``NO_SHELL_EXECUTE_GUIDANCE`` ships (§17).
+    #
+    # Unlike ``sandbox_execute_tool``, this one runs on the user's real machine,
+    # in their folder, with their permissions. Every call is decided by the PDP
+    # and every decision that is not a standing grant draws an approval card.
+    run_command_tool: object | None = None
     # Optional ``run_tool_program`` factory. Unlike the tools above this is a
     # *factory*, not a built tool, because a program's authorized surface is the
     # run's own model-visible toolset — which does not exist until the factory

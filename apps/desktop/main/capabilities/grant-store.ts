@@ -67,6 +67,27 @@ export interface GrantStoreConfig {
   readonly grantTtlMs?: number;
 }
 
+/**
+ * What `create` accepts. It deliberately has NO `shellEnabled`.
+ *
+ * PRD §7.3 item 1 proposes the field here "so the attach flow can set it at
+ * mint time". We went narrower on purpose, and the narrower direction is the
+ * safe one for a default-off execution flag:
+ *
+ * * **Enabling stays exactly one act.** With a mint-time parameter there are
+ *   two ways a workspace becomes command-capable, and the attach flow's way is
+ *   a single click on a dialog the user opened to share a FOLDER. Without it
+ *   there is one path — `setShellEnabled` — reached only from the Settings
+ *   toggle, which names the folder and states §11.5's sentence.
+ * * **Re-attaching cannot launder the flag.** `#supersedeSameRoot` retires the
+ *   previous grant whenever a root is re-picked, so a mint-time parameter would
+ *   be the obvious place to "carry the setting forward" — quietly re-granting
+ *   command authority as a side effect of re-picking a folder. A fresh grant is
+ *   a fresh consent, and it starts off.
+ *
+ * The cost is one extra click for a user who wants both at once. That is the
+ * right trade for the one capability in this app that runs code as them.
+ */
 export interface CreateGrantInput {
   /** Canonical, realpath-resolved absolute directory (from the picker). */
   readonly root: string;
@@ -167,6 +188,10 @@ export class GrantStore implements GrantProvider {
       mode: input.mode,
       label: input.label,
       status: "active",
+      // OFF BY DEFAULT, stated as a literal rather than left to a default so
+      // this line has to be edited (and reviewed) for a newly attached folder
+      // to ever arrive command-capable. See `CreateGrantInput`.
+      shellEnabled: false,
       createdAt: now,
       updatedAt: now,
       rootIdentity,
@@ -258,6 +283,60 @@ export class GrantStore implements GrantProvider {
     this.#grants.set(grantId, revoked);
     await this.#persist();
     return revoked;
+  }
+
+  /**
+   * Turn per-workspace SHELL EXECUTION on or off for ONE existing grant
+   * (PRD-shell-execution §7.3). Returns the updated record, or `null` for an
+   * id the store has never seen.
+   *
+   * THIS IS THE WRITE PATH THAT DID NOT EXIST. Before it, `GrantStore` had
+   * exactly two mutations — `create` and `revoke` — and no way to change an
+   * existing grant at all. That absence is why "the grant record gains a
+   * boolean" is not a field: without this method the only compiling way to
+   * implement the toggle is `create`, and `create` is the wrong tool three
+   * times over. It mints a NEW `grantId` (so every run context, mount table and
+   * renderer pill keyed on the old id is now pointing at a retired grant), it
+   * runs `#supersedeSameRoot` (so the act of enabling a checkbox silently
+   * revokes and reissues the user's folder authority), and the renderer cannot
+   * call it anyway — `requestFolderGrant` needs a host path the renderer is
+   * never given, so the "toggle" would open a native folder picker.
+   *
+   * THE ASYMMETRY IS DELIBERATE. Disabling always succeeds — it can only ever
+   * remove authority, so it must never be blocked by the state of the record.
+   * ENABLING requires a live grant: `isLive` is the one definition of "still
+   * authority" (active AND unexpired), and enabling execution on a revoked or
+   * expired workspace would resurrect it as command-capable the moment anything
+   * re-activated it. An enable against a non-live grant is a NO-OP that
+   * persists nothing and returns the record as it stands, so the caller sees
+   * `shellEnabled: false` and can say so rather than reporting a success that
+   * did not happen.
+   *
+   * Idempotent: setting the value it already holds writes nothing and does not
+   * bump `updatedAt`, so a re-render that re-asserts the current state cannot
+   * churn the encrypted authority file.
+   */
+  async setShellEnabled(
+    grantId: string,
+    enabled: boolean,
+  ): Promise<Grant | null> {
+    await this.#ensureLoaded();
+    const existing = this.#grants.get(grantId);
+    if (existing === undefined) return null;
+    const now = this.#clock();
+    // Enabling needs live authority; disabling never does. `asOf` is what the
+    // caller would have seen from `get`/`list`, so a refused enable reports the
+    // same effective record every other read reports.
+    if (enabled && !isLive(existing, now)) return asOf(existing, now);
+    if (existing.shellEnabled === enabled) return asOf(existing, now);
+    const updated: Grant = {
+      ...existing,
+      shellEnabled: enabled,
+      updatedAt: now,
+    };
+    this.#grants.set(grantId, updated);
+    await this.#persist();
+    return asOf(updated, now);
   }
 
   // --- GrantProvider (broker read-side) ---
@@ -456,6 +535,7 @@ function coerceGrant(row: unknown): Grant {
   const deviceId = r.deviceId;
   const allowedPathPrefixes = r.allowedPathPrefixes;
   const expiresAt = r.expiresAt;
+  const shellEnabled = r.shellEnabled;
   if (
     typeof grantId !== "string" ||
     typeof root !== "string" ||
@@ -472,7 +552,14 @@ function coerceGrant(row: unknown): Grant {
     (allowedPathPrefixes !== undefined &&
       (!Array.isArray(allowedPathPrefixes) ||
         allowedPathPrefixes.some((value) => typeof value !== "string"))) ||
-    (expiresAt !== undefined && typeof expiresAt !== "number")
+    (expiresAt !== undefined && typeof expiresAt !== "number") ||
+    // ABSENT IS FINE — it is the common case, and it is what every grant minted
+    // before shell execution existed looks like. PRESENT-BUT-NOT-A-BOOLEAN is
+    // not: `"true"`, `1` and `{}` are all truthy in JS, so admitting them and
+    // coercing later is how a tampered or corrupted row turns into command
+    // authority. It throws for the same reason a bad `mode` throws — this file
+    // is an authority list, and a list we cannot decode authorizes nothing.
+    (shellEnabled !== undefined && typeof shellEnabled !== "boolean")
   ) {
     throw new Error("grant row has invalid fields");
   }
@@ -482,6 +569,11 @@ function coerceGrant(row: unknown): Grant {
     mode,
     label,
     status,
+    // Absence is folded to `false` HERE, once, so no reader downstream ever
+    // meets `undefined` and has to remember which way to fold it. Spelled
+    // `=== true` rather than `?? false` on purpose: it is the form that still
+    // fails closed if someone later loosens the type check above.
+    shellEnabled: shellEnabled === true,
     createdAt,
     updatedAt,
     rootIdentity: rootIdentity as GrantRootIdentity | undefined,

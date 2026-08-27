@@ -162,6 +162,45 @@ class WorkspaceBackendWorkerWiring:
         )
         return build_workspace_backend(scoped, client=client, grant_gate=gate)
 
+    async def workspace_mounts(self) -> tuple[object, ...]:
+        """The run's active mounts, as ``WorkspaceMount`` objects.
+
+        The SAME broker fact ``granted_host_roots`` reads, one projection
+        earlier: a mount still carries its unique name, its grant mode and — as
+        of PRD-shell-execution §7.3 — whether the user enabled commands for that
+        workspace, all of which a ``GrantedRoot`` has deliberately dropped by the
+        time it is a filesystem rule. The command lane needs the name (it is the
+        label a human approves and a model passes back) and both authorities, so
+        it reads here rather than re-deriving them from rules.
+
+        Degrades exactly like its neighbour, and for the same reason: no broker
+        config yields ``()`` silently (not a desktop image), an unreachable
+        broker yields ``()`` with a warning. Every failure narrows to "no
+        workspace may run a command", never to "any may".
+        """
+
+        # Lazy import: the desktop capability package must not load on the
+        # web / postgres / in-memory worker images.
+        from agent_runtime.capabilities.desktop import (  # noqa: PLC0415
+            BrokerError,
+            WorkspaceBackendConfig,
+            WorkspaceMountTable,
+        )
+
+        config = WorkspaceBackendConfig.from_env(env=self._env)
+        if not config.broker_base_url or not config.broker_token:
+            return ()
+        try:
+            snapshot = await self._broker_client(config).grants_snapshot()
+        except BrokerError as exc:
+            logger.warning(
+                "workspace_backend.mounts_unavailable error_class=%s "
+                "(no workspace can run a command this run)",
+                type(exc).__name__,
+            )
+            return ()
+        return WorkspaceMountTable.from_broker_grants(snapshot.grants)
+
     async def granted_host_roots(self) -> tuple[object, ...]:
         """The host roots the user attached, as ``GrantedRoot`` rule/floor input.
 

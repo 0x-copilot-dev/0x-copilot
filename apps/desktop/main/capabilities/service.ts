@@ -111,6 +111,35 @@ export class CapabilityService {
     return grant === null ? null : toRendererGrant(grant);
   }
 
+  /**
+   * Turn per-workspace SHELL EXECUTION on or off (PRD-shell-execution §7.3).
+   * Returns the updated renderer view, or null for an unknown grant.
+   *
+   * The service adds nothing to `GrantStore.setShellEnabled` and that is the
+   * point: this method exists so the renderer has a reachable seam at all.
+   * `CapabilityService` previously exposed `requestFolderGrant` / `listGrants` /
+   * `revokeGrant` and no mutation of an existing grant, so a Settings toggle had
+   * no method to call — which is how "add a boolean" turns into a channel, a
+   * schema, a handler and a store method.
+   *
+   * WHAT IT REFUSES TO DO: it never mints, never re-picks, and never widens
+   * `mode`. Enabling commands on a folder does not change what may be read or
+   * written there, and detaching the folder remains the way to take everything
+   * away at once.
+   *
+   * The caller is expected to compare the returned `shellEnabled` against what
+   * it asked for. A refused enable (the grant is revoked or expired — see the
+   * store) comes back as the record UNCHANGED rather than as a throw, so the
+   * honest report is "still off", not "done".
+   */
+  async setGrantShellEnabled(
+    grantId: string,
+    enabled: boolean,
+  ): Promise<RendererGrant | null> {
+    const grant = await this.#store.setShellEnabled(grantId, enabled);
+    return grant === null ? null : toRendererGrant(grant);
+  }
+
   // --- broker lifecycle (main-owned) ---
 
   startBroker(): Promise<CapabilityBrokerHandle> {

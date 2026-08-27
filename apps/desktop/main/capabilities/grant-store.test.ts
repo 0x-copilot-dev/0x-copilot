@@ -1,5 +1,12 @@
 // @vitest-environment node
-import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -389,5 +396,324 @@ describe("GrantStore — sensitive-root policy (G2)", () => {
           expect((err as Error).message).not.toContain("secret-person");
         },
       );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Per-workspace SHELL EXECUTION enablement (PRD-shell-execution §7.3).
+//
+// This block is about ONE boolean, and it is long because the boolean decides
+// whether an agent may run code on someone's machine. The four properties it
+// pins are the four ways the flag could be wrong:
+//
+//   1. A workspace with no flag REFUSES. Absence is the common case — every
+//      grant minted before the field existed lacks it — so "off" has to be what
+//      happens when the value is missing, not only when it is explicitly false.
+//   2. Enabling is an EXPLICIT ACT. There is exactly one way in, it is not the
+//      attach flow, and nothing about creating or re-creating a grant reaches it.
+//   3. The flag is PER-WORKSPACE and does not leak across grants.
+//   4. A malformed record FAILS CLOSED — a store we cannot decode authorizes
+//      nothing, rather than decoding to whatever JS finds truthy.
+// ---------------------------------------------------------------------------
+describe("GrantStore — per-workspace shell enablement (§7.3)", () => {
+  let tmp: string;
+
+  beforeEach(() => {
+    idCounter = 0;
+    tmp = mkdtempSync(join(tmpdir(), "cap-grants-shell-"));
+  });
+
+  afterEach(() => {
+    rmSync(tmp, { recursive: true, force: true });
+  });
+
+  function makeStore(clock: () => number = () => 1000, grantTtlMs?: number) {
+    return new GrantStore({
+      userDataDir: tmp,
+      homeDir: TEST_HOME,
+      safeStorage: makeFakeSafeStorage(true),
+      uuid: seqUuid,
+      clock,
+      grantTtlMs,
+    });
+  }
+
+  /**
+   * Write a grant row straight to disk, bypassing `create`, so the decode seam
+   * can be tested against shapes `create` would never mint — including the
+   * legacy row that has no `shellEnabled` key at all. Plaintext because the
+   * fake cipher is not the thing under test here.
+   */
+  function seedRawStore(rows: readonly Record<string, unknown>[]): GrantStore {
+    mkdirSync(join(tmp, "capabilities"), { recursive: true, mode: 0o700 });
+    writeFileSync(
+      join(tmp, "capabilities", "grants.bin"),
+      `ATLASCAPv1:plaintext:${JSON.stringify({ version: 1, grants: rows })}`,
+    );
+    return new GrantStore({
+      userDataDir: tmp,
+      homeDir: TEST_HOME,
+      safeStorage: makeFakeSafeStorage(false),
+      allowPlaintextFallback: true,
+      uuid: seqUuid,
+      clock: () => 1000,
+    });
+  }
+
+  function legacyRow(
+    overrides: Record<string, unknown> = {},
+  ): Record<string, unknown> {
+    return {
+      grantId: "00000000-0000-4000-8000-000000009001",
+      root: "/Users/x/projects/legacy",
+      mode: "read_write",
+      label: "legacy",
+      status: "active",
+      createdAt: 1,
+      updatedAt: 1,
+      ...overrides,
+    };
+  }
+
+  // --- 1. Absent means off -------------------------------------------------
+
+  it("a freshly created grant cannot run commands", async () => {
+    const store = makeStore();
+    const grant = await store.create({
+      root: "/Users/x/projects/atlas",
+      mode: "read_write",
+      label: "atlas",
+    });
+    expect(grant.shellEnabled).toBe(false);
+  });
+
+  it("a grant persisted BEFORE the field existed decodes as off, not undefined", async () => {
+    // The common case, and the one an `undefined`-tolerant reader gets wrong.
+    // `shellEnabled` is REQUIRED on `Grant`, so this asserts the fold happens at
+    // the decode seam — the row has no such key at all.
+    const store = seedRawStore([legacyRow()]);
+    const [grant] = await store.list();
+    expect(grant.shellEnabled).toBe(false);
+    expect(Object.prototype.hasOwnProperty.call(grant, "shellEnabled")).toBe(
+      true,
+    );
+  });
+
+  it("an explicit false on disk is off, and an explicit true is honoured", async () => {
+    // The `true` half exists so the `false`/absent halves above cannot pass by
+    // the flag being unreadable in every direction.
+    const off = seedRawStore([legacyRow({ shellEnabled: false })]);
+    expect((await off.list())[0].shellEnabled).toBe(false);
+
+    rmSync(join(tmp, "capabilities"), { recursive: true, force: true });
+    const on = seedRawStore([legacyRow({ shellEnabled: true })]);
+    expect((await on.list())[0].shellEnabled).toBe(true);
+  });
+
+  // --- 2. Enabling is an explicit act -------------------------------------
+
+  it("setShellEnabled is the ONLY way in — create ignores a smuggled flag", async () => {
+    // `CreateGrantInput` has no `shellEnabled`, so this cannot be written
+    // without a cast; the cast is the point. An attach flow that "helpfully"
+    // forwarded the field would compile against a looser type one refactor from
+    // now, and this asserts the store still mints `false`.
+    const store = makeStore();
+    const grant = await store.create({
+      root: "/Users/x/projects/atlas",
+      mode: "read_write",
+      label: "atlas",
+      shellEnabled: true,
+    } as unknown as Parameters<GrantStore["create"]>[0]);
+    expect(grant.shellEnabled).toBe(false);
+    expect((await store.get(grant.grantId))?.shellEnabled).toBe(false);
+  });
+
+  it("setShellEnabled(true) turns it on and the decision survives a reopen", async () => {
+    const store = makeStore();
+    const grant = await store.create({
+      root: "/Users/x/projects/atlas",
+      mode: "read_write",
+      label: "atlas",
+    });
+    const updated = await store.setShellEnabled(grant.grantId, true);
+    expect(updated?.shellEnabled).toBe(true);
+    expect(updated?.grantId).toBe(grant.grantId); // NOT a new grant
+
+    const reopened = new GrantStore({
+      userDataDir: tmp,
+      safeStorage: makeFakeSafeStorage(true),
+    });
+    expect((await reopened.get(grant.grantId))?.shellEnabled).toBe(true);
+  });
+
+  it("setShellEnabled(false) turns it back off", async () => {
+    const store = makeStore();
+    const grant = await store.create({
+      root: "/Users/x/projects/atlas",
+      mode: "read_write",
+      label: "atlas",
+    });
+    await store.setShellEnabled(grant.grantId, true);
+    const off = await store.setShellEnabled(grant.grantId, false);
+    expect(off?.shellEnabled).toBe(false);
+  });
+
+  it("returns null for an id the store has never seen", async () => {
+    const store = makeStore();
+    expect(
+      await store.setShellEnabled("00000000-0000-4000-8000-00000000dead", true),
+    ).toBeNull();
+  });
+
+  it("re-attaching the same folder does NOT carry command authority forward", async () => {
+    // `#supersedeSameRoot` retires the previous grant when a root is re-picked.
+    // A fresh grant is a fresh consent: the obvious "carry the setting forward"
+    // convenience would re-grant command authority as a side effect of
+    // re-picking a folder in a dialog about SHARING one.
+    const store = makeStore();
+    const root = "/Users/x/projects/atlas";
+    const first = await store.create({ root, mode: "read_write", label: "a" });
+    await store.setShellEnabled(first.grantId, true);
+
+    const second = await store.create({ root, mode: "read_write", label: "a" });
+    expect(second.grantId).not.toBe(first.grantId);
+    expect(second.shellEnabled).toBe(false);
+    // And the superseded grant is gone as authority, not lingering enabled.
+    expect((await store.get(first.grantId))?.status).toBe("revoked");
+  });
+
+  it("enabling is refused on a revoked grant, but disabling always lands", async () => {
+    // Asymmetric on purpose: a control that REMOVES authority must never be
+    // blocked by the state of the record. A control that GRANTS it must be.
+    const store = makeStore();
+    const grant = await store.create({
+      root: "/Users/x/projects/atlas",
+      mode: "read_write",
+      label: "atlas",
+    });
+    await store.setShellEnabled(grant.grantId, true);
+    await store.revoke(grant.grantId);
+
+    const refused = await store.setShellEnabled(grant.grantId, false);
+    expect(refused?.shellEnabled).toBe(false);
+
+    const reEnabled = await store.setShellEnabled(grant.grantId, true);
+    // Reported as the record stands — NOT as a success. A revoked workspace
+    // must not be sitting there command-capable for whatever re-activates it.
+    expect(reEnabled?.shellEnabled).toBe(false);
+    expect(reEnabled?.status).toBe("revoked");
+  });
+
+  it("enabling is refused on an EXPIRED grant", async () => {
+    // Expiry is the failure mode `status === "active"` alone would miss: the
+    // stored literal still says active, and only `isLive` knows better.
+    let now = 1000;
+    const store = makeStore(() => now, 500);
+    const grant = await store.create({
+      root: "/Users/x/projects/atlas",
+      mode: "read_write",
+      label: "atlas",
+    });
+    now = 1_501;
+    const result = await store.setShellEnabled(grant.grantId, true);
+    expect(result?.shellEnabled).toBe(false);
+    expect(result?.status).toBe("revoked");
+  });
+
+  it("is idempotent — re-asserting the current value writes nothing", async () => {
+    let now = 1000;
+    const store = makeStore(() => now);
+    const grant = await store.create({
+      root: "/Users/x/projects/atlas",
+      mode: "read_write",
+      label: "atlas",
+    });
+    now = 2000;
+    const noop = await store.setShellEnabled(grant.grantId, false);
+    expect(noop?.updatedAt).toBe(1000); // not bumped
+    const changed = await store.setShellEnabled(grant.grantId, true);
+    expect(changed?.updatedAt).toBe(2000);
+  });
+
+  // --- 3. Per-workspace, no leakage ---------------------------------------
+
+  it("enabling one workspace leaves every other workspace off", async () => {
+    const store = makeStore();
+    const atlas = await store.create({
+      root: "/Users/x/projects/atlas",
+      mode: "read_write",
+      label: "atlas",
+    });
+    const notes = await store.create({
+      root: "/Users/x/projects/notes",
+      mode: "read_write",
+      label: "notes",
+    });
+    const docs = await store.create({
+      root: "/Users/x/Documents",
+      mode: "read_only",
+      label: "Documents",
+    });
+
+    await store.setShellEnabled(atlas.grantId, true);
+
+    const byId = new Map(
+      (await store.list()).map((g) => [g.grantId, g.shellEnabled]),
+    );
+    expect(byId.get(atlas.grantId)).toBe(true);
+    expect(byId.get(notes.grantId)).toBe(false);
+    expect(byId.get(docs.grantId)).toBe(false);
+
+    // And the same seen through the snapshot the runtime actually reads.
+    const snapshot = await store.snapshotActive();
+    expect(
+      snapshot.grants.filter((g) => g.shellEnabled).map((g) => g.grantId),
+    ).toEqual([atlas.grantId]);
+  });
+
+  it("does not widen mode — a read-only folder stays read-only", async () => {
+    // Command execution is a different authority, not more file access.
+    const store = makeStore();
+    const grant = await store.create({
+      root: "/Users/x/Documents",
+      mode: "read_only",
+      label: "Documents",
+    });
+    const updated = await store.setShellEnabled(grant.grantId, true);
+    expect(updated?.mode).toBe("read_only");
+    expect(updated?.shellEnabled).toBe(true);
+  });
+
+  // --- 4. A malformed record fails closed ---------------------------------
+
+  it.each([
+    ['the string "true"', "true"],
+    ["the number 1", 1],
+    ["an object", {}],
+    ["an array", []],
+    ["null", null],
+  ])("refuses to decode a store whose flag is %s", async (_label, value) => {
+    // Every one of these is TRUTHY in JS (except null, which is the shape a
+    // sloppy `?? false` would silently accept), so admitting them and coercing
+    // later is exactly how a tampered authority file becomes command authority.
+    // The throw is the fail-closed behaviour: an undecodable store yields no
+    // grants, therefore no command capability, rather than a best guess.
+    const store = seedRawStore([legacyRow({ shellEnabled: value })]);
+    await expect(store.list()).rejects.toThrow(/invalid fields/u);
+  });
+
+  it("one malformed row poisons the whole store, not just its own grant", async () => {
+    // Deliberate. A partially-decoded authority list is a list whose contents
+    // depend on which rows happened to parse, and silently dropping the
+    // unreadable one is how the store's answer stops matching the user's
+    // decisions without anything reporting it.
+    const store = seedRawStore([
+      legacyRow({ shellEnabled: false }),
+      legacyRow({
+        grantId: "00000000-0000-4000-8000-000000009002",
+        shellEnabled: "yes",
+      }),
+    ]);
+    await expect(store.list()).rejects.toThrow(/invalid fields/u);
   });
 });

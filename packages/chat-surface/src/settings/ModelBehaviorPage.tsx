@@ -14,6 +14,9 @@
 //                    `ToolUsePolicyPanel` (FR-5.17).
 //   Spend guardrail  Monthly API cap ($, across all provider keys) + Pause-runs-
 //                    at-cap toggle (FR-5.18).
+//   Run commands     the <WorkspaceShellAccess> per-workspace list
+//                    (PRD-shell-execution §7.3, §14.4). Host-supplied and
+//                    OPTIONAL — omitted entirely on a host with no shell.
 //
 // SUBSTRATE-AGNOSTIC + CONTROLLED. The page reflects `value` and reports each
 // edit through `onChange` (a shallow `Partial<ModelBehaviorValue>`; nested
@@ -44,6 +47,10 @@ import { ApprovalPolicy, type ApprovalPolicyValue } from "./ApprovalPolicy";
 import { Frow, SecTitle, SetCard, SetNote } from "./SettingsChrome";
 import type { SettingsSurfaceController } from "./SettingsSurface";
 import type { MutedConnector } from "./useConnectorSuggestions";
+import {
+  WorkspaceShellAccess,
+  type WorkspaceShellAccessProps,
+} from "./WorkspaceShellAccess";
 
 // ---------------------------------------------------------------------------
 // Vocabulary.
@@ -185,6 +192,23 @@ export interface ModelBehaviorPageProps {
   readonly mutedConnectors?: readonly MutedConnector[];
   /** Un-mute a slug; omitted → the rows render inert. */
   readonly onUnmuteConnector?: (slug: string) => void;
+  /**
+   * Per-workspace SHELL EXECUTION (PRD-shell-execution §7.3, §14.4) — the
+   * "Run commands" list, rendered directly under the approval policy because
+   * §14.4 puts it "under the existing tool-policy surface".
+   *
+   * PROPS, NOT A PORT. This page stays substrate-agnostic and calls no hook:
+   * the host owns `useWorkspaceFolderGrants` and hands the live grant list plus
+   * the setter down. That is also the gate — a host that has not wired shell
+   * execution (web, which has no shell, and any desktop build with the feature
+   * off) passes nothing and the section is ABSENT rather than present-and-inert.
+   *
+   * NOT part of `value`/`onChange`. Those feed the dirty computation and the
+   * SaveBar; a security permission must not sit unsaved behind a Save button
+   * the user might never press, so this applies immediately through its own
+   * host callback.
+   */
+  readonly workspaceShellAccess?: WorkspaceShellAccessProps | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -261,6 +285,7 @@ export function ModelBehaviorPage({
   onRetry,
   mutedConnectors = [],
   onUnmuteConnector,
+  workspaceShellAccess = null,
 }: ModelBehaviorPageProps): ReactElement {
   const reactId = useId();
   const defaultModelId = `${reactId}-default-model`;
@@ -493,6 +518,17 @@ export function ModelBehaviorPage({
         value={value.approvalPolicy}
         onChange={(approvalPolicy) => onChange({ approvalPolicy })}
       />
+
+      {/* Per-workspace shell execution (PRD-shell-execution §7.3, §14.4).
+          Directly under the approval policy: the policy above says HOW an
+          action is approved, this says WHERE commands may run at all — and
+          both are the same question ("what may the agent do") at different
+          altitudes. Absent when the host supplies nothing, and absent again
+          when the host supplies no setter (the component returns null), so a
+          build without shell execution shows no trace of it. */}
+      {workspaceShellAccess !== null ? (
+        <WorkspaceShellAccess {...workspaceShellAccess} />
+      ) : null}
 
       {/* Suggestion appetite. Posture, like the approval policy above it —
           which app the agent may reach is the Tools destination's job. */}
