@@ -37,6 +37,14 @@ export type SubagentPolicyMode = "auto" | "ask" | "require" | "block";
  * model carries it and an app round-tripping a definition must not drop it: a
  * PUT replaces, so a dropped rule silently changes the child's filesystem
  * reach.
+ *
+ * A rule is a **ceiling request, not a grant**. The server accepts any
+ * `/`-rooted path, then clamps the stored rules to what the run itself already
+ * permits: an `allow` survives only where the parent agent already allows that
+ * operation on that ground, and the run's own boundary applies to everything
+ * the rule does not name. A `deny` always survives. So `allow` over `/**`
+ * validates, stores, and grants nothing — an editor should present these as
+ * narrowing, never as a way to reach further.
  */
 export interface SubagentFilesystemPermission {
   readonly operations?: readonly ("read" | "write" | "execute")[];

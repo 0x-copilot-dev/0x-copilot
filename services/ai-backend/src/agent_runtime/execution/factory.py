@@ -287,11 +287,6 @@ async def _assemble_harness(
     between the listing pass and the builder kickoff.
     """
 
-    # Translate SubagentDefinition.fs_permissions to deepagents'
-    # FilesystemPermission rules so subagents only get write access to
-    # ``/drafts/`` (and other privileged prefixes) when their definition
-    # explicitly grants it.
-    deepagents_subagents = _subagents_with_fs_permissions(subagents)
     memory_backend = runtime_dependencies.memory_backend_factory.create(runtime_context)
     workspace_backend = runtime_dependencies.workspace_backend
     # Host writes are live only when the workspace backend reports write
@@ -316,6 +311,24 @@ async def _assemble_harness(
     # than re-read so "the run's scratch" is a single value with a single
     # lifetime, not a phrase that means whatever the env said at each call.
     agent_scratch = _agent_scratch_root()
+    # This run's filesystem boundary, resolved ONCE, for the same reason as the
+    # two values above and one more: it is both what the supervisor runs under
+    # and the ceiling every declared subagent's own rules are clamped to. Two
+    # calls would be two answers, and a child clamped to a boundary the parent
+    # is not running under is not clamped to anything.
+    host_filesystem_permissions = _host_filesystem_permissions(
+        workspace_backend,
+        granted_host_roots=granted_host_roots,
+        agent_scratch=agent_scratch,
+        bypass=runtime_context.filesystem_bypass,
+    )
+    # Translate SubagentDefinition.fs_permissions to deepagents'
+    # FilesystemPermission rules so subagents only get write access to
+    # ``/drafts/`` (and other privileged prefixes) when their definition
+    # explicitly grants it AND the parent's own boundary already permits it.
+    deepagents_subagents = _subagents_with_fs_permissions(
+        subagents, parent_rules=host_filesystem_permissions
+    )
     deep_backend = _composed_deep_backend(
         runtime_dependencies.subagent_artifacts_backend,
         drafts_backend=runtime_dependencies.drafts_backend,
@@ -573,12 +586,7 @@ async def _assemble_harness(
                 # context — never re-resolved here — so a Settings change
                 # mid-flight cannot retro-authorize a run that started under a
                 # different posture.
-                permissions=_host_filesystem_permissions(
-                    workspace_backend,
-                    granted_host_roots=granted_host_roots,
-                    agent_scratch=agent_scratch,
-                    bypass=runtime_context.filesystem_bypass,
-                ),
+                permissions=host_filesystem_permissions,
                 checkpointer=runtime_checkpointer(),
                 extra_model_kwargs=extra_model_kwargs or None,
                 middleware=(
@@ -2888,18 +2896,41 @@ def _parse_dependencies(
 
 def _subagents_with_fs_permissions(
     subagents: tuple[object, ...],
+    *,
+    parent_rules: tuple[object, ...],
 ) -> tuple[object, ...]:
-    """Attach deepagents ``FilesystemPermission`` rules to subagents that need them.
+    """Attach the CLAMPED ``FilesystemPermission`` rules a declared subagent gets.
 
     For each :class:`SubagentDefinition` whose ``fs_permissions`` is non-empty,
-    we attach the translated rules onto the object. Subagents whose
-    definition has no ``fs_permissions`` are passed through unchanged so the
-    deepagents middleware applies the parent agent's permissions to them
-    (the existing default).
+    the declared rules are narrowed against ``parent_rules`` — this run's own
+    boundary, as built by :func:`_host_filesystem_permissions` — and the parent's
+    list is appended behind the survivors. Subagents whose definition has no
+    ``fs_permissions`` are passed through unchanged so the deepagents middleware
+    applies the parent agent's permissions to them (the existing default).
 
-    The translation is best-effort: if deepagents is unavailable at import
-    time, or if the subagent isn't a SubagentDefinition, we pass through
-    unchanged. Tests assert the rule list shape, not deepagents internals.
+    Why the clamp is not optional. deepagents resolves a subagent's rules as
+    ``spec.get("permissions", permissions)`` — a REPLACEMENT — and its matcher
+    answers ``allow`` for any path no rule mentions. A definition is user-authored
+    (``PUT /v1/agent/subagents/{name}``) and its only validation is "starts with
+    ``/``, no ``..`` or ``~``", so ``allow read+write /**`` validates. Before this
+    clamp that list arrived at the middleware verbatim, replacing every rule the
+    supervisor runs under, including rule 4's ``interrupt`` on every other read
+    and rule 5's ``deny`` on every other write. A definition could therefore hold
+    ground the parent does not. It cannot now: the narrowing is
+    :meth:`SubagentAuthorityPolicy.narrow_fs_permissions`, the same module every
+    sibling axis (tools, skills, scopes, approval posture) already narrows
+    through, so there is one place that owns "a child never exceeds its parent".
+
+    ``parent_rules`` is required rather than defaulted, and the reason is the
+    rule this whole seam broke: an empty list means "this run has no filesystem
+    boundary" (the hosted images, where the supervisor is likewise unrestricted
+    over a virtual-only backend), and it must never be able to mean "the caller
+    forgot to measure one".
+
+    The translation is best-effort in one direction only: if deepagents is
+    unavailable at import time, or if the subagent isn't a SubagentDefinition,
+    we pass through unchanged — the object then carries no ``permissions`` at
+    all, which is inheritance, not widening.
     """
 
     if not subagents:
@@ -2910,23 +2941,38 @@ def _subagents_with_fs_permissions(
         )
     except ImportError:  # pragma: no cover — deepagents always present in prod
         return subagents
+    from agent_runtime.delegation.subagents.authority import (  # noqa: PLC0415
+        FilesystemGrant,
+        SubagentAuthorityPolicy,
+    )
     from agent_runtime.delegation.subagents.contracts import (  # noqa: PLC0415
         SubagentDefinition,
     )
 
+    parent_grants = FilesystemGrant.from_rules(parent_rules)
     translated: list[object] = []
     for subagent in subagents:
         specs = getattr(subagent, "fs_permissions", None) or ()
         if not isinstance(subagent, SubagentDefinition) or not specs:
             translated.append(subagent)
             continue
+        # Never empty for a non-empty definition — the clamp returns the
+        # parent's list when every declared rule is refused, and the definition
+        # itself when there is no parent list. That matters: attaching ``[]``
+        # would be the WIDEST possible answer, because deepagents reads an empty
+        # rule list as "nothing matches, therefore allow". The invariant is
+        # pinned by ``TestNarrowFsPermissions``, not restated as a branch here.
+        effective = SubagentAuthorityPolicy.narrow_fs_permissions(
+            parent=parent_grants,
+            definition=FilesystemGrant.from_rules(specs),
+        )
         rules = [
             FilesystemPermission(
-                operations=list(spec.operations),
-                paths=list(spec.paths),
-                mode=spec.mode,
+                operations=list(grant.operations),
+                paths=list(grant.paths),
+                mode=grant.mode,
             )
-            for spec in specs
+            for grant in effective
         ]
         # The deepagents subagent contract reads ``permissions`` off the
         # subagent object. We attach the rules as a non-Pydantic attribute
