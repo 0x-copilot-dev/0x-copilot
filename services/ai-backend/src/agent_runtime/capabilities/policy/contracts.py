@@ -55,11 +55,23 @@ class Action(StrEnum):
     ``actions.ActionClass`` (READ/WRITE only, which collapses destructive to
     WRITE at ``actions/classifier.py:60-61``), the migrated descriptor stops
     collapsing it so the §2 matrix can hard-gate destructive in Manual.
+
+    ``EXECUTE`` is running a shell command, and it is a fourth axis rather than
+    a reuse of ``DESTRUCTIVE`` for two reasons. One knob would answer two
+    questions — ``destructive: block`` to stop connector deletions would also
+    stop ``npm test``. And ``WRITE`` is disqualified outright: ``WRITE``
+    auto-runs under ``BYPASS``, so classing a command as ``WRITE`` would mean
+    the composer bypass pill silently turns on unattended shell execution. A
+    command is exactly the "second way to touch the disk" that pill's own
+    module says it never creates. No source emits this today; the only thing
+    that reads it is the EXECUTE rung in
+    ``policy/service.py::_posture_decision``.
     """
 
     READ = "read"
     WRITE = "write"
     DESTRUCTIVE = "destructive"
+    EXECUTE = "execute"
 
 
 class Posture(StrEnum):

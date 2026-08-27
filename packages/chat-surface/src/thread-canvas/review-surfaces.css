@@ -1233,6 +1233,62 @@
   margin-top: var(--space-xs);
 }
 
+/* --- command: the literal shell line a `run_command` ask will execute ------
+ *
+ * PRD-shell-execution §14.1. Sibling of the preview above and styled like one
+ * on purpose — both are "the exact thing that will leave this machine, shown
+ * verbatim" — with three differences that are not cosmetic:
+ *
+ * `font-family: var(--font-mono)`, because a command is read TOKEN BY TOKEN.
+ * `rm -rf ./build` and `rm -rf . /build` differ by one space, and a
+ * proportional face is where that space goes to hide.
+ *
+ * `white-space: pre-wrap` on a `<pre>` whose UA default is `pre`: a command's
+ * newlines and its runs of spaces are semantic and must survive, but a long
+ * single line must WRAP rather than scroll sideways. A horizontal scroller here
+ * would put the tail of a command — where a pipe into `sh` would sit — off
+ * screen behind a gesture, on the one card whose entire job is to show what
+ * runs.
+ *
+ * Capped AND scrollable together, the rule this file already learned from the
+ * preview: a cap alone clips in silence, and consent cannot be given over a
+ * command whose tail is invisible.
+ *
+ * `overflow-wrap` deliberately absent — `.tc-write-gate__body *` above owns it
+ * for every text node in here, same as the preview, so there is one place to
+ * change it. That rule is what stops an unbreakable 400-character token from
+ * setting the grid track's width and pushing the header's decision controls
+ * past a frame that is `overflow: hidden`. */
+.tc-write-gate__command {
+  background: var(--color-surface-muted);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  color: var(--color-text);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-base);
+  margin: 0;
+  max-height: 13rem;
+  overflow-y: auto;
+  padding: var(--space-sm) var(--space-md);
+  white-space: pre-wrap;
+}
+
+/* "Changes made by a command can't be undone from here."
+ *
+ * Directly under the command, and never a chip or a hover: it is the second of
+ * the three places §10.2 states the concession, and the only one attached to
+ * the decision itself. Quiet register — the same rung as the scope note — for
+ * the reason the reversibility line it replaces gives: stated as a fact about
+ * the act, not as a warning about this choice, because a caution here would
+ * make the safe option look like the risky one. */
+.tc-write-gate__no-undo {
+  color: var(--color-text-subtle);
+  font-size: var(--font-size-xs);
+  letter-spacing: var(--tracking-caption);
+  margin: 0;
+}
+
 /* Which run, against which account. Quiet by construction: it is attribution,
    never the thing being consented to. */
 .tc-write-gate__provenance {

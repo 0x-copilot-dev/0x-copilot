@@ -12,7 +12,11 @@ Exhaustive over the decision surface the design specifies:
 * the ``untrusted_read_gate`` knob and workspace tightening of reads;
 * DENY-first ordering (availability outermost);
 * the safe, non-leaking reason vocabulary (assert the typed decision AND the
-  exact reason code, and that the code echoes no connector / scope / identity).
+  exact reason code, and that the code echoes no connector / scope / identity);
+* the ``EXECUTE`` rung — that a command GATEs under ``BYPASS`` rather than
+  auto-running, that an authored ``RuleAction.ALLOW`` still wins over it, and
+  that it fires for nothing else (:class:`TestExecuteRungUnderBypass`,
+  :class:`TestLegacyAxesAreUnmoved`).
 
 Fakes + builders live in :class:`PolicyServiceFixtureMixin` per
 ``tests/CLAUDE.md``; concrete test classes hold only ``test_*`` methods.
@@ -67,6 +71,7 @@ class PolicyServiceFixtureMixin:
             "approval_required.read",
             "approval_required.write",
             "approval_required.destructive",
+            "approval_required.execute",
         }
     )
 
@@ -412,6 +417,44 @@ class TestApprovalMatrixDefaultSnapshot(PolicyServiceFixtureMixin):
                 Posture.BYPASS,
                 PolicyDecision.GATE,
                 "approval_required.destructive",
+            ),
+            # EXECUTE — trust-independent AND posture-independent: GATE in BOTH
+            # postures, on the deployment default (execute=ask).
+            #
+            # Trust-independent because trust is a statement about the connector
+            # that emitted the capability, and a command's danger is in the
+            # command; posture-independent because the bypass pill means "writes
+            # auto" and a shell command is exactly the second way to touch the
+            # disk that pill promises never to create. The rung that makes the
+            # BYPASS cells GATE rather than ALLOW is asserted directly by
+            # `TestExecuteRungUnderBypass`.
+            (
+                Action.EXECUTE,
+                Trust.TRUSTED,
+                Posture.MANUAL,
+                PolicyDecision.GATE,
+                "approval_required.execute",
+            ),
+            (
+                Action.EXECUTE,
+                Trust.UNTRUSTED,
+                Posture.MANUAL,
+                PolicyDecision.GATE,
+                "approval_required.execute",
+            ),
+            (
+                Action.EXECUTE,
+                Trust.TRUSTED,
+                Posture.BYPASS,
+                PolicyDecision.GATE,
+                "approval_required.execute",
+            ),
+            (
+                Action.EXECUTE,
+                Trust.UNTRUSTED,
+                Posture.BYPASS,
+                PolicyDecision.GATE,
+                "approval_required.execute",
             ),
         ],
     )
@@ -853,6 +896,519 @@ class TestDestructiveRungUnderBypass(PolicyServiceFixtureMixin):
             )
             assert decision is PolicyDecision.ALLOW
             assert reason == ""
+
+
+class TestExecuteRungUnderBypass(PolicyServiceFixtureMixin):
+    """The EXECUTE rung: the security property, and the two things that lift it.
+
+    ``EXECUTE`` is not an enum addition with a test — it is a *position* in
+    ``_posture_decision``'s ladder, and the enum is inert without it. Delete the
+    branch and an ``EXECUTE`` call falls straight through to rung 3.6
+    (``if posture is BYPASS: return ALLOW``), so flipping the composer bypass
+    pill would auto-run shell commands with no gate at all — while every enum
+    test still passed. :meth:`test_bypass_gates_execute` is the test that stops
+    that: it is red with the rung removed, which is the only property that makes
+    the rung undeletable.
+
+    The rung sits in the one slot satisfying both constraints — above 3.6 so no
+    posture lifts it, below 3.5 so an authored ``RuleAction.ALLOW`` still
+    resolves to ALLOW (:meth:`test_a_rule_allow_still_wins`, the prerequisite
+    for a run-scoped always-grant).
+    """
+
+    @pytest.mark.parametrize("trust", list(Trust))
+    def test_bypass_gates_execute(self, trust: Trust) -> None:
+        # THE security property. BYPASS means "writes auto"; a shell command is
+        # exactly the second way to touch the disk the bypass module says it
+        # never creates, and it is invisible to every path-keyed filesystem
+        # control we own — so a human reading the literal command before it runs
+        # is not one control among several, it is the control.
+        service = self._service()
+        descriptor = self._descriptor(action=Action.EXECUTE, trust=trust)
+        decision, reason = self._decide(
+            service, descriptor=descriptor, posture=Posture.BYPASS
+        )
+        assert decision is PolicyDecision.GATE
+        assert decision is not PolicyDecision.ALLOW
+        assert reason == "approval_required.execute"
+
+    @pytest.mark.parametrize("mode", ["ask", "require"])
+    @pytest.mark.parametrize("posture", list(Posture))
+    def test_an_authored_non_auto_axis_gates_in_every_posture(
+        self, posture: Posture, mode: str
+    ) -> None:
+        service = self._service(snapshot=self._snapshot(execute=mode))
+        decision, reason = self._decide(
+            service,
+            descriptor=self._descriptor(action=Action.EXECUTE),
+            posture=posture,
+        )
+        assert decision is PolicyDecision.GATE
+        assert reason == "approval_required.execute"
+
+    def test_execute_gate_is_not_a_refusal(self) -> None:
+        # GATE, never DENY. A refusal would make BYPASS strictly worse than
+        # MANUAL for commands, which is not the asymmetry being ported: the user
+        # keeps the ability to say yes on a card that names the command; what
+        # they lose is having said yes in advance, via a pill, to the class.
+        service = self._service()
+        for posture in Posture:
+            decision, _ = self._decide(
+                service,
+                descriptor=self._descriptor(action=Action.EXECUTE),
+                posture=posture,
+            )
+            assert decision is not PolicyDecision.DENY
+
+    def test_a_rule_allow_still_wins(self) -> None:
+        # The BELOW-3.5 half of the position. A run-scoped always-grant is an
+        # authored ``RuleAction.ALLOW`` row in ``_rules``; if the EXECUTE rung
+        # sat above 3.5 it would eat the very grant it exists to answer, and
+        # "don't ask me forty times about pytest" would be unbuildable. Approval
+        # fatigue is itself a security failure, so this direction matters too.
+        service = self._service(
+            rules=PermissionRuleset(
+                rules=(
+                    PermissionRule(
+                        permission="*", pattern="*", action=RuleAction.ALLOW
+                    ),
+                )
+            )
+        )
+        descriptor = self._descriptor(action=Action.EXECUTE)
+        for posture in Posture:
+            decision, reason = self._decide(
+                service, descriptor=descriptor, posture=posture
+            )
+            assert decision is PolicyDecision.ALLOW
+            assert reason == ""
+
+    def test_a_rule_allow_is_scoped_to_its_pattern(self) -> None:
+        # ...and the grant is a rule, not a switch: a call whose subjects miss
+        # the pattern still gates. Otherwise "always allow pytest" would be
+        # "always allow anything".
+        service = self._service(
+            rules=PermissionRuleset(
+                rules=(
+                    PermissionRule(
+                        permission="*", pattern="pytest*", action=RuleAction.ALLOW
+                    ),
+                )
+            )
+        )
+        descriptor = self._descriptor(action=Action.EXECUTE)
+        granted, granted_reason = self._decide(
+            service,
+            descriptor=descriptor,
+            args={"command": "pytest -q"},
+            posture=Posture.BYPASS,
+        )
+        assert (granted, granted_reason) == (PolicyDecision.ALLOW, "")
+        other, other_reason = self._decide(
+            service,
+            descriptor=descriptor,
+            args={"command": "rm -rf /"},
+            posture=Posture.BYPASS,
+        )
+        assert other is PolicyDecision.GATE
+        assert other_reason == "approval_required.execute"
+
+    @pytest.mark.parametrize("posture", list(Posture))
+    def test_authoring_the_axis_to_auto_is_the_one_lift(self, posture: Posture) -> None:
+        # "Posture ≠ policy", the same exception rung 3.4 makes: ``execute=auto``
+        # is a statement about commands written where policy is written, so it
+        # still decides. This is what keeps the rung strictly additive.
+        service = self._service(snapshot=self._snapshot(execute="auto"))
+        decision, reason = self._decide(
+            service,
+            descriptor=self._descriptor(action=Action.EXECUTE),
+            posture=posture,
+        )
+        assert decision is PolicyDecision.ALLOW
+        assert reason == ""
+
+    @pytest.mark.parametrize("posture", list(Posture))
+    def test_a_workspace_block_still_denies_above_the_rung(
+        self, posture: Posture
+    ) -> None:
+        # 3.2 is terminal and sits above the rung: an admin prohibition is a
+        # DENY, not a card.
+        service = self._service(snapshot=self._snapshot(execute="block"))
+        decision, reason = self._decide(
+            service,
+            descriptor=self._descriptor(action=Action.EXECUTE),
+            posture=posture,
+        )
+        assert decision is PolicyDecision.DENY
+        assert reason == "permission_denied"
+
+    def test_the_connector_write_override_does_not_lift_the_rung(self) -> None:
+        # ``allow_always`` is a WRITE-axis downgrade (3.8) and EXECUTE is not the
+        # WRITE axis — the whole point of not reusing an existing axis.
+        service = self._service(
+            overrides=self._overrides({self._CONNECTOR: "allow_always"})
+        )
+        descriptor = self._descriptor(action=Action.EXECUTE)
+        for posture in Posture:
+            decision, reason = self._decide(
+                service, descriptor=descriptor, posture=posture
+            )
+            assert decision is PolicyDecision.GATE
+            assert reason == "approval_required.execute"
+
+    def test_the_never_list_still_denies_above_the_rung(self) -> None:
+        service = self._service(
+            never=PermissionRuleset(
+                rules=(PermissionRule(pattern="*sudo*", action=RuleAction.DENY),)
+            ),
+            snapshot=self._snapshot(execute="auto"),
+        )
+        decision, reason = self._decide(
+            service,
+            descriptor=self._descriptor(action=Action.EXECUTE),
+            args={"command": "sudo rm -rf /"},
+            posture=Posture.BYPASS,
+        )
+        assert decision is PolicyDecision.DENY
+        assert reason == "permission_denied"
+
+
+class TestLegacyAxesAreUnmoved(PolicyServiceFixtureMixin):
+    """The EXECUTE rung moved no decision for READ, WRITE or DESTRUCTIVE.
+
+    :attr:`_GOLDEN` is frozen from the implementation as it stood *before* the
+    rung existed (``git show HEAD:...policy/service.py``), captured by a
+    differential sweep of 960 cells — every ``(action × trust × posture × axis
+    mode × untrusted_read_gate × connector override × rule action)`` combination
+    for the three pre-existing axes — which reported zero mismatches. So these
+    expectations are not this code describing itself; they are the previous
+    code's answers, written down.
+
+    :meth:`test_the_execute_rung_never_fires_off_its_own_axis` re-runs that
+    cross-product here and asserts the one thing the golden table cannot: the
+    new reason code never appears on a call that is not an ``EXECUTE``.
+    """
+
+    #: (action, trust, posture, axis mode | None) → (decision, reason), under
+    #: the default knobs (untrusted reads gated, no override, no rules).
+    _GOLDEN: dict[tuple[Action, Trust, Posture, str | None], tuple[PolicyDecision, str]]
+    _GOLDEN = {
+        # READ · trusted — auto-runs unless the axis is authored tighter, and
+        # BYPASS lifts that tightening (a read is not a second way to write).
+        (Action.READ, Trust.TRUSTED, Posture.MANUAL, None): (PolicyDecision.ALLOW, ""),
+        (Action.READ, Trust.TRUSTED, Posture.MANUAL, "auto"): (
+            PolicyDecision.ALLOW,
+            "",
+        ),
+        (Action.READ, Trust.TRUSTED, Posture.MANUAL, "ask"): (
+            PolicyDecision.GATE,
+            "approval_required.read",
+        ),
+        (Action.READ, Trust.TRUSTED, Posture.MANUAL, "require"): (
+            PolicyDecision.GATE,
+            "approval_required.read",
+        ),
+        (Action.READ, Trust.TRUSTED, Posture.MANUAL, "block"): (
+            PolicyDecision.DENY,
+            "permission_denied",
+        ),
+        (Action.READ, Trust.TRUSTED, Posture.BYPASS, None): (PolicyDecision.ALLOW, ""),
+        (Action.READ, Trust.TRUSTED, Posture.BYPASS, "auto"): (
+            PolicyDecision.ALLOW,
+            "",
+        ),
+        (Action.READ, Trust.TRUSTED, Posture.BYPASS, "ask"): (PolicyDecision.ALLOW, ""),
+        (Action.READ, Trust.TRUSTED, Posture.BYPASS, "require"): (
+            PolicyDecision.ALLOW,
+            "",
+        ),
+        (Action.READ, Trust.TRUSTED, Posture.BYPASS, "block"): (
+            PolicyDecision.DENY,
+            "permission_denied",
+        ),
+        # READ · untrusted — gated under MANUAL even at ``auto`` (§7:
+        # annotations never grant auto-run on their own).
+        (Action.READ, Trust.UNTRUSTED, Posture.MANUAL, None): (
+            PolicyDecision.GATE,
+            "approval_required.read",
+        ),
+        (Action.READ, Trust.UNTRUSTED, Posture.MANUAL, "auto"): (
+            PolicyDecision.GATE,
+            "approval_required.read",
+        ),
+        (Action.READ, Trust.UNTRUSTED, Posture.MANUAL, "ask"): (
+            PolicyDecision.GATE,
+            "approval_required.read",
+        ),
+        (Action.READ, Trust.UNTRUSTED, Posture.MANUAL, "require"): (
+            PolicyDecision.GATE,
+            "approval_required.read",
+        ),
+        (Action.READ, Trust.UNTRUSTED, Posture.MANUAL, "block"): (
+            PolicyDecision.DENY,
+            "permission_denied",
+        ),
+        (Action.READ, Trust.UNTRUSTED, Posture.BYPASS, None): (
+            PolicyDecision.ALLOW,
+            "",
+        ),
+        (Action.READ, Trust.UNTRUSTED, Posture.BYPASS, "auto"): (
+            PolicyDecision.ALLOW,
+            "",
+        ),
+        (Action.READ, Trust.UNTRUSTED, Posture.BYPASS, "ask"): (
+            PolicyDecision.ALLOW,
+            "",
+        ),
+        (Action.READ, Trust.UNTRUSTED, Posture.BYPASS, "require"): (
+            PolicyDecision.ALLOW,
+            "",
+        ),
+        (Action.READ, Trust.UNTRUSTED, Posture.BYPASS, "block"): (
+            PolicyDecision.DENY,
+            "permission_denied",
+        ),
+        # WRITE — trust-independent; BYPASS lifts it, which is the pill's
+        # entire meaning and must survive the new rung untouched.
+        (Action.WRITE, Trust.TRUSTED, Posture.MANUAL, None): (
+            PolicyDecision.GATE,
+            "approval_required.write",
+        ),
+        (Action.WRITE, Trust.TRUSTED, Posture.MANUAL, "auto"): (
+            PolicyDecision.ALLOW,
+            "",
+        ),
+        (Action.WRITE, Trust.TRUSTED, Posture.MANUAL, "ask"): (
+            PolicyDecision.GATE,
+            "approval_required.write",
+        ),
+        (Action.WRITE, Trust.TRUSTED, Posture.MANUAL, "require"): (
+            PolicyDecision.GATE,
+            "approval_required.write",
+        ),
+        (Action.WRITE, Trust.TRUSTED, Posture.MANUAL, "block"): (
+            PolicyDecision.DENY,
+            "permission_denied",
+        ),
+        (Action.WRITE, Trust.TRUSTED, Posture.BYPASS, None): (PolicyDecision.ALLOW, ""),
+        (Action.WRITE, Trust.TRUSTED, Posture.BYPASS, "auto"): (
+            PolicyDecision.ALLOW,
+            "",
+        ),
+        (Action.WRITE, Trust.TRUSTED, Posture.BYPASS, "ask"): (
+            PolicyDecision.ALLOW,
+            "",
+        ),
+        (Action.WRITE, Trust.TRUSTED, Posture.BYPASS, "require"): (
+            PolicyDecision.ALLOW,
+            "",
+        ),
+        (Action.WRITE, Trust.TRUSTED, Posture.BYPASS, "block"): (
+            PolicyDecision.DENY,
+            "permission_denied",
+        ),
+        (Action.WRITE, Trust.UNTRUSTED, Posture.MANUAL, None): (
+            PolicyDecision.GATE,
+            "approval_required.write",
+        ),
+        (Action.WRITE, Trust.UNTRUSTED, Posture.MANUAL, "auto"): (
+            PolicyDecision.ALLOW,
+            "",
+        ),
+        (Action.WRITE, Trust.UNTRUSTED, Posture.MANUAL, "ask"): (
+            PolicyDecision.GATE,
+            "approval_required.write",
+        ),
+        (Action.WRITE, Trust.UNTRUSTED, Posture.MANUAL, "require"): (
+            PolicyDecision.GATE,
+            "approval_required.write",
+        ),
+        (Action.WRITE, Trust.UNTRUSTED, Posture.MANUAL, "block"): (
+            PolicyDecision.DENY,
+            "permission_denied",
+        ),
+        (Action.WRITE, Trust.UNTRUSTED, Posture.BYPASS, None): (
+            PolicyDecision.ALLOW,
+            "",
+        ),
+        (Action.WRITE, Trust.UNTRUSTED, Posture.BYPASS, "auto"): (
+            PolicyDecision.ALLOW,
+            "",
+        ),
+        (Action.WRITE, Trust.UNTRUSTED, Posture.BYPASS, "ask"): (
+            PolicyDecision.ALLOW,
+            "",
+        ),
+        (Action.WRITE, Trust.UNTRUSTED, Posture.BYPASS, "require"): (
+            PolicyDecision.ALLOW,
+            "",
+        ),
+        (Action.WRITE, Trust.UNTRUSTED, Posture.BYPASS, "block"): (
+            PolicyDecision.DENY,
+            "permission_denied",
+        ),
+        # DESTRUCTIVE — gates in both postures; only ``auto`` on its own axis
+        # lifts it. The EXECUTE rung must not have disturbed that shape.
+        (Action.DESTRUCTIVE, Trust.TRUSTED, Posture.MANUAL, None): (
+            PolicyDecision.GATE,
+            "approval_required.destructive",
+        ),
+        (Action.DESTRUCTIVE, Trust.TRUSTED, Posture.MANUAL, "auto"): (
+            PolicyDecision.ALLOW,
+            "",
+        ),
+        (Action.DESTRUCTIVE, Trust.TRUSTED, Posture.MANUAL, "ask"): (
+            PolicyDecision.GATE,
+            "approval_required.destructive",
+        ),
+        (Action.DESTRUCTIVE, Trust.TRUSTED, Posture.MANUAL, "require"): (
+            PolicyDecision.GATE,
+            "approval_required.destructive",
+        ),
+        (Action.DESTRUCTIVE, Trust.TRUSTED, Posture.MANUAL, "block"): (
+            PolicyDecision.DENY,
+            "permission_denied",
+        ),
+        (Action.DESTRUCTIVE, Trust.TRUSTED, Posture.BYPASS, None): (
+            PolicyDecision.GATE,
+            "approval_required.destructive",
+        ),
+        (Action.DESTRUCTIVE, Trust.TRUSTED, Posture.BYPASS, "auto"): (
+            PolicyDecision.ALLOW,
+            "",
+        ),
+        (Action.DESTRUCTIVE, Trust.TRUSTED, Posture.BYPASS, "ask"): (
+            PolicyDecision.GATE,
+            "approval_required.destructive",
+        ),
+        (Action.DESTRUCTIVE, Trust.TRUSTED, Posture.BYPASS, "require"): (
+            PolicyDecision.GATE,
+            "approval_required.destructive",
+        ),
+        (Action.DESTRUCTIVE, Trust.TRUSTED, Posture.BYPASS, "block"): (
+            PolicyDecision.DENY,
+            "permission_denied",
+        ),
+        (Action.DESTRUCTIVE, Trust.UNTRUSTED, Posture.MANUAL, None): (
+            PolicyDecision.GATE,
+            "approval_required.destructive",
+        ),
+        (Action.DESTRUCTIVE, Trust.UNTRUSTED, Posture.MANUAL, "auto"): (
+            PolicyDecision.ALLOW,
+            "",
+        ),
+        (Action.DESTRUCTIVE, Trust.UNTRUSTED, Posture.MANUAL, "ask"): (
+            PolicyDecision.GATE,
+            "approval_required.destructive",
+        ),
+        (Action.DESTRUCTIVE, Trust.UNTRUSTED, Posture.MANUAL, "require"): (
+            PolicyDecision.GATE,
+            "approval_required.destructive",
+        ),
+        (Action.DESTRUCTIVE, Trust.UNTRUSTED, Posture.MANUAL, "block"): (
+            PolicyDecision.DENY,
+            "permission_denied",
+        ),
+        (Action.DESTRUCTIVE, Trust.UNTRUSTED, Posture.BYPASS, None): (
+            PolicyDecision.GATE,
+            "approval_required.destructive",
+        ),
+        (Action.DESTRUCTIVE, Trust.UNTRUSTED, Posture.BYPASS, "auto"): (
+            PolicyDecision.ALLOW,
+            "",
+        ),
+        (Action.DESTRUCTIVE, Trust.UNTRUSTED, Posture.BYPASS, "ask"): (
+            PolicyDecision.GATE,
+            "approval_required.destructive",
+        ),
+        (Action.DESTRUCTIVE, Trust.UNTRUSTED, Posture.BYPASS, "require"): (
+            PolicyDecision.GATE,
+            "approval_required.destructive",
+        ),
+        (Action.DESTRUCTIVE, Trust.UNTRUSTED, Posture.BYPASS, "block"): (
+            PolicyDecision.DENY,
+            "permission_denied",
+        ),
+    }
+
+    _LEGACY_ACTIONS = (Action.READ, Action.WRITE, Action.DESTRUCTIVE)
+
+    def test_the_golden_table_covers_every_legacy_cell(self) -> None:
+        # A frozen table only guards what it enumerates, so pin its shape too:
+        # 3 actions × 2 trusts × 2 postures × (default + 4 authored modes).
+        expected_keys = {
+            (action, trust, posture, mode)
+            for action in self._LEGACY_ACTIONS
+            for trust in Trust
+            for posture in Posture
+            for mode in (None, "auto", "ask", "require", "block")
+        }
+        assert set(self._GOLDEN) == expected_keys
+        assert len(self._GOLDEN) == 60
+
+    def test_every_legacy_decision_matches_the_pre_execute_answer(self) -> None:
+        for (action, trust, posture, mode), expected in self._GOLDEN.items():
+            service = self._service(
+                snapshot=(
+                    self._snapshot()
+                    if mode is None
+                    else self._snapshot(**{action.value: mode})
+                )
+            )
+            actual = self._decide(
+                service,
+                descriptor=self._descriptor(action=action, trust=trust),
+                posture=posture,
+            )
+            assert actual == expected, (action, trust, posture, mode)
+
+    def test_the_execute_rung_never_fires_off_its_own_axis(self) -> None:
+        # The inertness claim, over the same cross-product the differential
+        # swept: no non-EXECUTE call may ever come back with the EXECUTE reason,
+        # under any axis mode, posture, trust, read-gate knob, connector
+        # override or authored rule.
+        rulesets = {
+            "none": None,
+            "allow": PermissionRuleset(
+                rules=(PermissionRule(pattern="*", action=RuleAction.ALLOW),)
+            ),
+            "ask": PermissionRuleset(
+                rules=(PermissionRule(pattern="*", action=RuleAction.ASK),)
+            ),
+            "deny": PermissionRuleset(
+                rules=(PermissionRule(pattern="*", action=RuleAction.DENY),)
+            ),
+        }
+        overrides = {
+            "none": self._overrides(),
+            "allow_always": self._overrides({self._CONNECTOR: "allow_always"}),
+        }
+        for action in self._LEGACY_ACTIONS:
+            for trust in Trust:
+                for posture in Posture:
+                    for mode in (None, "auto", "ask", "require", "block"):
+                        for gate in (True, False):
+                            for override in overrides.values():
+                                for rules in rulesets.values():
+                                    service = self._service(
+                                        snapshot=(
+                                            self._snapshot()
+                                            if mode is None
+                                            else self._snapshot(**{action.value: mode})
+                                        ),
+                                        overrides=override,
+                                        untrusted_read_gate=gate,
+                                        rules=rules,
+                                    )
+                                    _, reason = self._decide(
+                                        service,
+                                        descriptor=self._descriptor(
+                                            action=action, trust=trust
+                                        ),
+                                        posture=posture,
+                                    )
+                                    assert reason != "approval_required.execute"
+                                    assert reason in self._SAFE_REASONS
 
 
 class TestRuleLayerPlacement(PolicyServiceFixtureMixin):

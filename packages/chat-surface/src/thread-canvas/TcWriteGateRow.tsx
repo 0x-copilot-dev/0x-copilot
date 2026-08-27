@@ -24,6 +24,16 @@
 // only expressible once the card is small enough for the button choice to be
 // the loudest thing on it.
 //
+// IT IS ALSO THE COMMAND ASK (PRD-shell-execution §14.1), and it fits for the
+// reasons above rather than by adaptation: a shell command cannot be undone by
+// anything this app owns, so it must never be approvable in one click, and the
+// always-grant §8.3 offers is by definition wider than the call in front of you.
+// Both rules already live here. What the lane adds is `commandText` — the
+// verbatim block that IS the payload for that ask — and, with it, §10.2's
+// no-undo line. Neither is decoration: a command writes files without going
+// through `write_file`, so nothing journals it and the Changes tab cannot revert
+// it, and the card is the place that has to say so.
+//
 // Naming: still `TcWriteGateRow`, and its STRUCTURAL testids are still
 // `tc-write-gate*` (`-row`, `-title`, `-connector`, `-review`, `-body*`),
 // because a live packaged-app journey (tools/desktop-journeys/write-gate-inline)
@@ -54,7 +64,11 @@ import { useId, useState, type ReactElement } from "react";
 import type { ApprovalPresentation } from "../approvals/presentation";
 import type { ActivityParam } from "../approvals/types";
 import { Icon } from "../icons/Icon";
-import { hasWriteGateEvidence, TcWriteGatePayload } from "./TcWriteGatePayload";
+import {
+  hasWriteGateEvidence,
+  showsCommand,
+  TcWriteGatePayload,
+} from "./TcWriteGatePayload";
 
 export interface TcWriteGateRowProps {
   /** Verb-first line: "Create an issue in Parth-test". */
@@ -161,6 +175,24 @@ export interface TcWriteGateRowProps {
    */
   readonly presentation?: ApprovalPresentation | null;
   /**
+   * The exact command a `run_command` ask will execute — `RunApproval.command`,
+   * straight off `payload.command` (PRD-shell-execution §14.1). Present makes
+   * this a COMMAND ask; absent renders byte-for-byte what this card rendered
+   * before the lane existed.
+   *
+   * It goes to `TcWriteGatePayload` rather than through `params`, and it is
+   * what `hasWriteGateEvidence` counts for this lane — which is the safety
+   * property, not a rendering detail. A command ask carries no `arguments` and
+   * no presentation (the write gate's wire shape has neither), so the command
+   * block is the ONLY thing that puts the action on screen: approving without
+   * expanding is structurally impossible, and approving after expanding means
+   * the command was rendered.
+   *
+   * The block brings §10.2's no-undo line with it, from the same component, so
+   * the sentence cannot be separated from the thing it is about.
+   */
+  readonly commandText?: string | null;
+  /**
    * `r<short>·<seq>`, joined host-side from the ledger gate. Optional because
    * it is NOT derivable here — it anchors on the `gate.opened` event, a
    * different event from the approval this card was projected from — and a
@@ -232,6 +264,7 @@ export function TcWriteGateRow({
   busy = false,
   params = EMPTY_PARAMS,
   presentation = null,
+  commandText = null,
   ledgerId,
   approveTestId = "tc-write-gate-approve",
   declineTestId = "tc-write-gate-decline",
@@ -257,22 +290,69 @@ export function TcWriteGateRow({
   // primitive top-level arguments, so the list of payees it was projected from
   // never reaches the params frame. Counting params there would withhold
   // approval over a card that shows every line item it is about to sign.
-  const payloadSeen = open && hasWriteGateEvidence(params, presentation);
+  const payloadSeen =
+    open && hasWriteGateEvidence(params, presentation, commandText);
   const bodyApprove = irreversible && payloadSeen;
   // The run-scoped Approve. Gated on `open` — expanding is the deliberate step
   // that separates "yes to this call" from "yes to every call like it for the
-  // rest of the run" — and on `!irreversible`, which the server already
-  // guarantees by withholding `allow_always` for a destructive op. Both, because
-  // this is where the property is drawn and one enforcement point is one deploy
-  // from zero.
+  // rest of the run" — and on a second condition, because this is where the
+  // property is drawn and one enforcement point is one deploy from zero.
   //
-  // NOT gated on `payloadSeen`, and that omission is deliberate. The write
-  // gate's wire shape (`ToolAccessGate._approval_payload`) carries no
-  // `arguments` and no `presentation` at all, so `hasWriteGateEvidence` is FALSE
-  // for precisely the cards that offer this scope. Gating on it would make the
-  // control unreachable in production while every fixture-built test of it
-  // passed — the dead-branch failure this card has already shipped once, when
+  // THAT SECOND CONDITION USED TO BE A FLAT `!irreversible`, and PRD-shell-
+  // execution §14.1 is what broke it. The claim behind it was "the server
+  // already guarantees this by withholding `allow_always` for a destructive
+  // op" — true only while `irreversible` and `op_class: destructive` were the
+  // same fact. They are now deliberately two facts on two sides of the wire: a
+  // command carries `op_class: "execute"` AND `risk_level: "high"`, so the
+  // server DOES offer `allow_always` (`ToolAccessGate._grant_options`, when
+  // §8.3's simple-command test passed) on a card this client draws
+  // irreversible. A flat `!irreversible` therefore deletes the one control
+  // §8.3 exists to provide, and deletes it in the silent direction — the card
+  // renders, the decision is takeable, and the option the server sent is just
+  // never drawn.
+  //
+  // So the condition now names the LANE, which is what it always meant.
+  // `op_class` does not reach this component — `buildIrreversible` folds it
+  // into a boolean that `execute` and `destructive` now share — and the command
+  // is the only field on this side of the wire that separates them.
+  // `showsCommand` is therefore the client's `op_class`, and it is asked of the
+  // component that DRAWS the block so the answer cannot drift from what is
+  // actually on screen.
+  //
+  // Both original enforcement points survive unweakened:
+  //
+  // * A DESTRUCTIVE op still gets no scope control here at all, expanded or
+  //   not — it carries no command, so this stays a flat refusal for it. That
+  //   is the second point the server's `[allow_once]` is deliberately backed
+  //   by: an advance yes to a class of deletes is what the PDP's destructive
+  //   rung exists to prevent, and one enforcement point is one deploy from
+  //   none.
+  // * A REVERSIBLE ask is untouched: it short-circuits before the command is
+  //   consulted, so the MCP write lane behaves exactly as it did.
+  //
+  // NOT gated on `payloadSeen`, and for the reversible lane that omission is
+  // load-bearing. The write gate's wire shape
+  // (`ToolAccessGate._approval_payload`) carries no `arguments` and no
+  // `presentation` at all, so `hasWriteGateEvidence` is FALSE for precisely the
+  // cards that offer this scope; requiring it would make the control
+  // unreachable in production while every fixture-built test of it passed — the
+  // dead-branch failure this card has already shipped once, when
   // `isIrreversible` substring-matched an axis that could not produce the word.
+  // NOT widened for the command lane, and the earlier attempt to is instructive.
+  // A `|| showsCommand(commandText)` clause here was a DEAD BRANCH: the only
+  // production caller (`TcChat.renderAskCard`) short-circuits on
+  // `!isIrreversible(approval)` BEFORE `onApproveAlways` is ever passed, and
+  // `_CommandApproval.RISK_LEVEL` is hardcoded "high", so every command card is
+  // irreversible and the clause could never be reached. It typechecked, and its
+  // fixture tests passed by constructing a state the app cannot produce — the
+  // same dead-branch shape this card has shipped once before.
+  //
+  // The behaviour it tried to add is also not wanted yet: the server offers
+  // `GRANT_OPTIONS = ("allow_once",)` for a command (`stream_events.py:457`),
+  // and the PRD's Phase 1 is explicit that EVERY command asks. §8.3's
+  // run-scoped always-grant is a later phase and starts on the SERVER offering
+  // it; a client-only widening would have drawn a control whose decision the
+  // wire refuses to carry.
   const scopeApprove = onApproveAlways !== undefined && open && !irreversible;
   const risk = irreversible ? "high" : "normal";
   const descriptionId = useId();
@@ -482,6 +562,7 @@ export function TcWriteGateRow({
           <TcWriteGatePayload
             params={params}
             presentation={presentation}
+            commandText={commandText}
             irreversible={irreversible}
             ledgerId={ledgerId}
             testIdPrefix="tc-write-gate-body"

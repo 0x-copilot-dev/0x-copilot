@@ -1145,3 +1145,410 @@ describe("TcWriteGateRow — what a screen reader is told", () => {
     );
   });
 });
+
+// ── THE COMMAND ASK (PRD-shell-execution §14.1) ─────────────────────────────
+//
+// A `run_command` approval is drawn by this card, and it is the ask this card's
+// safety properties were most obviously built for without knowing it: a command
+// cannot be undone by anything this app owns, so it must never be approvable in
+// one click, and §8.3's always-grant is by definition wider than the call in
+// front of you.
+//
+// Two things arrive with the lane, and NEITHER is decoration.
+//
+// `commandText` is the payload. A command ask carries no `arguments` and no
+// presentation — the write gate's wire shape has neither — so the command block
+// is the only thing that puts the action on screen, which makes it the evidence
+// that unlocks Approve. Without it the card would show a title, a reason, and
+// no approve control at all: a gate that can only be declined, which is the
+// dead-control shape this card has already shipped once.
+//
+// The no-undo line is §10.2's second of three places. A command writes files
+// without going through `write_file`, so nothing journals it and the Changes tab
+// cannot revert it — a fact the reader cannot infer from "cannot be undone"
+// alone, and the one the rest of the app cannot make good on afterwards.
+describe("TcWriteGateRow — the command block", () => {
+  const COMMAND = "pytest -q";
+
+  function commandRow(over: Record<string, unknown> = {}) {
+    return render(
+      <TcWriteGateRow
+        title="Run `pytest -q` in my-project"
+        // No connector and no access axis: neither is a claim that can be made
+        // about a command, so the meta line is absent by construction.
+        connector={null}
+        irreversible
+        commandText={COMMAND}
+        reason="Checking the suite still passes before I edit the fixture."
+        onApprove={vi.fn()}
+        onDecline={vi.fn()}
+        {...over}
+      />,
+    );
+  }
+
+  it("shows nothing until the card is expanded", () => {
+    commandRow();
+    expect(screen.queryByTestId("tc-write-gate-body-command")).toBeNull();
+  });
+
+  it("shows the command verbatim once expanded", () => {
+    commandRow();
+    fireEvent.click(screen.getByTestId("tc-write-gate-review"));
+    expect(screen.getByTestId("tc-write-gate-body-command").textContent).toBe(
+      COMMAND,
+    );
+  });
+
+  it("keeps newlines and interior spacing — the bytes ARE the command", () => {
+    // `/bin/sh -c "<command>"` runs what the model sent, and the difference
+    // between `rm -rf ./build` and `rm -rf . /build` is one space. A card that
+    // re-flowed the string would be collecting consent for a different command.
+    const multiline = "cd packages/chat-surface\nnpx  vitest run --root .";
+    commandRow({ commandText: multiline });
+    fireEvent.click(screen.getByTestId("tc-write-gate-review"));
+    expect(screen.getByTestId("tc-write-gate-body-command").textContent).toBe(
+      multiline,
+    );
+  });
+
+  it("renders it as a text node, never as markup", () => {
+    // Model-authored, and it may itself have come from tool output.
+    commandRow({ commandText: "<img src=x onerror=alert(1)> && echo hi" });
+    fireEvent.click(screen.getByTestId("tc-write-gate-review"));
+    const block = screen.getByTestId("tc-write-gate-body-command");
+    expect(block.querySelector("img")).toBeNull();
+    expect(block.textContent).toContain("<img src=x onerror=alert(1)>");
+  });
+
+  it("is absent on every ask that is not a command", () => {
+    // Absent-means-omitted, like every other lane-specific prop: an ordinary
+    // write must render byte-for-byte what it rendered before this lane existed.
+    commandRow({ commandText: null, params: [{ label: "repo", value: "p" }] });
+    fireEvent.click(screen.getByTestId("tc-write-gate-review"));
+    expect(screen.queryByTestId("tc-write-gate-body-command")).toBeNull();
+    expect(screen.queryByTestId("tc-write-gate-body-no-undo")).toBeNull();
+  });
+
+  // THE SAFETY INTERACTION, and the reason `hasWriteGateEvidence` grew a third
+  // argument rather than the caller growing an `||`.
+  it("counts as payload seen, with zero params and no presentation", () => {
+    const onApprove = vi.fn();
+    commandRow({ onApprove, params: [], presentation: null });
+    // Never one click from the collapsed card — it is irreversible.
+    expect(screen.queryByTestId("tc-write-gate-approve")).toBeNull();
+    fireEvent.click(screen.getByTestId("tc-write-gate-review"));
+    fireEvent.click(screen.getByTestId("tc-write-gate-body-approve"));
+    expect(onApprove).toHaveBeenCalledTimes(1);
+    expect(screen.queryByTestId("tc-write-gate-approve")).toBeNull();
+  });
+
+  it("still withholds approve when the command is only whitespace", () => {
+    // The degenerate case that would otherwise unlock Approve over a blank
+    // frame — the blind approval the rule forbids, wearing the costume of a
+    // populated one. Whatever hides the block is the same condition that shows
+    // it, so an unshown command is not evidence.
+    commandRow({ commandText: "   \n  ", params: [], presentation: null });
+    fireEvent.click(screen.getByTestId("tc-write-gate-review"));
+    expect(screen.getByTestId("tc-write-gate-body")).toBeTruthy();
+    expect(screen.queryByTestId("tc-write-gate-body-command")).toBeNull();
+    expect(screen.queryByTestId("tc-write-gate-body-approve")).toBeNull();
+    expect(screen.queryByTestId("tc-write-gate-approve")).toBeNull();
+  });
+
+  it("does not move the header — the command is in the body, and only there", () => {
+    // The load-bearing layout rule, re-pinned with the new block in play: the
+    // command's height grows with the string, so anywhere but the body would
+    // slide the decision out from under a cursor at the moment of commitment.
+    commandRow();
+    const header = screen.getByTestId("tc-write-gate-row");
+    const labels = (): readonly string[] =>
+      [...header.querySelectorAll("button")].map(
+        (button) =>
+          `${button.getAttribute("data-testid") ?? ""}:${(button.textContent ?? "").trim()}`,
+      );
+    const collapsed = labels();
+    fireEvent.click(screen.getByTestId("tc-write-gate-review"));
+    expect(screen.getByTestId("tc-write-gate-body-command")).toBeTruthy();
+    expect(labels()).toEqual(collapsed);
+  });
+
+  it("keeps decline one click in every state", () => {
+    const onDecline = vi.fn();
+    commandRow({ onDecline });
+    fireEvent.click(screen.getByTestId("tc-write-gate-decline"));
+    fireEvent.click(screen.getByTestId("tc-write-gate-review"));
+    fireEvent.click(screen.getByTestId("tc-write-gate-decline"));
+    expect(onDecline).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("TcWriteGateRow — the no-undo line", () => {
+  function commandRow(over: Record<string, unknown> = {}) {
+    return render(
+      <TcWriteGateRow
+        title="Run `make clean` in my-project"
+        irreversible
+        commandText="make clean"
+        onApprove={vi.fn()}
+        onDecline={vi.fn()}
+        {...over}
+      />,
+    );
+  }
+
+  it("says the sentence §10.2 specifies, verbatim", () => {
+    // Byte-exact on purpose. The wording names the CAUSE — "changes made by a
+    // command" — and the cause is the part a reader cannot infer: the app never
+    // saw the writes, so the Changes tab has nothing to revert and nothing to
+    // list.
+    commandRow();
+    fireEvent.click(screen.getByTestId("tc-write-gate-review"));
+    expect(screen.getByTestId("tc-write-gate-body-no-undo").textContent).toBe(
+      "Changes made by a command can't be undone from here.",
+    );
+  });
+
+  it("REPLACES the generic reversibility line rather than stacking with it", () => {
+    // Two "cannot be undone" sentences three lines apart read as a bug and
+    // train people to skim the one that matters.
+    commandRow();
+    fireEvent.click(screen.getByTestId("tc-write-gate-review"));
+    expect(screen.queryByTestId("tc-write-gate-body-reversibility")).toBeNull();
+  });
+
+  it("still replaces it when the payload lost its risk axis", () => {
+    // The degraded case, and the one that matters most: without this the card
+    // would print "You can undo this from the connector if it's wrong." over an
+    // action that has no connector and cannot be undone at all. Keyed on the
+    // command, not on `irreversible`, precisely so this cannot happen.
+    commandRow({ irreversible: false });
+    fireEvent.click(screen.getByTestId("tc-write-gate-review"));
+    expect(screen.getByTestId("tc-write-gate-body-no-undo")).toBeTruthy();
+    expect(screen.queryByTestId("tc-write-gate-body-reversibility")).toBeNull();
+  });
+
+  it("leaves the reversibility line alone on every other ask", () => {
+    commandRow({ commandText: null, params: [{ label: "repo", value: "p" }] });
+    fireEvent.click(screen.getByTestId("tc-write-gate-review"));
+    expect(
+      screen.getByTestId("tc-write-gate-body-reversibility").textContent,
+    ).toBe("This cannot be undone from here.");
+    expect(screen.queryByTestId("tc-write-gate-body-no-undo")).toBeNull();
+  });
+});
+
+// §8.3's run-scoped grant, on a card that is irreversible by construction.
+//
+// This is the case the old `!irreversible` gate deleted. `irreversible` and
+// `op_class` are deliberately DECOUPLED (§14.1): a command carries
+// `risk_level: "high"` so it can never be approved from the collapsed card, and
+// `op_class: "execute"` so the server may still offer `allow_always` when §8.3's
+// simple-command test passed. Collapsing them back into one boolean here made
+// the option the server sent undrawable — silently, with the card rendering and
+// the decision takeable.
+describe("TcWriteGateRow — the always control on a command ask", () => {
+  function commandRow(over: Record<string, unknown> = {}) {
+    return render(
+      <TcWriteGateRow
+        title="Run `pytest -q` in my-project"
+        irreversible
+        commandText="pytest -q"
+        onApprove={vi.fn()}
+        onDecline={vi.fn()}
+        onApproveAlways={vi.fn()}
+        {...over}
+      />,
+    );
+  }
+
+  it("is NOT drawn for a command, however the card is expanded", () => {
+    // THIS TEST USED TO ASSERT THE OPPOSITE, and it passed by building a state
+    // the app cannot reach. The only production caller, `TcChat.renderAskCard`,
+    // short-circuits on `!isIrreversible(approval)` before `onApproveAlways` is
+    // ever passed, and `_CommandApproval.RISK_LEVEL` is hardcoded "high", so
+    // every command card is irreversible. The widened clause was a dead branch
+    // whose fixture proved only that the fixture could construct it.
+    //
+    // Not wanted yet either: the server offers `GRANT_OPTIONS = ("allow_once",)`
+    // for a command (`stream_events.py:457`), and Phase 1 is explicit that every
+    // command asks. A client-side always-control would draw a decision the wire
+    // refuses to carry. §8.3's run-scoped grant starts on the server.
+    const onApproveAlways = vi.fn();
+    commandRow({ onApproveAlways });
+    fireEvent.click(screen.getByTestId("tc-write-gate-review"));
+    expect(screen.queryByTestId("tc-write-gate-always")).toBeNull();
+    expect(onApproveAlways).not.toHaveBeenCalled();
+  });
+
+  it("is never reachable from the collapsed card", () => {
+    // The card's own rule, unchanged by the lane: a decision covering more than
+    // the call in front of you is not a one-click decision.
+    commandRow();
+    expect(screen.queryByTestId("tc-write-gate-always")).toBeNull();
+  });
+
+  it("is keyed on the COMMAND, not on evidence — a destructive write still gets none", () => {
+    // What replaced the flat `!irreversible` ban is not "any irreversible ask
+    // with something on screen"; it is "the irreversible LANE whose op class
+    // the server grants". `op_class` never reaches this component, so the
+    // command is the client's stand-in for it — and a destructive MCP write,
+    // fully evidenced by its params, must still get nothing. Pinned here as
+    // well as in `TcWriteGateRow.grantScope.test.tsx` because that file's
+    // fixture predates the split and would keep passing on the wrong reason.
+    commandRow({
+      commandText: null,
+      params: [{ label: "count", value: "14" }],
+    });
+    fireEvent.click(screen.getByTestId("tc-write-gate-review"));
+    expect(screen.getByTestId("tc-write-gate-body-params")).toBeTruthy();
+    expect(screen.getByTestId("tc-write-gate-body-approve")).toBeTruthy();
+    expect(screen.queryByTestId("tc-write-gate-always")).toBeNull();
+  });
+
+  it("is withheld when a command ask arrives with nothing to show", () => {
+    // A gate can open before its projection lands. Widening a decision to the
+    // whole run over a blank body is the blind approval the rule forbids, one
+    // step worse.
+    commandRow({ commandText: "  ", params: [], presentation: null });
+    fireEvent.click(screen.getByTestId("tc-write-gate-review"));
+    expect(screen.getByTestId("tc-write-gate-body")).toBeTruthy();
+    expect(screen.queryByTestId("tc-write-gate-always")).toBeNull();
+  });
+
+  it("is absent when the caller offered no always at all", () => {
+    // Absent `onApproveAlways` means the wire did not offer the scope —
+    // `allowsRunScopedGrant` false, e.g. a compound command, which §8.3 makes
+    // one-shot only. The card draws nothing rather than a button whose POST the
+    // server would drop.
+    commandRow({ onApproveAlways: undefined });
+    fireEvent.click(screen.getByTestId("tc-write-gate-review"));
+    expect(screen.queryByTestId("tc-write-gate-always")).toBeNull();
+  });
+
+  it("leaves the reversible lane exactly as it was", () => {
+    // The MCP write gate's wire shape carries no arguments and no presentation,
+    // so `payloadSeen` is FALSE for precisely the cards that offer this scope.
+    // The `!irreversible` short-circuit is what keeps them working; losing it
+    // would make the control unreachable in production with every fixture test
+    // still green.
+    const onApproveAlways = vi.fn();
+    render(
+      <TcWriteGateRow
+        title="Create an issue in Parth-test"
+        connector="linear"
+        onApprove={vi.fn()}
+        onDecline={vi.fn()}
+        onApproveAlways={onApproveAlways}
+      />,
+    );
+    fireEvent.click(screen.getByTestId("tc-write-gate-review"));
+    fireEvent.click(screen.getByTestId("tc-write-gate-always"));
+    expect(onApproveAlways).toHaveBeenCalledTimes(1);
+  });
+});
+
+// LAYOUT, NOT JUST DOM — read off the real stylesheet.
+//
+// jsdom performs no layout, so a green DOM assertion is not a green screen:
+// this repo has shipped a disclosure clipped to 6% of its ink under a passing
+// suite. What IS measurable is the declared box, and for this block the box is
+// the safety property. A cap without a scroller clips a command's tail in
+// silence — which is where a `| sh` would sit — and a horizontal scroller puts
+// that same tail behind a gesture.
+describe("TcWriteGateRow — the command block's box", () => {
+  const here =
+    typeof import.meta.dirname === "string"
+      ? import.meta.dirname
+      : dirname(fileURLToPath(import.meta.url));
+
+  let sheet: HTMLStyleElement | null = null;
+
+  function renderWithRealCss(commandText: string): void {
+    sheet = document.createElement("style");
+    sheet.textContent = readFileSync(
+      resolve(here, "review-surfaces.css"),
+      "utf-8",
+    );
+    document.head.appendChild(sheet);
+    render(
+      <TcWriteGateRow
+        title="Run the suite in my-project"
+        irreversible
+        commandText={commandText}
+        onApprove={vi.fn()}
+        onDecline={vi.fn()}
+      />,
+    );
+    fireEvent.click(screen.getByTestId("tc-write-gate-review"));
+  }
+
+  afterEach(() => {
+    sheet?.remove();
+    sheet = null;
+  });
+
+  it("is capped AND scrollable, and wraps rather than scrolling sideways", () => {
+    renderWithRealCss("pytest -q\n".repeat(60));
+    const style = globalThis.getComputedStyle(
+      screen.getByTestId("tc-write-gate-body-command"),
+    );
+    // 13rem, resolved by jsdom against the default 16px root — the same cap
+    // `.tc-write-gate__preview` carries, because the two blocks answer the same
+    // question about the same kind of string.
+    expect(style.maxHeight).toBe("208px");
+    expect(style.overflowY).toBe("auto");
+    // `pre-wrap`, not the `<pre>` UA default `pre`: newlines and runs of spaces
+    // survive, and a long line wraps instead of hiding its tail off-axis.
+    expect(style.whiteSpace).toBe("pre-wrap");
+  });
+
+  it("is monospaced, because a command is read token by token", () => {
+    renderWithRealCss("rm -rf ./build");
+    const style = globalThis.getComputedStyle(
+      screen.getByTestId("tc-write-gate-body-command"),
+    );
+    expect(style.fontFamily).toBe("var(--font-mono)");
+  });
+
+  it("cannot push the decision controls out of reach", () => {
+    // The body-wide `overflow-wrap: anywhere` rule owns this for every text
+    // node in here — including, by design, whatever gets added next. Asserted
+    // on the command block specifically because it is the one carrying an
+    // arbitrary model-authored string with no promise of a space in it: the
+    // card is a grid, so an unbreakable token sets the track width, the header
+    // stretches to it, and the buttons are clipped by a frame that is
+    // `overflow: hidden`.
+    renderWithRealCss(`curl https://example.test/${"x".repeat(138)}`);
+    const style = globalThis.getComputedStyle(
+      screen.getByTestId("tc-write-gate-body-command"),
+    );
+    expect(style.overflowWrap).toBe("anywhere");
+  });
+
+  it("owns its rules itself — no host stylesheet re-declares them", () => {
+    // The desktop CSS-shadowing trap: a host sheet re-declaring a package-owned
+    // class name wins the cascade and would silently restore `white-space: pre`
+    // here, with every assertion above still green.
+    const root = join(here, "..", "..", "..", "..");
+    for (const hostSheet of [
+      join(root, "apps", "frontend", "src", "styles.css"),
+      join(root, "apps", "desktop", "renderer", "desktop.css"),
+    ]) {
+      let css = "";
+      try {
+        css = readFileSync(hostSheet, "utf8");
+      } catch {
+        continue; // sheet absent in this checkout — nothing to shadow
+      }
+      expect(
+        css.includes("tc-write-gate__command"),
+        `${hostSheet} must not own the command block's class name`,
+      ).toBe(false);
+      expect(
+        css.includes("tc-write-gate__no-undo"),
+        `${hostSheet} must not own the no-undo line's class name`,
+      ).toBe(false);
+    }
+  });
+});

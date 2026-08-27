@@ -427,17 +427,24 @@ async def _park_write(
     arguments: dict | None = None,
     tool_name: str = "create_issue",
     op_class: str = "write",
+    simple_command: bool | None = None,
 ) -> dict:
-    """Park a write approval and return the interrupt payload it raised."""
+    """Park a write approval and return the interrupt payload it raised.
+
+    ``simple_command=None`` means "do not pass it at all" — that is what every
+    caller in production does today, so it is the arm most of these tests want.
+    """
 
     interrupt = _CapturingInterrupt({"decision": "approved"})
     gate = _gate(interrupt=interrupt)
+    verdict = {} if simple_command is None else {"simple_command": simple_command}
     await gate.park_for_approval(
         card=_card(auth_state=McpAuthState.AUTHENTICATED),
         tool_name=tool_name,
         arguments={} if arguments is None else arguments,
         op_class=op_class,
         approval_id="mcp_write:run_abcdef:call_1",
+        **verdict,
     )
     assert len(interrupt.payloads) == 1
     return interrupt.payloads[0]
@@ -731,6 +738,140 @@ async def test_the_destructive_exclusion_is_not_case_or_whitespace_sensitive(
     payload = await _park_write(op_class=op_class)
 
     assert payload["grant_options"] == ["allow_once"]
+
+
+# --------------------------------------------------------------------------- #
+# op_class="execute" — the fourth class, and the only conditional one
+# --------------------------------------------------------------------------- #
+
+
+async def test_a_vouched_execute_card_offers_both_scopes() -> None:
+    """The whole reason ``execute`` is a distinct class rather than a reuse.
+
+    A command's changes are outside undo, so its card must be drawn
+    irreversible — but routing that through ``op_class: "destructive"`` would
+    ALSO take this branch, emitting ``["allow_once"]`` on every command card and
+    making the run-scoped always-grant structurally undrawable no matter what
+    the client does: the option a client draws is the option the server sent.
+    Irreversibility rides ``risk_level`` instead, and this class is left free to
+    answer the only question it is asked — may this decision cover more than
+    this call?
+    """
+
+    payload = await _park_write(
+        tool_name="run_command", op_class="execute", simple_command=True
+    )
+
+    assert payload["grant_options"] == ["allow_once", "allow_always"]
+
+
+async def test_an_unvouched_execute_card_offers_only_once() -> None:
+    """``argv[0]`` is the grant key, so a compound command must not earn one.
+
+    ``pytest && curl … | sh`` has ``argv[0] == "pytest"``; a grant earned by
+    ``pytest`` that covered it would authorise anything. The gate does not
+    tokenise — it takes the caller's verdict — so the arm under test here is the
+    one where that verdict says no.
+    """
+
+    payload = await _park_write(
+        tool_name="run_command", op_class="execute", simple_command=False
+    )
+
+    assert payload["grant_options"] == ["allow_once"]
+
+
+async def test_an_execute_card_withholds_always_when_nobody_vouched() -> None:
+    """Fail-closed on the default: silence is not a yes.
+
+    Parsing never widens what we offer. A caller that cannot parse, is unsure,
+    or simply has not been taught about this axis yet gets the one-shot card —
+    costing a click, never a grant.
+    """
+
+    payload = await _park_write(tool_name="run_command", op_class="execute")
+
+    assert payload["grant_options"] == ["allow_once"]
+
+
+@pytest.mark.parametrize("op_class", ["EXECUTE", " execute "])
+async def test_the_execute_rule_is_not_case_or_whitespace_sensitive(
+    op_class: str,
+) -> None:
+    """Same normalisation as the destructive arm — a stray space must not
+    silently fall through to the both-scopes default."""
+
+    payload = await _park_write(op_class=op_class)
+
+    assert payload["grant_options"] == ["allow_once"]
+
+
+async def test_the_verdict_cannot_lift_the_destructive_exclusion() -> None:
+    """The two rules are not a single ladder a caller can climb.
+
+    ``simple_command`` is read for ``execute`` only. A destructive op that
+    happens to be reported as simple — ``rm`` is a single simple command — still
+    gets one shot, because the destructive exclusion is about irreversibility,
+    not about parseability.
+    """
+
+    payload = await _park_write(
+        tool_name="delete_issue", op_class="destructive", simple_command=True
+    )
+
+    assert payload["grant_options"] == ["allow_once"]
+
+
+@pytest.mark.parametrize("op_class", ["read", "write"])
+@pytest.mark.parametrize("simple_command", [None, True, False])
+async def test_the_verdict_is_inert_for_the_existing_classes(
+    op_class: str, simple_command: bool | None
+) -> None:
+    """The new argument is additive: read and write answer as they always have,
+    whatever a caller passes alongside them."""
+
+    payload = await _park_write(op_class=op_class, simple_command=simple_command)
+
+    assert payload["grant_options"] == ["allow_once", "allow_always"]
+
+
+async def test_a_vouched_execute_card_reaches_the_client_with_the_always_option() -> (
+    None
+):
+    """A server-side option the projector drops is an option no user can pick.
+
+    The execute lane borrows the write gate's ``ask_a_question`` wire shape, so
+    it lands in ``_ask_a_question_requested_payload`` — the projection that
+    already had to be taught ``op_class``, ``risk_level`` and ``grant_options``
+    after each was silently stripped. This pins that the new class inherits that
+    work rather than needing it again.
+    """
+
+    payload = await _park_write(
+        tool_name="run_command", op_class="execute", simple_command=True
+    )
+
+    projected = RuntimeEventPresentationProjector.payload_for_event(
+        event_type=RuntimeApiEventType.APPROVAL_REQUESTED,
+        payload=dict(payload),
+    )
+
+    assert projected["grant_options"] == ["allow_once", "allow_always"]
+
+
+async def test_the_execute_class_rides_the_gate_block_verbatim() -> None:
+    """``op_class`` is the PDP's verdict and is not re-derived by the gate.
+
+    Worth pinning because :meth:`ToolAccessGate._op_class` — the classifier path
+    the OAuth gate uses — can only ever answer read/write. ``execute`` exists on
+    this payload only because a caller put it there.
+    """
+
+    payload = await _park_write(
+        tool_name="run_command", op_class="execute", simple_command=True
+    )
+
+    assert payload["gate"]["op_class"] == "execute"
 
 
 async def test_grant_options_survive_presentation_to_the_client() -> None:

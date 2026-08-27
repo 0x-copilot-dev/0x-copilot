@@ -1165,6 +1165,124 @@ describe("TcChat — a parked write is one row, not a question", () => {
   });
 });
 
+// THE COMMAND ASK, AND THE BUG THAT MADE THIS TEST NECESSARY.
+//
+// The two halves of the shell-execution lane were built in parallel and each
+// pinned its own answer green. The producer
+// (`runtime_worker/stream_events.py::_CommandApproval`) serves LangGraph's
+// native `action_requests` interrupt and mints `<interrupt_id>:<index>`; the
+// client asserted `mcp_write:<run>:<call>`, the id `PolicyToolMiddleware` parks
+// an MCP write on. Nothing in the tree mints an `mcp_write:` id AND stamps
+// `command`, so the client's premise was never true of any payload that could
+// exist — and `isWriteGateApproval` therefore returned false for every command
+// ask, which dropped it through `renderApprovalItem` into the QUESTION branch.
+//
+// A shell command rendered as a free-text answer box: the reader is asked to
+// TYPE something about a command the backend will run, while the backend
+// ignores that text entirely and decides on `decision`. That is the exact
+// failure the branch order exists to prevent, arriving through the one lane the
+// order could not catch.
+//
+// Card selection now keys on the PAYLOAD — `isCommandApproval`, a non-blank
+// `approval.command` — which is a fact the producer really stamps. These two
+// tests are a PAIR on purpose: the first alone would pass if the question card
+// had simply stopped rendering for everything, so the second drives the same
+// payload minus the command and proves the free-text box is still reachable and
+// the negative therefore non-vacuous.
+describe("TcChat — a command ask is a card, not an answer box", () => {
+  /**
+   * `f"{interrupt_id}:{index}"`, the id `_CommandApproval.payload` really
+   * builds. Deliberately NOT `mcp_write:`-prefixed: a fixture wearing that
+   * prefix is what let the original bug sit green.
+   */
+  const commandId = "7d1b0c9a4e6f28315ac0b7e93d5f1602:0";
+
+  const commandAsk = (over: Partial<TcChatApproval> = {}) =>
+    approval({
+      approvalId: commandId,
+      approvalKind: "ask_a_question",
+      title: "Run `pytest -q` in my-project",
+      command: "pytest -q",
+      // The producer writes ONE sentence into both `message` and `question`, so
+      // `parseQuestion` succeeds on every command ask and this spec is always
+      // present. Without it here the test would pass vacuously: an approval
+      // with no question falls through to `renderAskCard` at the bottom of
+      // `renderApprovalItem` regardless of what selected it.
+      question: {
+        header: "Approve command",
+        question: "Allow this command to run?",
+        hint: null,
+        options: [],
+        multiSelect: false,
+        allowFreeText: true,
+      },
+      // `_CommandApproval.RISK_LEVEL` is `high`, unconditionally — a command's
+      // changes are outside undo — so `buildIrreversible` sets this. The card
+      // withholds its one-click approve accordingly; that rule is pinned in the
+      // destructive block below, and this block is only about WHICH CARD drew.
+      irreversible: true,
+      category: null,
+      ...over,
+    });
+
+  it.each(["studio", "focus"] as const)(
+    "draws the ask card and no free-text box in %s mode",
+    (mode) => {
+      const { transport } = makeTransport(() =>
+        Promise.resolve(SAMPLE_RESPONSE),
+      );
+      render(
+        withTransport(
+          transport,
+          <TcChat conversationId="c" mode={mode} approvals={[commandAsk()]} />,
+        ),
+      );
+
+      // POSITIVE half — the ask card, named by the card's own global testid so
+      // a rename of the id-scoped decision names cannot silence it, read
+      // through the wrapper that carries this approval's id.
+      const card = within(askCard(commandId)).getByTestId("tc-write-gate");
+      expect(card).toBeTruthy();
+      expect(card).toHaveTextContent("Run `pytest -q` in my-project");
+
+      // NEGATIVE half — no question card, and specifically no free-text input.
+      // `qc-free-text` is `QuestionCard`'s own control (the thing the reader
+      // would have typed into), so this names the failure rather than merely a
+      // wrapper that happens to be absent.
+      expect(screen.queryByTestId(`tc-chat-question-${commandId}`)).toBeNull();
+      expect(
+        screen.queryByTestId(`tc-chat-question-card-${commandId}`),
+      ).toBeNull();
+      expect(screen.queryByTestId("qc-free-text")).toBeNull();
+    },
+  );
+
+  it("…and the SAME payload without a command still reaches the question card", () => {
+    // The non-vacuity proof. One field differs from the case above, and it is
+    // the field card selection now reads: drop it and this payload is an
+    // ordinary agent question again, free-text box and all. If this ever goes
+    // red alongside a green sibling, the question branch died rather than the
+    // command branch working.
+    const { transport } = makeTransport(() => Promise.resolve(SAMPLE_RESPONSE));
+    render(
+      withTransport(
+        transport,
+        <TcChat
+          conversationId="c"
+          mode="studio"
+          approvals={[commandAsk({ command: null })]}
+        />,
+      ),
+    );
+
+    expect(
+      screen.getByTestId(`tc-chat-question-card-${commandId}`),
+    ).toBeTruthy();
+    expect(screen.getByTestId("qc-free-text")).toBeTruthy();
+    expect(screen.queryByTestId("tc-write-gate")).toBeNull();
+  });
+});
+
 /** The ask card for one approval, scoped by its id-bearing wrapper. */
 const askCard = (id: string): HTMLElement =>
   screen.getByTestId(`tc-chat-approval-${id}`);

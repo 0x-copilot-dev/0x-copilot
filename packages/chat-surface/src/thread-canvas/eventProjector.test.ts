@@ -11,6 +11,7 @@ import {
   projectSurfaceTabs,
   projectToolCalls,
   selectors,
+  TOOL_OUTPUT_PREVIEW_CAP,
 } from "./eventProjector";
 
 const RECORD_SPEC = {
@@ -730,6 +731,143 @@ describe("eventProjector.projectToolCalls", () => {
       status: "running",
       args: { query: "0xcopilot launch", page: 2 },
     });
+  });
+
+  // ── live command output (PRD-shell-execution §14.2) ──────────────────────
+  //
+  // Ships dark: no tool emits `output_preview` today. These pin the projector
+  // half of the seam so the field cannot arrive later and land in `result`.
+
+  it("collects a streamed output preview WITHOUT settling the card", () => {
+    nextSeq = 0;
+    const entries = projectToolCalls([
+      makeEnvelope("tool_call_started", {
+        payload: {
+          call_id: "call-cmd",
+          tool_name: "run_command",
+          args: { command: "pytest -q" },
+        },
+      }),
+      makeEnvelope("tool_call_delta", {
+        payload: {
+          call_id: "call-cmd",
+          tool_name: "run_command",
+          output_preview: "collecting ...\n",
+        },
+      }),
+      makeEnvelope("tool_call_delta", {
+        payload: {
+          call_id: "call-cmd",
+          tool_name: "run_command",
+          // The producer sends a rolling TAIL in full, so the newest frame
+          // supersedes the previous one rather than being appended to it.
+          output_preview: "collecting ...\n12 passed\n",
+        },
+      }),
+    ]);
+
+    expect(entries[0].outputPreview).toBe("collecting ...\n12 passed\n");
+    // The whole reason the field is separate: a card with a `result` reads as
+    // finished, and this one is not.
+    expect(entries[0].result).toBeUndefined();
+    expect(entries[0].status).toBe("running");
+    // Output is not arguments. The command survives untouched.
+    expect(entries[0].args).toEqual({ command: "pytest -q" });
+  });
+
+  it("keeps the last tail when a delta carries an empty preview", () => {
+    // The same trap `{delta: ""}` set for streamed ARGUMENTS: a producer that
+    // opens the stream with an empty string means "nothing yet", and storing
+    // that as content blanks a card that had output.
+    nextSeq = 0;
+    const entries = projectToolCalls([
+      makeEnvelope("tool_call_delta", {
+        payload: {
+          call_id: "call-cmd-empty",
+          tool_name: "run_command",
+          output_preview: "building...\n",
+        },
+      }),
+      makeEnvelope("tool_call_delta", {
+        payload: {
+          call_id: "call-cmd-empty",
+          tool_name: "run_command",
+          output_preview: "",
+        },
+      }),
+      makeEnvelope("tool_call_delta", {
+        payload: { call_id: "call-cmd-empty", tool_name: "run_command" },
+      }),
+    ]);
+
+    expect(entries[0].outputPreview).toBe("building...\n");
+  });
+
+  it("clips an oversized preview to the cap, keeping the TAIL", () => {
+    nextSeq = 0;
+    const head = "H".repeat(2000);
+    const tail = "T".repeat(TOOL_OUTPUT_PREVIEW_CAP);
+    const entries = projectToolCalls([
+      makeEnvelope("tool_call_delta", {
+        payload: {
+          call_id: "call-cmd-huge",
+          tool_name: "run_command",
+          output_preview: `${head}${tail}`,
+        },
+      }),
+    ]);
+
+    const preview = entries[0].outputPreview ?? "";
+    expect(preview.length).toBe(TOOL_OUTPUT_PREVIEW_CAP);
+    expect(preview).toBe(tail);
+    expect(preview.startsWith("H")).toBe(false);
+  });
+
+  it("never splits an astral codepoint at the clip boundary", () => {
+    // A fixed-offset slice can land between the halves of a surrogate pair,
+    // and a lone low surrogate paints as U+FFFD. The UTF-16 form of §13's
+    // continuation-byte walk.
+    nextSeq = 0;
+    const pairs = "🙂".repeat(TOOL_OUTPUT_PREVIEW_CAP);
+    const entries = projectToolCalls([
+      makeEnvelope("tool_call_delta", {
+        payload: {
+          call_id: "call-cmd-astral",
+          tool_name: "run_command",
+          output_preview: pairs,
+        },
+      }),
+    ]);
+
+    const preview = entries[0].outputPreview ?? "";
+    expect(preview.length).toBeLessThanOrEqual(TOOL_OUTPUT_PREVIEW_CAP);
+    // No replacement character means no half a codepoint survived the clip.
+    expect(preview.includes("�")).toBe(false);
+    expect([...preview].every((ch) => ch === "🙂")).toBe(true);
+  });
+
+  it("keeps the live tail when the terminal frame carries no output", () => {
+    // A run cancelled mid-command: the tail is the only record of what ran.
+    nextSeq = 0;
+    const entries = projectToolCalls([
+      makeEnvelope("tool_call_delta", {
+        payload: {
+          call_id: "call-cmd-cancelled",
+          tool_name: "run_command",
+          output_preview: "step 1 done\n",
+        },
+      }),
+      makeEnvelope("tool_result", {
+        payload: {
+          call_id: "call-cmd-cancelled",
+          tool_name: "run_command",
+          status: "cancelled",
+        },
+      }),
+    ]);
+
+    expect(entries[0].status).toBe("error");
+    expect(entries[0].outputPreview).toBe("step 1 done\n");
   });
 
   it("carries only safe supplied provenance, authority, duration, and delegated task ids", () => {

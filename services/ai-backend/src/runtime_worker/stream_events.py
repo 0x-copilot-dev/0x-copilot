@@ -88,6 +88,28 @@ class _Fields:
     # can detect subagent-scoped pauses without rescanning the event log.
     # Mirrors the envelope-level field.
     PARENT_TASK_ID = "parent_task_id"
+    # The command lane (``_CommandApproval``). ``COMMAND`` is the verbatim text
+    # the card renders as its evidence block and ``WORKSPACE_LABEL`` is the
+    # opaque grant label it ran under — a LABEL, never a host path. Both are new
+    # to the ``ask_a_question`` projection allow-list; before that they were
+    # dropped between a correct producer and a correct card.
+    #
+    # WIRE KEYS, not argument names. The model fills in ``command`` and
+    # ``workspace``; only the first happens to spell the same. Read the action's
+    # arguments through ``_CommandApproval._COMMAND_ARG`` /
+    # ``_WORKSPACE_ARG`` — reading them through these two produced a card with
+    # no folder on it and a test suite that never noticed.
+    COMMAND = "command"
+    WORKSPACE_LABEL = "workspace_label"
+    # The PDP's own verdict about the operation, read by the card to decide
+    # whether one decision may cover more than one call. Mirrors
+    # ``surfaces_v2.gate._GateKey.OP_CLASS``.
+    OP_CLASS = "op_class"
+    # The additive gate block. ``ToolAccessGate`` owns its shape; this module
+    # writes one only for the command lane, because ``gate.purpose`` is the sole
+    # title vehicle the ``ask_a_question`` projection carries through
+    # (``events.py::_gate_display_title``).
+    GATE = "gate"
 
 
 class _FilesystemApproval:
@@ -322,6 +344,280 @@ class _FilesystemApproval:
             "platform": folder.flavour.value,
             "mode": cls._GRANT_MODE,
         }
+
+
+class _CommandApproval:
+    """Projects a parked ``run_command`` interrupt into an approval payload.
+
+    THE THIRD PRODUCER BRANCH, and it exists for the reason the second one did.
+    :meth:`StreamOrchestrator.native_tool_approval_payloads` recognised exactly
+    two action names — the six deepagents filesystem tools
+    (:attr:`_FilesystemApproval.TOOL_OPERATIONS`) and ``call_mcp_tool``. A
+    command is neither, so an interrupt raised on ``run_command`` reached the
+    ``continue`` and produced no payload at all: no ``approval_requested``
+    event, so no card, so a run sitting at ``waiting_for_approval`` behind a
+    tool card that spins forever. That is the same live symptom recorded on the
+    filesystem branch, one tool name further along.
+
+    WHICH APPROVAL KIND — this class is where that decision is recorded
+    ------------------------------------------------------------------
+    ``approval_kind`` is ``ask_a_question``: the WRITE GATE's kind
+    (``surfaces_v2.gate._Values.APPROVAL_KIND_WRITE``), reused deliberately
+    rather than minting a ``run_command`` one. It is ONE decision with three
+    consequences, and a new kind loses all three:
+
+    * **Which allow-list projects the payload.**
+      ``RuntimeEventPresentationProjector._approval_requested_payload``
+      early-returns into ``_ask_a_question_requested_payload`` for this kind
+      (``runtime_api/schemas/events.py``), and that branch is the only approval
+      projection carrying ``op_class``, ``risk_level`` AND ``grant_options`` —
+      the three fields the command card is assembled from. A new kind would land
+      on the sibling list instead, where adding ``command`` /
+      ``workspace_label`` looks like it worked and the card still renders blank.
+    * **The client's switch is closed.** ``mapApprovalKind``
+      (``packages/chat-surface/src/destinations/run/approvalProjection.ts``)
+      matches ``mcp_tool | mcp_auth | ask_a_question | tool_action`` and maps
+      anything else to ``"unknown"``.
+    * **Only this lane's resume carries a scope.** ``decision_scope`` is
+      threaded by the ``ask_a_question`` branch of
+      ``RuntimeApprovalHandler._resume_payload`` alone, so it is the only shape
+      in which answering "always" is more than a word on a button.
+
+    The command text is rendered VERBATIM and is never re-sanitised here.
+    ``RunCommandInput`` refuses NUL and the C0 range at the model boundary,
+    before any interrupt exists, precisely so the card and the process cannot
+    disagree about what is being approved; re-deciding that question in a
+    presentation projector is how the two spellings drift apart.
+
+    WHICH LANE THIS ACTUALLY IS — read before assuming it is the main one
+    --------------------------------------------------------------------
+    The designed park for a command is ``ToolAccessGate.park_for_approval``,
+    which builds its own explicit ``approval_requested`` payload and is caught
+    upstream of here by ``_native_ask_a_question_payload``. THIS branch answers
+    the other shape: a LangGraph-native interrupt carrying ``action_requests``,
+    the shape ``HumanInTheLoopMiddleware`` emits. It is the net under the
+    ``continue``, not the designed path — the point being that an unrecognised
+    tool name in that shape parks the run and tells no one, and ``run_command``
+    was one.
+
+    One consequence worth knowing, because it is invisible from this file: an id
+    minted here is ``<interrupt_id>:<index>``, uniform with both sibling
+    branches, and NOT the ``mcp_write:<run_id>:<tool_call_id>`` shape
+    ``PolicyToolMiddleware`` parks the designed lane on. Three client predicates
+    key on that prefix — which card to draw, whether "always" may be offered,
+    and which tool call the ask is blocking — so a card from this branch draws
+    through the generic question path and binds to its call by TOOL NAME
+    instead. That is why ``tool_name`` is on the payload and on the projection
+    allow-list: it is the only handle this lane leaves. Minting a lookalike
+    ``mcp_write:`` id here would fix the first two and break the third, by
+    handing the exact join a call id that is really an action index.
+
+    Nothing here is model-visible. The tool that raises this interrupt does not
+    exist yet — this is the projection waiting for it.
+    """
+
+    #: The tool name this branch answers to. Deliberately NOT ``execute``: that
+    #: name is already claimed in all three occupancy declarations by
+    #: deepagents' filesystem placeholder, and a collision there is a silent
+    #: identity merge in the policy layer.
+    TOOL_NAME: Final = "run_command"
+
+    #: ``op_class`` for the command lane. Mirrors
+    #: ``surfaces_v2.gate._Values.OP_CLASS_EXECUTE`` by VALUE rather than by
+    #: import — that class is private to the gate module and a presentation
+    #: projector has no business reaching into the surfaces domain to name one
+    #: wire string. The two move together.
+    OP_CLASS: Final = "execute"
+
+    #: ``risk_level`` — HIGH, unconditionally. This is the field that carries
+    #: "not approvable from the collapsed card" to the client, whose
+    #: ``buildIrreversible`` is ``op_class == "destructive" ||
+    #: risk_level in {high, critical}``. EITHER field would draw an irreversible
+    #: card; risk is the right one because ``op_class: "destructive"`` would
+    #: ALSO make ``ToolAccessGate._grant_options`` withhold ``allow_always`` for
+    #: every command forever, and no client change could recover it — the option
+    #: the client draws is the option the server sent. The two knobs answer two
+    #: different questions: ``op_class`` is "may this decision cover more than
+    #: this call?", ``risk_level`` is "may this be approved in one click?", and
+    #: the answers are "sometimes" and "never".
+    #:
+    #: HIGH and not CRITICAL: what makes a command irreversible is that its
+    #: changes are outside undo, not a claim that every command is dangerous.
+    RISK_LEVEL: Final = "high"
+
+    #: The scope this card may be answered with. ``allow_once`` only, and that
+    #: is not a placeholder. ``allow_always`` for a command is run-scoped and
+    #: keyed on ``argv[0]``, so it is sound only for a single simple command — a
+    #: rule earned by ``pytest`` must not authorise ``pytest && curl … | sh``,
+    #: whose ``argv[0]`` is also ``pytest``. That verdict belongs to the caller
+    #: that tokenised the command (``ToolAccessGate._grant_options`` takes it as
+    #: ``simple_command=``); this projection has no tokeniser and therefore no
+    #: verdict, so it gives the withholding answer. Withholding costs a click;
+    #: offering it wrongly hands over a rule nobody was shown.
+    GRANT_OPTIONS: Final[tuple[str, ...]] = ("allow_once",)
+
+    #: Version of the additive ``gate`` block, mirroring
+    #: ``surfaces_v2.gate._Values.PAYLOAD_V``.
+    _GATE_PAYLOAD_V: Final = 1
+
+    #: The same bound ``RunCommandInput.command`` enforces at the model
+    #: boundary. Chosen to be identical rather than smaller so truncation here
+    #: is UNREACHABLE for any command that could actually run: a card showing a
+    #: prefix of what is about to execute is the "card and process disagree"
+    #: bug, and a card-side cap tighter than the contract's would manufacture
+    #: it. Anything longer than this never passed validation, so it cannot be a
+    #: live command.
+    _MAX_COMMAND_CHARS: Final = 8192
+
+    #: ``RunCommandInput.workspace``'s own cap.
+    _MAX_LABEL_CHARS: Final = 128
+
+    #: The title is a LABEL for the card, not the thing that runs — the verbatim
+    #: command sits below it in its own block — so unlike the command it may be
+    #: collapsed to one line and clipped.
+    _MAX_TITLE_CHARS: Final = 120
+
+    _ELLIPSIS: Final = "…"
+
+    #: Where the action carries the text the user is being asked about. Named
+    #: rather than assumed, for the reason ``_FilesystemApproval._PATH_ARGS``
+    #: is: the argument the model fills in and the key the card reads are not
+    #: the same word, and guessing produces a card that names nothing while
+    #: every test that asserts on the producer's own dict still passes.
+    _COMMAND_ARG: Final = "command"
+
+    #: The model-facing argument is ``workspace`` — an opaque grant LABEL
+    #: (``RunCommandInput.workspace``) — while the wire key the card reads is
+    #: ``workspace_label``. The rename is deliberate: on the wire the word has
+    #: to say what it is not, because "workspace" alone reads like a path to
+    #: every future implementer of this payload.
+    _WORKSPACE_ARG: Final = "workspace"
+
+    @classmethod
+    def payload(
+        cls,
+        *,
+        interrupt_id: str,
+        index: int,
+        action_count: int,
+        action_name: str,
+        args: object,
+        allowed_decisions: Sequence[str],
+    ) -> dict[str, object] | None:
+        """Build the approval payload for a ``run_command`` action, or ``None``."""
+
+        if action_name != cls.TOOL_NAME:
+            return None
+        arguments = args if isinstance(args, Mapping) else {}
+        command = cls._command(arguments.get(cls._COMMAND_ARG))
+        if command is None:
+            # A command approval whose card names no command cannot honestly be
+            # answered — the same reason ``_grant_scope`` withholds a durable
+            # option it can only describe with an ellipsis. Returning ``None``
+            # leaves the run parked, which is the state this branch exists to
+            # end, so it is logged rather than dropped in silence: the original
+            # bug was invisible precisely because nothing said a payload had
+            # been discarded.
+            _logger.warning(
+                "[run_command] interrupt %s action %s carries no command text; "
+                "no approval card can be produced",
+                interrupt_id,
+                index,
+            )
+            return None
+        label = cls._workspace_label(arguments.get(cls._WORKSPACE_ARG))
+        approval_id = f"{interrupt_id}:{index}"
+        title = cls._title(command=command, label=label)
+        payload: dict[str, object] = {
+            "api_event_type": RuntimeApiEventType.APPROVAL_REQUESTED.value,
+            "event_type": RuntimeApiEventType.APPROVAL_REQUESTED.value,
+            Keys.Field.APPROVAL_ID: approval_id,
+            _Fields.ACTION_ID: approval_id,
+            Keys.Field.APPROVAL_KIND: ApiValues.ApprovalKind.ASK_A_QUESTION,
+            _Fields.NATIVE_INTERRUPT_ID: interrupt_id,
+            _Fields.ACTION_INDEX: index,
+            _Fields.ACTION_COUNT: action_count,
+            # Identical batch contract to both sibling branches: the batch is
+            # the interrupt, the id is ``<batch_id>:<index>`` at every size.
+            _Fields.BATCH_ID: interrupt_id,
+            _Fields.BATCH_INDEX: index,
+            _Fields.TOOL_NAME: cls.TOOL_NAME,
+            _Fields.COMMAND: command,
+            "message": title,
+            # The ``ask_a_question`` shape's own text field. Same string as
+            # ``message`` deliberately: two spellings of one ask is how a card
+            # ends up contradicting itself.
+            "question": title,
+            _Fields.OP_CLASS: cls.OP_CLASS,
+            _Fields.RISK_LEVEL: cls.RISK_LEVEL,
+            Keys.Field.STATUS: "pending",
+            _Fields.ALLOWED_DECISIONS: list(allowed_decisions),
+            _Fields.GRANT_OPTIONS: list(cls.GRANT_OPTIONS),
+            _Fields.GATE: {
+                "v": cls._GATE_PAYLOAD_V,
+                # ``_gate_display_title`` lifts exactly this line into
+                # ``display_title``, and it is the only title the
+                # ``ask_a_question`` projection carries. Without it the card
+                # falls through its whole title chain to the generic "Approve
+                # this action" — over a command.
+                "purpose": title,
+                "op": cls.TOOL_NAME,
+                _Fields.OP_CLASS: cls.OP_CLASS,
+            },
+        }
+        if label is not None:
+            payload[_Fields.WORKSPACE_LABEL] = label
+        return payload
+
+    @classmethod
+    def _command(cls, value: object) -> str | None:
+        """The verbatim command, or ``None`` when the action carries none."""
+
+        text = StreamTextHelper.extract(value)
+        if text is None:
+            return None
+        return text[: cls._MAX_COMMAND_CHARS]
+
+    @classmethod
+    def _workspace_label(cls, value: object) -> str | None:
+        """The opaque grant label, or ``None`` when the value is not one.
+
+        A label names an attached folder from a closed set fixed at tool-build
+        time; it is not a path and the card promises never to print one. So a
+        value wearing a path's shape — any separator, or a leading ``~`` — is
+        refused rather than shown. Shape alone decides, because this runs before
+        the label set is resolvable and a wrong guess would put a host-absolute
+        string on a card that said it would not.
+
+        Refusing costs the card its "in <folder>" clause. Accepting would put
+        the model's own idea of a path in front of a human as if the runtime had
+        agreed to it.
+        """
+
+        text = StreamTextHelper.extract(value)
+        if text is None:
+            return None
+        if text.startswith("~") or "/" in text or "\\" in text:
+            return None
+        return text[: cls._MAX_LABEL_CHARS]
+
+    @classmethod
+    def _title(cls, *, command: str, label: str | None) -> str:
+        """Verb-first card title naming the grant label, never a host path."""
+
+        summary = cls._one_line(command)
+        if label is None:
+            return f"Run `{summary}`"
+        return f"Run `{summary}` in {label}"
+
+    @classmethod
+    def _one_line(cls, command: str) -> str:
+        """Collapse a possibly multi-line command into one clipped title line."""
+
+        collapsed = " ".join(command.split())
+        if len(collapsed) <= cls._MAX_TITLE_CHARS:
+            return collapsed
+        return collapsed[: cls._MAX_TITLE_CHARS - 1].rstrip() + cls._ELLIPSIS
 
 
 class StreamCustomProcessor:
@@ -1193,6 +1489,26 @@ class StreamOrchestrator:
                 )
                 if fs_payload is not None:
                     approvals.append(fs_payload)
+                continue
+            if action_name == _CommandApproval.TOOL_NAME:
+                # The THIRD branch. A command is neither a deepagents
+                # filesystem tool nor ``call_mcp_tool``, so before this existed
+                # it fell through the `continue` below and the run parked on an
+                # interrupt the client was never told about — the identical
+                # hang the filesystem branch above was added to end. Placed
+                # after the filesystem test and before the MCP one because the
+                # three name sets are disjoint: order is readability here, not
+                # precedence.
+                command_payload = _CommandApproval.payload(
+                    interrupt_id=interrupt_id,
+                    index=index,
+                    action_count=len(action_requests),
+                    action_name=action_name,
+                    args=action.get(Keys.Field.ARGS),
+                    allowed_decisions=review_configs.get(action_name, ()),
+                )
+                if command_payload is not None:
+                    approvals.append(command_payload)
                 continue
             if action_name != McpValues.ToolName.CALL_MCP_TOOL:
                 continue

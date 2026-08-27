@@ -2671,6 +2671,16 @@ class RuntimeEventPresentationProjector:
 
         The standard approval allow-list strips these fields, so this approval kind
         gets its own projection path.
+
+        THREE LANES ride this branch, not one, and only the first is a question:
+        the ``ask_a_question`` tool itself, the parked WRITE gate
+        (``ToolAccessGate.park_for_approval``), and the parked COMMAND
+        (``runtime_worker/stream_events.py::_CommandApproval``). Both gates
+        borrow the wire shape to reuse the resume plumbing — it is the only
+        approval kind whose resume carries ``decision_scope`` — which is why a
+        list that reads as "question text" keeps growing keys about effects.
+        Every one of those additions was a field a correct producer sent and a
+        correct card never received.
         """
 
         safe_payload: JsonObject = {}
@@ -2699,6 +2709,45 @@ class RuntimeEventPresentationProjector:
             # `_text` keeps a hostile payload from smuggling anything larger.
             "op_class",
             "risk_level",
+            # The COMMAND LANE. A parked ``run_command`` reuses this same wire
+            # shape — the write gate's ``approval_kind`` — for the three reasons
+            # ``_CommandApproval`` records, so these keys land here and NOT on
+            # the sibling `approval_requested` list. Adding them there instead
+            # is the trap: the checklist item passes, nothing errors, and the
+            # card renders blank, because `_approval_requested_payload`
+            # early-returns into this method before it reads its own tuple.
+            #
+            # `command` is the VERBATIM text the card shows as its evidence
+            # block, and it is what makes approving without expanding
+            # structurally impossible. It is deliberately not re-bounded here:
+            # the producer already caps it at `RunCommandInput.command`'s own
+            # `max_length`, so a tighter cap on the way out would clip a command
+            # that is about to run in full — the card and the process
+            # disagreeing about what was approved, which is the exact bug the
+            # input contract's control-character rule exists to close.
+            #
+            # `workspace_label` is the opaque grant label the command runs
+            # under. A label, never a host path: the producer refuses any value
+            # wearing a path's shape, and the event contract forbids host
+            # absolute paths on this lane outright.
+            "command",
+            "workspace_label",
+            # `tool_name` names WHICH CALL the decision is holding up. The
+            # client joins a pending ask to its tool card two ways
+            # (`eventProjector.ts::matchAskToCall`): exactly, by the
+            # `mcp_write:<run>:<call_id>` id `PolicyToolMiddleware` parks on, or
+            # — for any lane whose id is not that shape — by tool name, when
+            # exactly one call to that tool is open. Stripped here, the second
+            # join has nothing to read, `ask.toolName` is null, and the parked
+            # command's card keeps spinning on the run-wide signal: the same
+            # unexplained spin the producer branch was added to end, surviving
+            # one layer further down.
+            #
+            # Inert for the two lanes already on this branch — neither the
+            # `ask_a_question` tool nor `ToolAccessGate` sets the key — and
+            # already public on the sibling `approval_requested` path, so this
+            # widens no contract.
+            Keys.Field.TOOL_NAME,
         ):
             value = cls._text(payload.get(key))
             if value is not None:
