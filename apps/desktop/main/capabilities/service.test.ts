@@ -90,6 +90,11 @@ describe("CapabilityService", () => {
       "grantId",
       "label",
       "mode",
+      // Per-workspace shell enablement (PRD-shell-execution §7.3). It is a
+      // boolean, not a path, so the path-free property this assertion guards is
+      // unchanged — but the key COUNT is part of the guard, so it is named here
+      // rather than allowed to slip in unlisted.
+      "shellEnabled",
       "status",
     ]);
     // The host path must NOT be present anywhere in the renderer payload.
@@ -192,6 +197,46 @@ describe("CapabilityService", () => {
     );
     expect(
       await service.revokeGrant("00000000-0000-4000-8000-000000000000"),
+    ).toBeNull();
+  });
+
+  // PRD-shell-execution §7.3 — the service method the Settings toggle reaches.
+  // It exists because `CapabilityService` had NO mutation of an existing grant
+  // at all: `requestFolderGrant` / `listGrants` / `revokeGrant` and nothing
+  // else, so a toggle had no method to call and the only compiling stand-in
+  // (`requestFolderGrant`) mints a new grantId, supersedes the folder's
+  // existing authority, and opens a native picker.
+  it("setGrantShellEnabled flips the flag on the SAME grant, and only that one", async () => {
+    const { service } = makeService(
+      async () => ({ canceled: false, filePaths: ["/data/reports"] }),
+      tmp,
+      async () => "/data/reports",
+    );
+    const created = await service.requestFolderGrant({ mode: "read_write" });
+    expect(created!.shellEnabled).toBe(false);
+
+    const updated = await service.setGrantShellEnabled(created!.grantId, true);
+    expect(updated!.grantId).toBe(created!.grantId);
+    expect(updated!.shellEnabled).toBe(true);
+    // It does not widen file access: commands are a different authority.
+    expect(updated!.mode).toBe("read_write");
+    // And it still leaks no path.
+    expect(JSON.stringify(updated)).not.toContain("/data/reports");
+
+    const off = await service.setGrantShellEnabled(created!.grantId, false);
+    expect(off!.shellEnabled).toBe(false);
+  });
+
+  it("setGrantShellEnabled returns null for an unknown id", async () => {
+    const { service } = makeService(
+      async () => ({ canceled: true, filePaths: [] }),
+      tmp,
+    );
+    expect(
+      await service.setGrantShellEnabled(
+        "00000000-0000-4000-8000-000000000000",
+        true,
+      ),
     ).toBeNull();
   });
 });

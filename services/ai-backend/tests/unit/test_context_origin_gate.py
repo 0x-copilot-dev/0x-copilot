@@ -87,6 +87,10 @@ def test_declared_context_origin_inventory_is_reviewed() -> None:
         # to the connectors a user has installed rather than constant.
         "agent_runtime.capabilities.mcp:per_tool_mcp_tools",
         "agent_runtime.capabilities.sandbox:sandbox_execute_tool",
+        # PRD-shell-execution Phase 1. Resident on every model call of a run
+        # that has an attached, writable, shell-enabled workspace — and on no
+        # other run, because the four §7.1 prerequisites keep the tool absent.
+        "agent_runtime.capabilities.shell:run_command_tool",
         "agent_runtime.capabilities.skills:30_skill_cards",
         # Accepted rent, and the trade it buys: one schema block per model call
         # in exchange for ``30_skill_cards`` above becoming a BOUNDED index.
@@ -155,7 +159,7 @@ def test_inventory_covers_every_model_tool_composed_by_the_factory() -> None:
     append sites onto one entry would shrink the tuple rather than fail. The
     gate's duplicate check makes that a violation, and this asserts the
     resulting count directly: one entry per composition site in
-    ``_model_visible_tools``, which today is the registry seed plus fourteen
+    ``_model_visible_tools``, which today is the registry seed plus fifteen
     appends plus the P2-8 per-tool MCP extend. The ``call_mcp_tool`` umbrella
     and the per-tool surface are the arms of one branch — a run composes one or
     the other, never both — so the count is of declaring SITES, as it has
@@ -169,6 +173,7 @@ def test_inventory_covers_every_model_tool_composed_by_the_factory() -> None:
         "agent_runtime.capabilities.interpreter",
         "agent_runtime.capabilities.mcp",
         "agent_runtime.capabilities.sandbox",
+        "agent_runtime.capabilities.shell",
         "agent_runtime.capabilities.skills",
         "agent_runtime.capabilities.tools",
         "deepagents.middleware",
@@ -183,7 +188,9 @@ def test_inventory_covers_every_model_tool_composed_by_the_factory() -> None:
     # left 14 (it was one composed site, and the per-tool surface that replaced
     # it is a single site too), and progressive disclosure adds the search that
     # makes the bounded Skill index a deferral rather than a deletion.
-    assert len(composed) == 15
+    # 16 since PRD-shell-execution's `run_command` — one more declaring site,
+    # gated off unless a workspace is attached, writable and shell-enabled.
+    assert len(composed) == 16
 
 
 class PlantedSourceTreeMixin:

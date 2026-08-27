@@ -83,6 +83,20 @@ class _PayloadKey:
     #: handled this key. That is the same split which previously left ``op_class``
     #: and ``risk_level`` stripped on this lane; both projections now name it.
     GRANT_OPTIONS = "grant_options"
+    #: The COMMAND lane's four top-level keys. Each is on the
+    #: ``_ask_a_question_requested_payload`` allow-list already (the projection
+    #: was landed in Phase 0, ahead of any producer), so a key spelled
+    #: differently here is silently stripped and the card renders blank rather
+    #: than erroring — which is why the spellings are named once, here.
+    #:
+    #: Mirrored by VALUE from ``runtime_worker/stream_events.py::_Fields``, not
+    #: imported from it: this module is pure domain and must not import the
+    #: worker. The two move together.
+    TOOL_NAME = "tool_name"
+    COMMAND = "command"
+    WORKSPACE_LABEL = "workspace_label"
+    OP_CLASS = "op_class"
+    RISK_LEVEL = "risk_level"
 
 
 class _GateKey:
@@ -159,6 +173,46 @@ class _Values:
     #: is derived from MCP ``readOnlyHint``/``destructiveHint`` annotations. It
     #: arrives first with the builtin ``run_command`` descriptor.
     OP_CLASS_EXECUTE = "execute"
+    #: The model-facing tool name of the command lane. Mirrored by value from
+    #: ``capabilities.shell.descriptor.ShellCapability.OP`` — a surfaces module
+    #: importing a capability package would invert the dependency direction the
+    #: rest of this file keeps.
+    COMMAND_TOOL_NAME = "run_command"
+    #: ``risk_level`` for a command card: HIGH, unconditionally, and it is the
+    #: field that makes the card un-approvable in one click. HIGH and not
+    #: CRITICAL because what makes a command irreversible is that its changes
+    #: are outside undo, not a claim that every command is dangerous.
+    RISK_LEVEL_HIGH = "high"
+
+
+class _CommandCopy:
+    """The one line a human reads on a command approval card.
+
+    Verb-first and label-naming, never a host path: the verbatim command sits
+    below it in its own evidence block, so this line may be collapsed to one
+    line and clipped where the command may not.
+    """
+
+    _MAX_TITLE_CHARS = 120
+    _ELLIPSIS = "…"
+
+    @classmethod
+    def title(cls, *, command: str, label: str | None) -> str:
+        """``Run `pytest -q` in my-project`` — or without the clause, unlabelled."""
+
+        summary = cls._one_line(command)
+        if not label:
+            return f"Run `{summary}`"
+        return f"Run `{summary}` in {label}"
+
+    @classmethod
+    def _one_line(cls, command: str) -> str:
+        """Collapse a possibly multi-line command into one clipped title line."""
+
+        collapsed = " ".join(command.split())
+        if len(collapsed) <= cls._MAX_TITLE_CHARS:
+            return collapsed
+        return collapsed[: cls._MAX_TITLE_CHARS - 1].rstrip() + cls._ELLIPSIS
 
 
 class _Messages:
@@ -557,6 +611,121 @@ class ToolAccessGate:
         if normalized == _Values.OP_CLASS_EXECUTE and not simple_command:
             return [_Values.ALLOW_ONCE]
         return [_Values.ALLOW_ONCE, _Values.ALLOW_ALWAYS]
+
+    # -- park_command_for_approval (the COMMAND lane) ------------------------
+
+    async def park_command_for_approval(
+        self,
+        *,
+        command: str,
+        workspace_label: str | None,
+        approval_id: str,
+        simple_command: bool,
+    ) -> GateResume:
+        """Park the run on a ``run_command`` approval; resume on the decision.
+
+        The third caller of this interrupt seam, and the first with **no
+        connector card**. :meth:`park_for_approval` cannot serve it: every field
+        of its payload is derived from an :class:`McpServerCard`, and its
+        message reads "Allow *<connector>* to run *<tool>*?", which is the wrong
+        sentence for a command and names a server that does not exist. Passing a
+        synthetic card would produce a card-shaped lie AND still omit the four
+        keys the command card is assembled from.
+
+        WHAT THE PAYLOAD MUST CARRY, AND WHY EACH IS NOT OPTIONAL
+        ---------------------------------------------------------
+        ``approval_kind`` stays ``ask_a_question`` — the write gate's kind. That
+        one choice buys three things a new kind loses, all recorded at
+        ``runtime_worker/stream_events.py::_CommandApproval``: the
+        ``_ask_a_question_requested_payload`` projection (the only approval
+        projection that carries ``op_class`` / ``risk_level`` / ``grant_options``
+        / ``command`` / ``workspace_label``), the client's closed
+        ``mapApprovalKind`` switch, and the fact that this is the only resume
+        shape threading ``decision_scope``.
+
+        * ``command`` — the VERBATIM text. Without it the client's card selection
+          falls through to the generic question path and renders a **free-text
+          answer box** over a shell command. That is not hypothetical: it is the
+          defect Phase 0's end-to-end check caught, with a negative control.
+          It is rendered as-is and never re-sanitised here —
+          :class:`RunCommandInput` refuses NUL and the C0 range at the model
+          boundary, above every approval control, precisely so the card and the
+          process cannot disagree; re-deciding that in a producer is how two
+          spellings drift apart.
+        * ``workspace_label`` — an opaque grant LABEL, never a host path. The
+          caller resolved it from a closed set; this method does not guess one.
+        * ``tool_name`` — the ONLY handle this lane leaves for
+          ``eventProjector.ts::matchAskToCall`` to bind the ask to its tool card,
+          because the approval id is not the ``mcp_write:`` shape the exact join
+          keys on.
+        * ``risk_level: high`` — what carries "not approvable from the collapsed
+          card" to the client (``buildIrreversible`` is ``op_class ==
+          "destructive" || risk_level in {high, critical}``). ``op_class`` is
+          NOT used for that, because ``op_class: "destructive"`` would also make
+          :meth:`_grant_options` withhold ``allow_always`` for every command
+          forever and no client change could recover it. The two knobs answer
+          two different questions and the answers are "never" and "sometimes".
+
+        ``simple_command`` is the caller's tokenising verdict (§8.3) and it only
+        ever narrows: a caller that cannot parse passes ``False`` and the command
+        is one-shot only.
+        """
+
+        payload = self._command_interrupt_payload(
+            approval_id=approval_id,
+            command=command,
+            workspace_label=workspace_label,
+            simple_command=simple_command,
+        )
+        resume = self.interrupt_handler(payload)
+        return self._interpret_resume(resume)
+
+    @classmethod
+    def _command_interrupt_payload(
+        cls,
+        *,
+        approval_id: str,
+        command: str,
+        workspace_label: str | None,
+        simple_command: bool,
+    ) -> dict[str, Any]:
+        """Build the command lane's ``approval_requested`` payload."""
+
+        title = _CommandCopy.title(command=command, label=workspace_label)
+        payload: dict[str, Any] = {
+            _PayloadKey.API_EVENT_TYPE: _Values.APPROVAL_REQUESTED,
+            _PayloadKey.EVENT_TYPE: _Values.APPROVAL_REQUESTED,
+            _PayloadKey.APPROVAL_ID: approval_id,
+            _PayloadKey.ACTION_ID: approval_id,
+            _PayloadKey.APPROVAL_KIND: _Values.APPROVAL_KIND_WRITE,
+            _PayloadKey.TOOL_NAME: _Values.COMMAND_TOOL_NAME,
+            _PayloadKey.COMMAND: command,
+            _PayloadKey.MESSAGE: title,
+            # The ``ask_a_question`` shape's own text field. Same string as
+            # ``message`` deliberately: two spellings of one ask is how a card
+            # ends up contradicting itself.
+            "question": title,
+            _PayloadKey.OP_CLASS: _Values.OP_CLASS_EXECUTE,
+            _PayloadKey.RISK_LEVEL: _Values.RISK_LEVEL_HIGH,
+            _PayloadKey.STATUS: _Values.STATUS_PENDING,
+            _PayloadKey.GRANT_OPTIONS: cls._grant_options(
+                _Values.OP_CLASS_EXECUTE, simple_command=simple_command
+            ),
+            _PayloadKey.GATE: {
+                _GateKey.V: _Values.PAYLOAD_V,
+                # ``_gate_display_title`` lifts exactly this line into
+                # ``display_title``, the only title the ``ask_a_question``
+                # projection carries. Without it the card falls through its
+                # whole title chain to a generic "Approve this action" — over a
+                # command.
+                _GateKey.PURPOSE: title,
+                _GateKey.OP: _Values.COMMAND_TOOL_NAME,
+                _GateKey.OP_CLASS: _Values.OP_CLASS_EXECUTE,
+            },
+        }
+        if workspace_label:
+            payload[_PayloadKey.WORKSPACE_LABEL] = workspace_label
+        return payload
 
     def _interrupt_payload(
         self,

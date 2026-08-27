@@ -65,6 +65,25 @@ export const RevokeGrantParamsSchema = z
   .strict();
 export type RevokeGrantParams = z.infer<typeof RevokeGrantParamsSchema>;
 
+// capability.set-grant-shell-enabled — the ONLY way `Grant.shellEnabled`
+// becomes true (PRD-shell-execution §7.3).
+//
+// `enabled` is a REQUIRED boolean rather than an optional one or a toggle verb.
+// An optional field would let `{ grantId }` mean "flip it", which makes the
+// renderer's request depend on a state main holds — so two clicks racing, or a
+// retry after a dropped reply, could land on "on" when the user's last act was
+// "off". The renderer states the value it wants; main records exactly that.
+// `.strict()` so no mode, path, label, or command rides along.
+export const SetGrantShellEnabledParamsSchema = z
+  .object({
+    grantId: z.string().uuid(),
+    enabled: z.boolean(),
+  })
+  .strict();
+export type SetGrantShellEnabledParams = z.infer<
+  typeof SetGrantShellEnabledParamsSchema
+>;
+
 // The ONLY grant shape allowed to cross the IPC boundary. `.strict()` is the
 // structural guarantee that no host `root` (or any other field) leaks: parsing
 // an internal Grant through this schema throws on the extra key.
@@ -74,6 +93,13 @@ export const RendererGrantSchema = z
     mode: GrantModeSchema,
     label: z.string(),
     status: z.enum(["active", "revoked"]),
+    // Whether this workspace may run commands. `z.boolean()` is REQUIRED, not
+    // `.optional()`: the outbound projection always sets it, and a required
+    // field is what makes an older main (or a future refactor that forgets the
+    // key) fail this parse loudly instead of shipping a row the renderer would
+    // read as `undefined` — which renders as an unchecked toggle that is
+    // indistinguishable from an honest "off".
+    shellEnabled: z.boolean(),
   })
   .strict();
 export type RendererGrantOut = z.infer<typeof RendererGrantSchema>;

@@ -262,6 +262,13 @@ class WorkspaceMount:
     label: str | None = None
     mode: GrantMode = "read_only"
     host_root: str | None = None
+    #: Whether the user enabled SHELL EXECUTION for this workspace
+    #: (PRD-shell-execution §7.3). Carried through from ``BrokerGrant`` so the
+    #: run's granted roots can report it; it is INDEPENDENT of ``mode``, because
+    #: file access and command execution are different authorities and neither
+    #: is a superset of the other. Defaults to ``False`` — a mount built by any
+    #: caller that does not know about the flag is command-incapable.
+    shell_enabled: bool = False
 
     def __post_init__(self) -> None:
         """Reject empty or separator-bearing mount names — they must be one segment."""
@@ -347,6 +354,10 @@ class WorkspaceMountTable:
                 grant_id=grant.grant_id,
                 label=grant.label or None,
                 mode=grant.mode,
+                # PRD-shell-execution §7.3 prerequisite 3, verbatim off the
+                # snapshot. Nothing is derived here — a mount is command-capable
+                # exactly when the grant the user decided about says so.
+                shell_enabled=grant.shell_enabled,
                 # The grant's real host root, when the broker sends one.
                 # This is what `HostFilesystemRules` turns into an `allow`
                 # rule, so a folder the user explicitly attached stops
@@ -368,6 +379,7 @@ class WorkspaceMountTable:
                 grant_id=grant.grant_id,
                 label=grant.label or None,
                 mode=grant.mode,
+                shell_enabled=grant.shell_enabled,
                 host_root=None,
             )
         except ValueError:
@@ -412,6 +424,13 @@ class WorkspaceMountTable:
                         # Only a grant that actually permits writing may site a
                         # writable scratch dir; read-only stays read-only.
                         writable=mount.mode != "read_only",
+                        # Kept SEPARATE from ``writable`` on purpose. PRD §7.1
+                        # lists "a writable granted root" and "that grant
+                        # carries shell enablement" as two INDEPENDENT
+                        # prerequisites, and the tool factory requires both;
+                        # folding them together here would quietly make one of
+                        # the four prerequisites unobservable.
+                        shell_enabled=mount.shell_enabled,
                     )
                 )
             except ValueError:

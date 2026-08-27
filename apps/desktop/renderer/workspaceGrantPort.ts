@@ -31,6 +31,7 @@ import type {
   WorkspaceGrantPort,
   WorkspaceGrantRequestInput,
   WorkspaceRevokeOutcome,
+  WorkspaceShellAccessOutcome,
 } from "@0x-copilot/chat-surface";
 
 import { CAPABILITY_CHANNELS } from "../main/capabilities/channels";
@@ -186,6 +187,48 @@ export function createDesktopWorkspaceGrantPort(
         };
       }
     },
+
+    async setShellEnabled(
+      grantId: string,
+      enabled: boolean,
+    ): Promise<WorkspaceShellAccessOutcome> {
+      try {
+        const raw = await bridge.ipc.invoke<unknown>(
+          CAPABILITY_CHANNELS.setGrantShellEnabled,
+          { grantId, enabled },
+        );
+        // Main answers null for an id it does not hold. Unlike revoke, this is
+        // NOT the end state the caller asked for — "turn commands on for a
+        // folder that no longer exists" did not happen — so it is a failure and
+        // is reported as one.
+        if (raw === null) {
+          return {
+            status: "failed",
+            message: "That folder is no longer shared with the agent.",
+          };
+        }
+        const parsed = parseGrant(raw);
+        if (parsed === null) {
+          return {
+            status: "failed",
+            message: "Couldn't confirm that folder's command permission.",
+          };
+        }
+        // REPORT WHAT MAIN HOLDS, not what we asked for. Main refuses to enable
+        // commands on a revoked or expired grant and answers with the record
+        // unchanged; echoing `enabled` here would turn that refusal into a
+        // checked box over authority nothing recorded.
+        return { status: "ok", applied: parsed.grant.shellEnabled };
+      } catch (cause) {
+        return {
+          status: "failed",
+          message: messageOf(
+            cause,
+            "Couldn't change that folder's command permission.",
+          ),
+        };
+      }
+    },
   });
 }
 
@@ -240,22 +283,32 @@ function parseGrant(
 ): { readonly grant: WorkspaceGrant; readonly status: string } | null {
   if (!isRecord(value)) return null;
   const keys = Object.keys(value).sort();
+  // FIVE keys since PRD-shell-execution §7.3. This check is exact on BOTH ends
+  // — a missing key and an extra key each fail — which is why adding
+  // `shellEnabled` to `RendererGrant` without editing this line would not have
+  // been a cosmetic miss: every row would have failed to parse, `listGrants`
+  // would have thrown "Couldn't read your shared folders", and the app would
+  // have looked like it had lost the grant subsystem rather than like it had
+  // gained a field. Sorted order, so `shellEnabled` sits between `mode` and
+  // `status`.
   if (
-    keys.length !== 4 ||
+    keys.length !== 5 ||
     keys[0] !== "grantId" ||
     keys[1] !== "label" ||
     keys[2] !== "mode" ||
-    keys[3] !== "status"
+    keys[3] !== "shellEnabled" ||
+    keys[4] !== "status"
   ) {
     return null;
   }
-  const { grantId, label, mode, status } = value;
+  const { grantId, label, mode, shellEnabled, status } = value;
   if (
     typeof grantId !== "string" ||
     grantId === "" ||
     typeof label !== "string" ||
     typeof status !== "string" ||
     (status !== "active" && status !== "revoked") ||
+    typeof shellEnabled !== "boolean" ||
     typeof mode !== "string" ||
     !GRANT_MODES.includes(mode as WorkspaceGrantMode)
   ) {
@@ -266,6 +319,11 @@ function parseGrant(
       grantId,
       label,
       mode: mode as WorkspaceGrantMode,
+      // A revoked row is command-incapable no matter what it stored. Main
+      // already projects it that way (`toRendererGrant`); asserting it again
+      // here means neither side alone can make a retired workspace look
+      // runnable.
+      shellEnabled: shellEnabled && status === "active",
       // `mount` is the broker's opaque per-boot handle, and the renderer
       // projection does not carry one (`RendererGrant` is grantId/mode/label/
       // status, and only the broker holds the salt that derives a mount). The

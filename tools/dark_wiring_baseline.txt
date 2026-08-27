@@ -59,9 +59,9 @@ agent_runtime.capabilities.operations.presentation_boundary:_TransportAdapterBou
 agent_runtime.capabilities.operations.presentation_boundary:_TransportAdapterBoundaryPolicy.visit_Attribute :: no src caller at all; referenced only by 1 test file(s)
 agent_runtime.capabilities.operations.presentation_boundary:_TransportAdapterBoundaryPolicy.visit_Import :: no src caller at all; referenced only by 1 test file(s)
 agent_runtime.capabilities.operations.presentation_boundary:_TransportAdapterBoundaryPolicy.visit_ImportFrom :: no src caller at all; referenced only by 1 test file(s)
-agent_runtime.capabilities.policy.contracts:CapabilityUrn.for_builtin :: no src caller at all; referenced only by 2 test file(s)
 agent_runtime.capabilities.sandbox.policy_backend:PolicyEnforcedSandboxBackend.commands_used :: no src caller at all; referenced only by 1 test file(s)
 agent_runtime.capabilities.sandbox.providers.openai_hosted:OpenAIHostedContainerBackend.execution_evidence :: no src caller at all; referenced only by 1 test file(s)
+agent_runtime.capabilities.shell.never_list:CommandNeverList.auto_approvable :: genuinely dark and deliberate — this is the AUTO tier (upstream's RECOMMENDED_SAFE_SHELL_COMMANDS via vendored_deepagents_safety), and Phase 1's rule is that EVERY command asks, so no product path can consume it yet; waits on a Phase 2 auto-approve tier calling it from ShellCommandPolicyGate. Not a PENDING-WIRINGS row: that ledger tracks orphan MODULES in the orphan ratchet, and never_list.py is thoroughly wired — this is one method on a live class
 agent_runtime.capabilities.tools.permissions:ToolUsePolicySnapshot.mode_for_tool :: no src caller at all; referenced only by 1 test file(s)
 agent_runtime.capabilities.workspace.policy_answers:WorkspacePolicyAnswers.is_policy_answer :: no src caller at all; referenced only by 1 test file(s)
 agent_runtime.context.context_contracts:ContextPlan.omitted_decisions :: no src caller at all; referenced only by 1 test file(s)
@@ -139,6 +139,8 @@ agent_runtime.artifacts.contracts:ArtifactStoredRecord.suggested_filename :: Non
 agent_runtime.capabilities.desktop.workspace_authority:WorkspaceChangeEntry.content_digest :: None-default field threaded through constructors only as a copy of itself; no product code originates a value
 agent_runtime.capabilities.mcp.catalog:McpCatalogPointer.display_name :: None-default field threaded through constructors only as a copy of itself; no product code originates a value
 agent_runtime.capabilities.sandbox.contracts:SandboxRunResult.exit_code :: None-default field threaded through constructors only as a copy of itself; no product code originates a value
+agent_runtime.capabilities.shell.contracts:RunCommandResult.exit_code :: reached, scan blind spot — the origin is `exit_code = await process.wait()` (executor.py:411), a same-named local bound from an await, so every hop the scan can see (`_outcome(exit_code=exit_code)`, `_result(exit_code=outcome.exit_code)`) looks like a copy of itself
+agent_runtime.capabilities.shell.contracts:RunCommandResult.reason :: reached, scan blind spot — originated by 10+ product sites calling `ShellRefusal.refused(<reason>, ...)` (config.py:198/219/269, never_list.py:1309, policy_gate.py:438/441/462/497, run_command_tool.py:280/332) and projected at contracts.py:461 via `as_result()`, whose `reason=self.reason` is the only hop the scan sees
 agent_runtime.capabilities.surfaces.spec_models:SurfaceState.spec :: None-default field threaded through constructors only as a copy of itself; no product code originates a value
 agent_runtime.capabilities.tools.builtin.publish_artifact:PublishArtifactInput.accent :: None-default field threaded through constructors only as a copy of itself; no product code originates a value
 agent_runtime.capabilities.workspace.contracts:WorkspaceBaseEntry.content_digest :: None-default field threaded through constructors only as a copy of itself; no product code originates a value

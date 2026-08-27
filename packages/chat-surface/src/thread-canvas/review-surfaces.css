@@ -1056,6 +1056,24 @@
   overflow-wrap: anywhere;
 }
 
+/* The SAME rule for the Studio canvas twin (`TcWriteGateCard`), which renders
+   the identical `TcWriteGatePayload` outside `.tc-write-gate__body` and so
+   inherited none of it.
+ *
+ * It was survivable while the canvas card carried only a params grid; it stops
+ * being survivable the moment it carries a command. `.tc-write-gate__command`
+ * is `white-space: pre-wrap`, which wraps at spaces and nowhere else, so a
+ * single 400-character URL or base64 blob in a command sets the <pre>'s
+ * min-content width, which the card stretches to, which the gate region then
+ * has to scroll horizontally. The row's rule above is written per-CONTAINER for
+ * exactly this reason — "anything that lands in the body inherits it, including
+ * whatever gets added next" — and this is the second container that body now
+ * renders into. */
+.tc-write-gate-card,
+.tc-write-gate-card * {
+  overflow-wrap: anywhere;
+}
+
 .tc-write-gate__reason {
   color: var(--color-text-muted);
   font-size: var(--font-size-xs);

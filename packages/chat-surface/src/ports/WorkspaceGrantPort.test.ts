@@ -18,6 +18,7 @@ const DOWNLOADS: WorkspaceGrant = {
   mount: "m_9f2c",
   label: "Downloads",
   mode: "read_only",
+  shellEnabled: false,
 };
 
 // The path-free property, enforced at COMPILE time rather than asserted over a
@@ -127,6 +128,7 @@ describe("WorkspaceGrantPort contract", () => {
         mount: "m_31aa",
         label: "notes",
         mode: "read_write",
+        shellEnabled: false,
       },
     ];
     const port: WorkspaceGrantPort = {

@@ -210,6 +210,34 @@ SANDBOX_EXECUTE_GUIDANCE = (
     "for one-shot scripts or CLI tools that need a real shell; to read or write "
     "the user's files, use the filesystem tools instead."
 )
+# Appended to the supervisor system prompt ONLY when the gated ``run_command``
+# tool is present (PRD-shell-execution §17, all four §7.1 prerequisites). This
+# block has to be honest about four things a model otherwise assumes, because
+# each one produces a confident wrong answer rather than an error:
+#
+#   * state does not persist between calls — no `cd` that carries, no exported
+#     variable, no background job;
+#   * stdin is closed, so anything that prompts hangs until it is killed;
+#   * `/bin/sh` is non-login and non-interactive, so aliases, shell functions
+#     and rc-file setup do not exist; and
+#   * NOTHING a command changes can be undone by this app (§10). The write
+#     journal covers the agent's own file writes and cannot see a subprocess.
+#
+# It also states the approval posture, because a model that does not know a
+# human will see the command writes different commands: it batches, it chains,
+# and it hides the interesting part in the middle.
+SHELL_EXECUTE_GUIDANCE = (
+    "You have a `run_command` tool that runs ONE shell command in a folder the "
+    "user attached, and returns its combined output and exit code. The user "
+    "sees and approves every command before it runs, so write commands that "
+    "read clearly on their own: one purpose per call, no chaining unrelated "
+    "work. Nothing carries between calls - no persistent `cd`, no exported "
+    "variables, no shell functions or aliases, and stdin is closed so a command "
+    "that prompts for input will hang and be killed. THIS APP CANNOT UNDO WHAT "
+    "A COMMAND CHANGES: unlike the file tools, a command's effects are outside "
+    "the undo history, so say so before proposing anything that deletes, "
+    "overwrites, installs, or publishes."
+)
 FILESYSTEM_IS_NOT_SHELL_GUIDANCE = (
     "Capability truth: filesystem tools such as `ls`, `read_file`, `glob`, "
     "`grep`, `write_file`, and `edit_file`, when present, are bounded file APIs. "

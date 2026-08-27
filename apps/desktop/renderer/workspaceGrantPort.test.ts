@@ -23,6 +23,7 @@ function rendererGrant(
     mode: string;
     label: string;
     status: string;
+    shellEnabled: unknown;
   }> = {},
 ): Record<string, unknown> {
   return {
@@ -30,6 +31,10 @@ function rendererGrant(
     mode: "read_only",
     label: "Downloads",
     status: "active",
+    // FIVE keys since PRD-shell-execution §7.3. `parseGrant` checks the key set
+    // exactly, on BOTH ends, so a fixture that omits this is rejected — which is
+    // the same guard that catches a host root appearing in this payload.
+    shellEnabled: false,
     ...overrides,
   };
 }
@@ -84,6 +89,10 @@ describe("requestGrant", () => {
         mount: "11111111-1111-4111-8111-111111111111",
         label: "Downloads",
         mode: "read_only",
+        // A newly minted grant is never command-capable (PRD-shell-execution
+        // §7.3). `CreateGrantInput` has no `shellEnabled`, so there is no
+        // parameter the attach flow could pass to make this `true`.
+        shellEnabled: false,
       },
     });
   });
@@ -248,6 +257,7 @@ describe("listGrants", () => {
         mount: "g-active",
         label: "Downloads",
         mode: "read_only",
+        shellEnabled: false,
       },
     ]);
   });

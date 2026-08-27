@@ -62,6 +62,7 @@ const DOWNLOADS: WorkspaceGrant = {
   mount: "m_9f2c",
   label: "Downloads",
   mode: "read_only",
+  shellEnabled: false,
 };
 
 const KALEIDOSCOPE: WorkspaceGrant = {
@@ -69,6 +70,7 @@ const KALEIDOSCOPE: WorkspaceGrant = {
   mount: "m_41ab",
   label: "kaleidoscope",
   mode: "read_only",
+  shellEnabled: false,
 };
 
 const NOTES: WorkspaceGrant = {
@@ -76,6 +78,7 @@ const NOTES: WorkspaceGrant = {
   mount: "m_77de",
   label: "notes",
   mode: "read_only",
+  shellEnabled: false,
 };
 
 function makeGrantPort(

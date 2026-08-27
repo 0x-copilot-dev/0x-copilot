@@ -63,6 +63,29 @@ export interface Grant {
   /** Epoch millis. Expired grants are treated as revoked for authority checks. */
   readonly expiresAt?: number;
   readonly mode: GrantMode;
+  /**
+   * Per-workspace SHELL EXECUTION enablement (PRD-shell-execution §7.3).
+   *
+   * OFF BY DEFAULT, and `false` is the ONLY value `GrantStore.create` ever
+   * mints. It is a SEPARATE flag rather than a fourth `GrantMode` because the
+   * three modes describe FILE ACCESS and are ordered (`MODE_RANK`); a fourth
+   * member would imply `read_write < execute`, which is not true — running a
+   * command is not more file access, it is a different kind of authority
+   * entirely, and it is not a superset of anything (see PRD §7.3).
+   *
+   * REQUIRED, not optional, and that is the point. "Absent" is the common case
+   * — every grant minted before this field existed lacks it — and an optional
+   * boolean makes `undefined` a third state that each reader has to remember to
+   * fold to `false`. Absence is folded ONCE, at the decode seam
+   * (`coerceGrant`), so nothing downstream can be handed `undefined` and get it
+   * wrong. The compiler then forces every construction site to say which it is.
+   *
+   * The one way this becomes `true` is `GrantStore.setShellEnabled`, reached
+   * only from the Settings toggle over its own IPC channel. No runtime call, no
+   * broker verb, and no attach-time parameter can set it — see
+   * `CreateGrantInput`.
+   */
+  readonly shellEnabled: boolean;
   /** Sanitized display label (folder basename or a renderer-supplied hint). */
   readonly label: string;
   readonly status: GrantStatus;
@@ -81,6 +104,16 @@ export interface RendererGrant {
   readonly mode: GrantMode;
   readonly label: string;
   readonly status: GrantStatus;
+  /**
+   * Whether this workspace may run commands (§7.3). Carried to the renderer
+   * because the Settings toggle has to render the CURRENT state of a security
+   * flag; a toggle that shows what the renderer last asked for rather than what
+   * main actually holds is the "pill that outlives its grant" defect wearing a
+   * different hat. It is a boolean, not a path, so it cannot become a path
+   * oracle — `RendererGrant` stays path-free, and `type PathFree<T>` still
+   * guards that.
+   */
+  readonly shellEnabled: boolean;
 }
 
 export function toRendererGrant(grant: Grant): RendererGrant {
@@ -89,6 +122,11 @@ export function toRendererGrant(grant: Grant): RendererGrant {
     mode: grant.mode,
     label: grant.label,
     status: grant.status,
+    // A grant that authorizes nothing advertises nothing. `status` here is the
+    // EFFECTIVE one (`GrantStore.list` reports an expired grant as revoked), so
+    // an expired workspace's toggle reads off rather than showing a live-looking
+    // "commands allowed" over authority that has lapsed.
+    shellEnabled: grant.status === "active" && grant.shellEnabled,
   };
 }
 
@@ -135,6 +173,23 @@ export interface BrokerGrant {
    * meant: no rule, so that folder keeps asking.
    */
   readonly root?: string;
+  /**
+   * Whether this workspace may run commands (§7.3) — present ONLY while the
+   * grant is active, for the same reason `root` is.
+   *
+   * This is THE READ PATH. PRD §7.1 lists four independent prerequisites for
+   * `run_command` to exist at all, and prerequisite 3 is this field, read off
+   * the active-grant snapshot the worker already pins at run start. No new IPC
+   * verb, no broker `ADVERTISED_METHODS` entry, and specifically no execution
+   * verb over the broker: the broker reports what the user decided, it does not
+   * run anything.
+   *
+   * ABSENT MEANS OFF. An older Electron main that does not send it decodes on
+   * the Python side to `shell_enabled=False` (`BrokerGrant` there defaults it,
+   * and the model is `extra="ignore"`), so a version skew degrades to "this
+   * workspace cannot run commands" — never to "it can".
+   */
+  readonly shellEnabled?: boolean;
 }
 
 /**
@@ -149,8 +204,17 @@ export interface BrokerGrant {
  * `toBrokerGrant` therefore did not just widen a contract — it broke the
  * channel, silently and only outside the tests, because that assertion is what
  * the real wire meets.
+ *
+ * `shellEnabled` is excluded for exactly that reason and is not an oversight.
+ * `_assert_host_session_wire_is_private` allow-lists SIX grant keys by name
+ * (`grantId`/`grant_id`, `mount`, `mode`, `label`, `status`) and raises
+ * `BrokerProtocolError` on any seventh. Projecting the shell flag here would
+ * fail every live host session closed while every test that builds the payload
+ * by hand stayed green. The flag has no business here anyway: this bootstrap
+ * carries WRITE authority for staged effects, and shell enablement is read off
+ * `/v1/grants/snapshot` (see `BrokerGrant.shellEnabled`).
  */
-export type HostSessionGrant = Omit<BrokerGrant, "root">;
+export type HostSessionGrant = Omit<BrokerGrant, "root" | "shellEnabled">;
 
 /** Path-free projection of a `GrantSnapshot` for the broker audience. */
 export interface BrokerGrantSnapshot {
@@ -182,7 +246,7 @@ export function toBrokerGrant(grant: Grant, mount: string): BrokerGrant {
   // already the effective one — `GrantStore.list` reports an expired grant as
   // revoked — so expiry is covered by the same test.
   return grant.status === "active"
-    ? { ...projected, root: grant.root }
+    ? { ...projected, root: grant.root, shellEnabled: grant.shellEnabled }
     : projected;
 }
 

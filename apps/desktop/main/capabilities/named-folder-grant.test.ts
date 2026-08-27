@@ -202,6 +202,11 @@ describe("always-allow mints a grant on the named folder", () => {
       "grantId",
       "label",
       "mode",
+      // Per-workspace shell enablement (PRD-shell-execution §7.3). It is a
+      // boolean, not a path, so the path-free property this assertion guards is
+      // unchanged — but the key COUNT is part of the guard, so it is named here
+      // rather than allowed to slip in unlisted.
+      "shellEnabled",
       "status",
     ]);
     expect(JSON.stringify(view)).not.toContain(reports);

@@ -832,6 +832,9 @@ describe("FirstRunSurfaceMount — P8 §7 modelBlocked threading", () => {
             label: "kaleidoscope",
             mode: "read_only",
             status: "active",
+            // Exact key set — see `parseGrant`. A first-run grant is never
+            // command-capable; enabling is a separate, later, explicit act.
+            shellEnabled: false,
           },
         ]),
     });

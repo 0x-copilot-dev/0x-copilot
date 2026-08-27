@@ -74,6 +74,7 @@ class ModelToolOwner(StrEnum):
     DISCOVERY = "agent_runtime.capabilities.discovery"
     INTERPRETER = "agent_runtime.capabilities.interpreter"
     SANDBOX = "agent_runtime.capabilities.sandbox"
+    SHELL = "agent_runtime.capabilities.shell"
     TOOL_PROGRAM = "agent_runtime.capabilities.tool_program"
     DATAFLOW = "agent_runtime.capabilities.dataflow"
     BACKENDS = "agent_runtime.capabilities.backends"

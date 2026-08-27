@@ -34,13 +34,23 @@
 // carries none. It is here rather than in `TcWriteGateRow` so the predicate
 // stays one answer, and so the block travels with §10.2's no-undo line.
 //
-// ⚠️ ONLY ONE OF THE TWO SURFACES PASSES IT SO FAR. `TcWriteGateCard` (the
-// Studio canvas twin) forwards `params` and `ledgerId` and neither
-// `presentation` nor `commandText`, so a command ask opened on the canvas shows
-// its title and no command. That gap predates this lane — the shaped evidence
-// has the same hole — but a command is the one payload where "the card and the
-// process disagree about what was approved" is the whole risk, so it is called
-// out here rather than left to be discovered.
+// BOTH SURFACES NOW PASS ALL OF IT. `TcWriteGateCard` (the Studio canvas twin)
+// used to forward `params` and `ledgerId` and neither `presentation` nor
+// `commandText`, so a command ask opened on the canvas showed its title and no
+// command — the shaped evidence had the same hole, and it predated this lane —
+// and a command is the one payload where "the card and the process disagree
+// about what was approved" is the whole risk. Closed: the card takes both
+// fields, `RunDestination` reads them off the same projected approval the
+// params come from, and `review-surfaces.css` gained the canvas container's
+// copy of the per-container `overflow-wrap` rule that the row's body has.
+//
+// ⚠️ THE INVARIANT THAT MATTERS IS "SAME PROPS", not "same component". Sharing
+// the component while passing it less is what produced the gap, and it is
+// silent by construction: every field here is absent-means-omitted, so the
+// under-fed surface renders a smaller card rather than an error. A new field on
+// `TcWriteGatePayloadProps` is therefore THREE edits — this file, `TcWriteGateRow`,
+// `TcWriteGateCard` — and `TcWriteGateCard.test.tsx` holds a prop-parity test
+// that fails when it is not.
 
 import type { CSSProperties, ReactElement } from "react";
 

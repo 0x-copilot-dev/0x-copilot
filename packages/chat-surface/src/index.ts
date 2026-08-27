@@ -2063,15 +2063,31 @@ export type {
   WorkspaceGrantPort,
   WorkspaceGrantRequestInput,
   WorkspaceRevokeOutcome,
+  WorkspaceShellAccessOutcome,
 } from "./ports/WorkspaceGrantPort";
 export {
   mostRecentFirst,
   useWorkspaceFolderGrants,
   WorkspaceFolderBar,
   WORKSPACE_FOLDER_BAR_EMPTY_LABEL,
+  WORKSPACE_SHELL_ACCESS_NOTICE,
   type WorkspaceFolderBarProps,
   type WorkspaceFolderGrantsState,
 } from "./composer";
+// Per-workspace shell enablement (PRD-shell-execution §7.3, §14.4). The
+// Settings section that SETS the flag; the flag itself rides `WorkspaceGrant`
+// and is read by the runtime off the broker's active-grant snapshot, never off
+// this surface.
+export {
+  WorkspaceShellAccess,
+  WORKSPACE_SHELL_ACCESS_TITLE,
+  WORKSPACE_SHELL_ACCESS_META,
+  WORKSPACE_SHELL_ACCESS_EMPTY,
+  WORKSPACE_SHELL_ACCESS_CONFIRM_LABEL,
+  WORKSPACE_SHELL_ACCESS_CANCEL_LABEL,
+  workspaceShellAccessConfirmPrompt,
+  type WorkspaceShellAccessProps,
+} from "./settings";
 // `BypassPill` and its vocabulary are hoisted once, in the Filesystem-bypass
 // block above — PRD-FS-11's shape (mode + scope + host-owned mount) supersedes
 // the FS-10 selection-only export that stood here.

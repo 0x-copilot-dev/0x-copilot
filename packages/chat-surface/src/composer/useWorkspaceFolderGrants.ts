@@ -26,6 +26,19 @@ import type {
   WorkspaceGrantRequestInput,
 } from "../ports/WorkspaceGrantPort";
 
+/**
+ * Copy the shell-enablement control MUST state, verbatim (PRD §11.5, §14.4).
+ *
+ * It is exported so the surface and its test read the same bytes. There is no
+ * OS sandbox in v1, and the sentence is the product's only honest account of
+ * that: a toggle labelled "run commands in this folder" reads as a confinement
+ * claim the cwd binding does not make — the binding decides where a command
+ * STARTS, not where it can reach.
+ */
+export const WORKSPACE_SHELL_ACCESS_NOTICE =
+  "A command runs as you, with your permissions. It can read any file your " +
+  "user can read, write any file your user can write, and reach the network.";
+
 export interface WorkspaceFolderGrantsState {
   /** Active grants, newest read of the broker's own list, IN THE BROKER'S ORDER. */
   readonly grants: readonly WorkspaceGrant[];
@@ -53,6 +66,19 @@ export interface WorkspaceFolderGrantsState {
    */
   readonly requestGrant: (input?: WorkspaceGrantRequestInput) => Promise<void>;
   readonly revokeGrant: (grantId: string) => Promise<void>;
+  /**
+   * Turn command execution on or off for ONE workspace (PRD §7.3), or `null`
+   * when the host has not wired `WorkspaceGrantPort.setShellEnabled`.
+   *
+   * NULL, not a no-op function, on purpose. A no-op would let a surface render
+   * a toggle that silently does nothing — which is the same lie as a pill that
+   * outlives its grant, in the one place where the lie is "the agent may run
+   * commands here". Null makes "can this host do it at all?" a question the
+   * caller has to answer before it draws the control.
+   */
+  readonly setShellEnabled:
+    | ((grantId: string, enabled: boolean) => Promise<void>)
+    | null;
   /** Re-read the active set (mount, and after any change). */
   readonly refresh: () => Promise<void>;
   /** Dismiss the failure line without retrying. */
@@ -196,6 +222,48 @@ export function useWorkspaceFolderGrants(
     [port, refresh],
   );
 
+  // Bound to the port's IDENTITY, not to the method, so a host that supplies no
+  // implementation yields `null` and the surface draws no toggle at all.
+  const supportsShell = typeof port?.setShellEnabled === "function";
+  const applyShellEnabled = useCallback(
+    async (grantId: string, enabled: boolean): Promise<void> => {
+      if (!port || typeof port.setShellEnabled !== "function") return;
+      setBusy(true);
+      setError(null);
+      try {
+        const outcome = await port.setShellEnabled(grantId, enabled);
+        if (outcome.status === "failed") {
+          if (alive.current) setError(outcome.message);
+        } else if (outcome.applied !== enabled && alive.current) {
+          // The host answered with what it actually holds and it is not what was
+          // asked for — the grant lapsed, or main declined. Say so; a toggle
+          // that snapped back with no sentence reads as a UI glitch, and the
+          // user would reasonably assume the agent can run commands.
+          setError(
+            enabled
+              ? "Couldn't allow commands in that folder. Re-attach it and try again."
+              : "Couldn't stop commands in that folder.",
+          );
+        }
+        // Re-read either way. Same rule as revoke: after a failure we do not
+        // know what the host's set is, and guessing is what we are avoiding.
+        await refresh();
+      } catch (cause) {
+        if (alive.current) {
+          setError(
+            messageOf(
+              cause,
+              "Couldn't change that folder's command permission.",
+            ),
+          );
+        }
+      } finally {
+        if (alive.current) setBusy(false);
+      }
+    },
+    [port, refresh],
+  );
+
   const clearError = useCallback((): void => setError(null), []);
 
   // A remembered id outlives its grant when the folder is revoked (here or in
@@ -214,6 +282,7 @@ export function useWorkspaceFolderGrants(
     error,
     requestGrant,
     revokeGrant,
+    setShellEnabled: supportsShell ? applyShellEnabled : null,
     refresh,
     clearError,
   };

@@ -13,7 +13,13 @@ import type { WorkspaceGrant } from "../ports/WorkspaceGrantPort";
 import { mostRecentFirst } from "./useWorkspaceFolderGrants";
 
 function grant(id: string, label: string): WorkspaceGrant {
-  return { grantId: id, mount: `m_${id}`, label, mode: "read_only" };
+  return {
+    grantId: id,
+    mount: `m_${id}`,
+    label,
+    mode: "read_only",
+    shellEnabled: false,
+  };
 }
 
 const NOTES = grant("g1", "notes");

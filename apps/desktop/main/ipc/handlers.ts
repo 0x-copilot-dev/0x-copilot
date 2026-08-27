@@ -17,6 +17,7 @@ import {
   RendererGrantSchema,
   RequestFolderGrantParamsSchema,
   RevokeGrantParamsSchema,
+  SetGrantShellEnabledParamsSchema,
   WorkspaceApprovalHostDecisionRequestSchema,
   WorkspaceApprovalHostDecisionResultSchema,
   type RequestFolderGrantParams,
@@ -90,6 +91,11 @@ export interface CapabilityHandlers {
   ): Promise<RendererGrant | null>;
   listGrants(): Promise<RendererGrant[]>;
   revokeGrant(grantId: string): Promise<RendererGrant | null>;
+  /** Per-workspace shell enablement (PRD-shell-execution §7.3). */
+  setGrantShellEnabled(
+    grantId: string,
+    enabled: boolean,
+  ): Promise<RendererGrant | null>;
 }
 
 // Connector connect handlers (AC9). The renderer asks main to fetch the
@@ -459,6 +465,29 @@ export function registerIpcHandlers(deps: RegisterHandlersDeps): () => void {
         return grant === null ? null : toSafeRendererGrant(grant);
       },
     );
+
+    // Per-workspace shell enablement (PRD-shell-execution §7.3). The fifth
+    // capability channel, and the only one that mutates an existing grant.
+    //
+    // Note what does NOT happen here: nothing is executed, no host path is
+    // accepted or returned, and the reply is the SAME strict-parsed
+    // `RendererGrant` every other grant channel answers with — so the renderer
+    // learns the state main actually holds rather than the state it asked for.
+    ipcMain.handle(
+      CAPABILITY_CHANNELS.setGrantShellEnabled,
+      async (_event, raw: unknown) => {
+        const params = parseOrThrow(
+          CAPABILITY_CHANNELS.setGrantShellEnabled,
+          SetGrantShellEnabledParamsSchema,
+          raw,
+        );
+        const grant = await capability.setGrantShellEnabled(
+          params.grantId,
+          params.enabled,
+        );
+        return grant === null ? null : toSafeRendererGrant(grant);
+      },
+    );
   }
 
   const workspaceApproval = deps.workspaceApproval;
@@ -569,6 +598,7 @@ export function registerIpcHandlers(deps: RegisterHandlersDeps): () => void {
         CAPABILITY_CHANNELS.requestFolderGrant,
         CAPABILITY_CHANNELS.listGrants,
         CAPABILITY_CHANNELS.revokeGrant,
+        CAPABILITY_CHANNELS.setGrantShellEnabled,
       );
     }
     if (workspaceApproval) {

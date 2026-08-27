@@ -27,6 +27,7 @@
 
 import type { CSSProperties, ReactElement } from "react";
 
+import type { ApprovalPresentation } from "../approvals/presentation";
 import type { ActivityParam } from "../approvals/types";
 import { TcWriteGatePayload } from "./TcWriteGatePayload";
 
@@ -37,6 +38,35 @@ export interface TcWriteGateCardProps {
   readonly connector: string | null;
   /** The call's arguments, already projected + sanitised for display. */
   readonly params: readonly ActivityParam[];
+  /**
+   * The server-projected SHAPE of this call — the batch it will execute, or the
+   * draft it will send. Same field, same default, same meaning as
+   * `TcWriteGateRow.presentation`: absent-means-omitted, so a gate without one
+   * renders byte-for-byte what this card rendered before shapes existed.
+   */
+  readonly presentation?: ApprovalPresentation | null;
+  /**
+   * The exact command a `run_command` ask will execute (PRD-shell-execution
+   * §14.1).
+   *
+   * IT IS THE WHOLE CARD, on a command ask. The write gate's wire shape carries
+   * no `arguments` and no presentation, so without this the canvas twin of a
+   * command approval was a title, a no-undo-less reversibility line, and an
+   * enabled Approve button — a decision offered over a payload the surface had
+   * not shown. `TcWriteGatePayload`'s own header called that out as the one
+   * payload where "the card and the process disagree about what was approved"
+   * is the entire risk, and this prop is that gap closed.
+   *
+   * Approve is NOT additionally gated on the payload having rendered, unlike
+   * `TcWriteGateRow`'s. The row gates because it can be COLLAPSED — its rule is
+   * "no approval before the payload has been seen", and a collapsed row has not
+   * shown it. This card has no disclosure: the payload is on screen whenever
+   * there is one, so the rule is satisfied structurally. Adding the predicate
+   * here would instead disable Approve on every ordinary MCP write gate, whose
+   * wire shape legitimately carries neither params nor presentation — the
+   * dead-control failure `TcWriteGateRow` documents at length.
+   */
+  readonly commandText?: string | null;
   /** `r<short>·<seq>` — the audit anchor this decision will be recorded under. */
   readonly ledgerId: string;
   /** True when the write cannot be undone from inside the app. */
@@ -50,6 +80,8 @@ export function TcWriteGateCard({
   title,
   connector,
   params,
+  presentation = null,
+  commandText = null,
   ledgerId,
   irreversible,
   onApprove,
@@ -58,7 +90,13 @@ export function TcWriteGateCard({
 }: TcWriteGateCardProps): ReactElement {
   return (
     <div
-      className="ui-card"
+      // `tc-write-gate-card` is not decoration — `review-surfaces.css` hangs
+      // one rule off it, the per-CONTAINER `overflow-wrap: anywhere` that the
+      // row's expanded body has had since a 138-character token measured a
+      // 356px column out to 1022px. A command is an unbroken token far more
+      // often than prose is, so forwarding `commandText` here without it would
+      // have imported that failure onto the canvas.
+      className="ui-card tc-write-gate-card"
       data-testid="tc-write-gate-card"
       data-risk={irreversible ? "high" : "normal"}
       style={rootStyle}
@@ -82,9 +120,15 @@ export function TcWriteGateCard({
       </h3>
 
       {/* The same component the transcript row's expanded body renders, so the
-          two surfaces cannot disagree about what is being approved. */}
+          two surfaces cannot disagree about what is being approved — and now
+          with the same PROPS, which is what that sentence needed to be true.
+          Passing the component but not its evidence made the two surfaces
+          disagree in the one direction that matters: the row showed the command
+          and the canvas showed a heading. */}
       <TcWriteGatePayload
         params={params}
+        presentation={presentation}
+        commandText={commandText}
         irreversible={irreversible}
         ledgerId={ledgerId}
         testIdPrefix="tc-write-gate-card"

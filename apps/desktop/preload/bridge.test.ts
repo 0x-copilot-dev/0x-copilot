@@ -140,6 +140,15 @@ describe("preload bridge capability-channel allowlist", () => {
     await bridge.ipc.invoke(CAPABILITY_CHANNELS.revokeGrant, {
       grantId: "x",
     });
+    // PRD-shell-execution §7.3. The fifth capability channel, and the only route
+    // the Settings toggle has to main — a channel main registers but preload
+    // will not forward is a control that silently does nothing. It rides
+    // `isCapabilityChannel`, so it is allow-listed by being in
+    // `CAPABILITY_CHANNELS` at all; this asserts that derivation still holds.
+    await bridge.ipc.invoke(CAPABILITY_CHANNELS.setGrantShellEnabled, {
+      grantId: "x",
+      enabled: true,
+    });
     await bridge.ipc.invoke(CAPABILITY_CHANNELS.decideWorkspaceApproval, {
       snapshot: {
         runId: "run_c3_001",
@@ -167,7 +176,11 @@ describe("preload bridge capability-channel allowlist", () => {
         decision: "approve",
       },
     );
-    expect(electron.ipcRenderer.invoke).toHaveBeenCalledTimes(4);
+    expect(electron.ipcRenderer.invoke).toHaveBeenCalledWith(
+      CAPABILITY_CHANNELS.setGrantShellEnabled,
+      { grantId: "x", enabled: true },
+    );
+    expect(electron.ipcRenderer.invoke).toHaveBeenCalledTimes(5);
   });
 
   it("still rejects a channel that is in neither allowlist", async () => {

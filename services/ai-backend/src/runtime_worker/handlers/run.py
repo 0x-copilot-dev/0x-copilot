@@ -758,6 +758,7 @@ class RuntimeRunHandler:
                 tool_observation_index,
                 workspace_backend=workspace_backend,
                 granted_host_roots=granted_host_roots,
+                run_command_tool=await self._run_command_tool(command),
                 run=run,
                 mcp_gateway_services=mcp_gateway_services,
             )
@@ -1630,6 +1631,40 @@ class RuntimeRunHandler:
             provider_overrides=self._sandbox_provider_overrides,  # type: ignore[arg-type]
         )
 
+    async def _run_command_tool(self, command: RuntimeRunCommand) -> object | None:
+        """Compose the model-visible ``run_command`` tool for this run, or ``None``.
+
+        The gate is built HERE and unconditionally, not taken from the MCP lane.
+        ``factory._tool_access_gate`` is constructed inside the per-tool MCP
+        registration, so a run with no connectors has no gate at all — and a
+        command lane wired to that gate would refuse every command with
+        "approval is not available for this run" on exactly the runs most likely
+        to want one. The command card opens no auth session, so
+        ``auth_session_creator=None`` is complete rather than degraded.
+
+        Composition failure is not a run failure: the capability is optional, and
+        an exception raised while resolving whether a user *might* run commands
+        must not take down a run that never asked to.
+        """
+
+        from agent_runtime.surfaces_v2.gate import ToolAccessGate  # noqa: PLC0415
+        from runtime_worker.shell_composition import ShellWorkerBundle  # noqa: PLC0415
+
+        try:
+            return await ShellWorkerBundle.compose(
+                runtime_context=command.runtime_context,
+                conversation_id=command.conversation_id,
+                gate=ToolAccessGate(
+                    auth_session_creator=None,
+                    runtime_context=command.runtime_context,
+                ),
+                mounts_provider=self._workspace_wiring().workspace_mounts,
+                env=self._capability_env,
+            )
+        except Exception:  # noqa: BLE001 - an optional capability never fails a run
+            logging.getLogger(__name__).warning("shell.compose.failed", exc_info=True)
+            return None
+
     def _build_tool_result_offloader(self) -> object | None:
         """Construct the file-store tool-result offloader, or ``None`` elsewhere."""
 
@@ -1986,6 +2021,7 @@ class RuntimeRunHandler:
         *,
         workspace_backend: object | None = None,
         granted_host_roots: tuple[object, ...] | None = None,
+        run_command_tool: object | None = None,
         run: RunRecord | None = None,
         mcp_gateway_services: McpOperationGatewayServices | None = None,
     ) -> RuntimeDependencies:
@@ -2096,6 +2132,14 @@ class RuntimeRunHandler:
         sandbox_execute_tool = capability_tools.sandbox_execute_tool()
         if sandbox_execute_tool is not None:
             update["sandbox_execute_tool"] = sandbox_execute_tool
+        # PRD-shell-execution Phase 1 — the gated ``run_command`` tool. Resolved
+        # by the async caller rather than here, like ``granted_host_roots``,
+        # because its prerequisites include a LIVE read of the desktop grant
+        # snapshot (§7.1.3) and this method is sync. ``None`` unless all four
+        # prerequisites hold, so every other deployment keeps a byte-identical
+        # model tool surface.
+        if run_command_tool is not None:
+            update["run_command_tool"] = run_command_tool
         # A factory rather than a tool: `execution.factory` builds the tool once
         # it has composed the toolset a program is allowed to schedule.
         tool_program_factory = capability_tools.tool_program_factory()

@@ -27,6 +27,9 @@ function grant(overrides: Partial<Grant> = {}): Grant {
     expiresAt: Number.MAX_SAFE_INTEGER,
     mode: "read_write",
     label: "project",
+    // Default OFF, stated explicitly: a fixture that omitted it would be the
+    // one place absence is allowed to mean something other than "no commands".
+    shellEnabled: false,
     status: "active",
     createdAt: 1,
     updatedAt: 1,

@@ -169,6 +169,26 @@ class GrantedRoot:
 
     path: str
     writable: bool = True
+    shell_enabled: bool = False
+    """Whether the user enabled SHELL EXECUTION for this workspace (§7.3).
+
+    The terminus of the per-workspace enablement read path: Settings toggle →
+    ``GrantStore`` → ``toBrokerGrant`` → ``/v1/grants/snapshot`` →
+    ``BrokerGrant.shell_enabled`` → ``WorkspaceMount`` → here.
+
+    SEPARATE FROM ``writable``, and defaulted OFF. PRD §7.1 requires FOUR
+    independent things before ``run_command`` exists at all — the process env
+    flag, a writable granted root, THIS field on that root's grant, and the
+    ``single_user_desktop`` profile — and a tool factory has to be able to check
+    each one. Folding this into ``writable`` would collapse two of the four into
+    one and make "the user turned commands on for this folder" unobservable.
+
+    It changes NOTHING about the filesystem rules. ``HostFilesystemRules.build``
+    and ``HostFilesystemFloor`` never read it; a command is invisible to every
+    path-keyed control we own (§2.2), which is exactly why enablement is a
+    separate, explicit, per-workspace decision rather than a consequence of
+    file access.
+    """
 
     def __post_init__(self) -> None:
         if not self.path.startswith("/"):
@@ -180,7 +200,9 @@ class GrantedRoot:
             raise ValueError(f"granted root must not contain '..': {self.path!r}")
 
     @classmethod
-    def from_host_path(cls, path: str, *, writable: bool = True) -> GrantedRoot:
+    def from_host_path(
+        cls, path: str, *, writable: bool = True, shell_enabled: bool = False
+    ) -> GrantedRoot:
         r"""Build a root from a host path in EITHER platform's grammar.
 
         `__post_init__` demands the POSIX-shaped canonical spelling because that
@@ -199,7 +221,11 @@ class GrantedRoot:
         classified = HostPathClassifier.classify(path)
         if not classified.is_host:
             raise ValueError(f"granted root is not a host folder: {path!r}")
-        return cls(path=classified.canonical, writable=writable)
+        return cls(
+            path=classified.canonical,
+            writable=writable,
+            shell_enabled=shell_enabled,
+        )
 
     def glob(self) -> str:
         """Match the root itself and everything beneath it."""

@@ -374,6 +374,10 @@ describe("RunEmptyComposer", () => {
           label: "kaleidoscope",
           mode: "read_only",
           status: "active",
+          // `parseGrant` checks the renderer projection's key set EXACTLY, so a
+          // fixture missing this is rejected and the bar renders nothing — the
+          // same guard that catches a host root appearing in this payload.
+          shellEnabled: false,
         },
       ],
     });

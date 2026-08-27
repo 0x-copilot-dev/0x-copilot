@@ -1014,6 +1014,12 @@ function wireTransportAndIpc(
               capabilityService!.requestFolderGrant(params),
             listGrants: () => capabilityService!.listGrants(),
             revokeGrant: (grantId) => capabilityService!.revokeGrant(grantId),
+            // PRD-shell-execution §7.3: the Settings toggle's only route to
+            // main. Wired on the SAME condition as the other three, so a build
+            // with the capability subsystem off has no shell-enablement channel
+            // either — there is nothing to toggle when there are no grants.
+            setGrantShellEnabled: (grantId, enabled) =>
+              capabilityService!.setGrantShellEnabled(grantId, enabled),
           },
     workspaceApproval,
     // AC9 connector channels. Wired only against a real facade; returns only

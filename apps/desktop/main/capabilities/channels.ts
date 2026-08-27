@@ -19,6 +19,18 @@ export const CAPABILITY_CHANNELS = {
   listGrants: "capability.list-grants",
   /** Renderer → main: revoke a grant by id. */
   revokeGrant: "capability.revoke-grant",
+  /**
+   * Renderer → main: turn per-workspace SHELL EXECUTION on/off for one grant
+   * (PRD-shell-execution §7.3). The FIFTH capability channel, and the only one
+   * that mutates an existing grant — before it, `GrantStore` had `create` and
+   * `revoke` and nothing else, so the renderer had no way to reach a change of
+   * this kind at all.
+   *
+   * It carries a decision, never an execution. Nothing on this channel runs a
+   * command, and the broker gains no execute verb; main records what the user
+   * chose and the runtime reads it back off the active-grant snapshot.
+   */
+  setGrantShellEnabled: "capability.set-grant-shell-enabled",
   /** Renderer → main: decide one digest-pinned workspace stage revision. */
   decideWorkspaceApproval: "capability.decide-workspace-approval",
 } as const;

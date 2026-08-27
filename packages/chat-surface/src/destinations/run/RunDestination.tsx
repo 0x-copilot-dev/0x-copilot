@@ -4700,6 +4700,14 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
                 }
                 connector={gate.connector}
                 params={writeGateApproval(gate.gateId)?.params ?? []}
+                // The shaped evidence and the command, off the SAME projected
+                // approval the params come from. Omitting them was what made
+                // the canvas twin of a command ask (PRD-shell-execution §14.1)
+                // a title over an enabled Approve — the payload the decision is
+                // made ON, absent from the surface making it, while the chat
+                // row for the same gate showed it in full.
+                presentation={writeGateApproval(gate.gateId)?.presentation}
+                commandText={writeGateApproval(gate.gateId)?.command}
                 ledgerId={gate.ledgerId}
                 // Was hardcoded false, so a DESTRUCTIVE gate printed "You can
                 // undo this from the connector if it's wrong." on the canvas

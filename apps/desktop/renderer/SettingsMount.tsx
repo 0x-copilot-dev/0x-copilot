@@ -38,6 +38,7 @@ import {
   ModelsPage,
   ModelBehaviorPage,
   useConnectorSuggestions,
+  useWorkspaceFolderGrants,
   NotificationsPage,
   PrivacyPage,
   ProfilePage,
@@ -93,6 +94,7 @@ import {
 import type { LinkWalletOutcome } from "@0x-copilot/chat-surface";
 
 import { publishWorkspaceDefaults } from "./workspaceDefaultsStore";
+import { bridgeWorkspaceGrantPort } from "./workspaceGrantPort";
 import { SECURE_STORAGE_CHANNELS } from "../main/services/secure-storage-channels";
 
 interface SecureStorageStatus {
@@ -933,6 +935,17 @@ export function SettingsMount({
     recheckLocalModels();
   }, [recheckLocalModels]);
 
+  // Per-workspace shell execution (PRD-shell-execution §7.3, §14.4). The SAME
+  // hook the composer's folder bar uses, over the SAME memoized port, so
+  // Settings and the composer can never disagree about which folders are
+  // attached — a second source of that list is how a toggle ends up governing a
+  // grant the user already detached somewhere else.
+  //
+  // `bridgeWorkspaceGrantPort()` returns undefined when there is no bridge (the
+  // browser-hosted renderer used in tests and dev), and the hook then yields
+  // `setShellEnabled: null`, which makes the section render nothing at all.
+  const workspaceGrants = useWorkspaceFolderGrants(bridgeWorkspaceGrantPort());
+
   const renderSection = (
     slug: SettingsSectionSlug,
     controller: SettingsSurfaceController,
@@ -1122,6 +1135,22 @@ export function SettingsMount({
             // above it, so the two never disagree about what is muted.
             mutedConnectors={connectorSuggestions.muted}
             onUnmuteConnector={connectorSuggestions.unmute}
+            // PRD-shell-execution §7.3/§14.4 — the "Run commands" list, under
+            // the approval policy. Applies IMMEDIATELY through its own host
+            // callback rather than riding this page's SaveBar: a security
+            // permission must not sit unsaved behind a Save the user may never
+            // press, in either direction.
+            workspaceShellAccess={{
+              grants: workspaceGrants.grants,
+              onSetShellEnabled:
+                workspaceGrants.setShellEnabled === null
+                  ? null
+                  : (grantId, enabled) => {
+                      void workspaceGrants.setShellEnabled?.(grantId, enabled);
+                    },
+              error: workspaceGrants.error,
+              busy: workspaceGrants.busy,
+            }}
             cloudModels={mbCloudModels}
             onChange={(patch) => {
               if (patch.defaultModel !== undefined) {

@@ -28,6 +28,9 @@ function makeGrant(overrides: Partial<Grant> = {}): Grant {
     root: "/data/private",
     mode: "read_only",
     label: "private",
+    // Default OFF, stated explicitly: a fixture that omitted it would be the
+    // one place absence is allowed to mean something other than "no commands".
+    shellEnabled: false,
     status: "active",
     createdAt: 1,
     updatedAt: 1,
@@ -213,6 +216,11 @@ describe("CapabilityBroker", () => {
       "mode",
       "mount",
       "root",
+      // PRD-shell-execution §7.3 prerequisite 3 — the runtime's ONLY read of
+      // the per-workspace command decision. Listed here because this assertion
+      // is the broker wire's shape contract, and an unlisted key would mean the
+      // flag reached the worker without anyone deciding it should.
+      "shellEnabled",
       "status",
     ]);
     expect(g.root).toBe("/data/private");
@@ -244,6 +252,30 @@ describe("CapabilityBroker", () => {
     expect(body.grants[0].root).toBe("/data/live");
     expect(body.grants[1]).not.toHaveProperty("root");
     expect(text).not.toContain("/data/gone");
+  });
+
+  it("a detached workspace hands out no COMMAND capability either", async () => {
+    // The same rule as `root`, for the flag the runtime reads as §7.1's third
+    // prerequisite. A revoked (or expired — the store reports those revoked too)
+    // grant authorizes nothing, so shipping `shellEnabled: true` for it would
+    // let a worker treat a folder the user explicitly detached as still
+    // command-capable. Absent decodes on the Python side as `False`.
+    grants.grants = [
+      makeGrant({ grantId: "live", status: "active", shellEnabled: true }),
+      makeGrant({ grantId: "gone", status: "revoked", shellEnabled: true }),
+    ];
+
+    const res = await fetch(`${baseUrl}/v1/grants/list`, {
+      method: "POST",
+      headers: H(),
+      body: "{}",
+    });
+    const body = (await res.json()) as {
+      grants: Array<Record<string, unknown>>;
+    };
+
+    expect(body.grants[0].shellEnabled).toBe(true);
+    expect(body.grants[1]).not.toHaveProperty("shellEnabled");
   });
 
   it("snapshots only active grants, path-free with a stable mount id", async () => {

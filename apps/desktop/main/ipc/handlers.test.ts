@@ -701,6 +701,7 @@ describe("capability.* channels", () => {
         mode: "read_write" as const,
         label: "proj",
         status: "active" as const,
+        shellEnabled: false,
       })),
       listGrants: vi.fn(async () => [
         {
@@ -708,6 +709,7 @@ describe("capability.* channels", () => {
           mode: "read_only" as const,
           label: "proj",
           status: "active" as const,
+          shellEnabled: false,
         },
       ]),
       revokeGrant: vi.fn(async () => ({
@@ -715,7 +717,17 @@ describe("capability.* channels", () => {
         mode: "read_only" as const,
         label: "proj",
         status: "revoked" as const,
+        shellEnabled: false,
       })),
+      setGrantShellEnabled: vi.fn(
+        async (grantId: string, enabled: boolean) => ({
+          grantId,
+          mode: "read_write" as const,
+          label: "proj",
+          status: "active" as const,
+          shellEnabled: enabled,
+        }),
+      ),
     };
     const teardown = registerIpcHandlers({
       ipcMain: ipcMain as unknown as Parameters<
@@ -727,11 +739,57 @@ describe("capability.* channels", () => {
     return { ipcMain, capability, teardown };
   }
 
-  it("registers the three capability channels only when a handler is provided", () => {
+  it("registers the four capability channels only when a handler is provided", () => {
     const { ipcMain } = setupCapability();
     expect(ipcMain.has(CAPABILITY_CHANNELS.requestFolderGrant)).toBe(true);
     expect(ipcMain.has(CAPABILITY_CHANNELS.listGrants)).toBe(true);
     expect(ipcMain.has(CAPABILITY_CHANNELS.revokeGrant)).toBe(true);
+    expect(ipcMain.has(CAPABILITY_CHANNELS.setGrantShellEnabled)).toBe(true);
+  });
+
+  // PRD-shell-execution §7.3. The channel exists because there was no other way
+  // to reach main: `CapabilityService` had no mutation of an existing grant at
+  // all, so a Settings toggle had nothing to call.
+  it("set-grant-shell-enabled forwards the exact requested value", async () => {
+    const { ipcMain, capability } = setupCapability();
+    const result = await ipcMain.invoke(
+      CAPABILITY_CHANNELS.setGrantShellEnabled,
+      1,
+      {
+        grantId: "22222222-2222-4222-8222-222222222222",
+        enabled: true,
+      },
+    );
+    expect(capability.setGrantShellEnabled).toHaveBeenCalledWith(
+      "22222222-2222-4222-8222-222222222222",
+      true,
+    );
+    expect(result).toEqual({
+      grantId: "22222222-2222-4222-8222-222222222222",
+      mode: "read_write",
+      label: "proj",
+      status: "active",
+      shellEnabled: true,
+    });
+  });
+
+  // `enabled` is required and `.strict()` — a renderer cannot mean "flip it",
+  // and cannot smuggle a mode/path/command alongside the decision.
+  it("set-grant-shell-enabled rejects a payload that omits or exceeds the contract", async () => {
+    const { ipcMain, capability } = setupCapability();
+    await expect(
+      ipcMain.invoke(CAPABILITY_CHANNELS.setGrantShellEnabled, 1, {
+        grantId: "22222222-2222-4222-8222-222222222222",
+      }),
+    ).rejects.toThrow();
+    await expect(
+      ipcMain.invoke(CAPABILITY_CHANNELS.setGrantShellEnabled, 1, {
+        grantId: "22222222-2222-4222-8222-222222222222",
+        enabled: true,
+        command: "rm -rf ~",
+      }),
+    ).rejects.toThrow();
+    expect(capability.setGrantShellEnabled).not.toHaveBeenCalled();
   });
 
   it("does not register capability channels when no handler is provided", () => {
@@ -759,6 +817,9 @@ describe("capability.* channels", () => {
     });
     expect(res).toEqual({
       grantId: "22222222-2222-4222-8222-222222222222",
+      // A freshly minted grant is never command-capable (§7.3): `create` mints
+      // `shellEnabled: false` and `CreateGrantInput` has no way to say otherwise.
+      shellEnabled: false,
       mode: "read_write",
       label: "proj",
       status: "active",
