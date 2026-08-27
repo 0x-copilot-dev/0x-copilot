@@ -14,6 +14,10 @@ from langgraph.types import Command
 from agent_runtime.execution.contracts import RuntimeErrorCode
 from agent_runtime.execution.errors import AgentRuntimeError
 from agent_runtime.execution.factory import RuntimeHarness
+from agent_runtime.execution.model_invocation.contracts import ModelFailureClass
+from agent_runtime.execution.providers.model_failure_adapters import (
+    classify_without_lifecycle,
+)
 from agent_runtime.observability.logging import (
     RuntimeLogger,
     RuntimeLogLevel,
@@ -140,6 +144,44 @@ RECURSION_LIMIT_MESSAGE = (
     "step limit. Try narrowing the request, or splitting it into smaller steps."
 )
 
+#: Public copy for the provider-404 translation below.
+#:
+#: Deliberately does NOT name the model. ``context.model_profile`` carries the
+#: model the RUN was configured with, but a 404 can be raised by a summarizer or
+#: a subagent running a different one, so interpolating it would print an id we
+#: cannot prove was the one rejected — and a wrong id is worse than none.
+#:
+#: Deliberately does not say "retired" either. The runtime observes a numeric
+#: 404, which is equally what a wrong ``base_url`` path on an OpenAI-compatible
+#: endpoint returns, and what Ollama returns for a model the machine never
+#: pulled. "The provider will not serve it" is the whole of what was measured;
+#: the vendor's deprecation policy was not.
+MODEL_NOT_FOUND_MESSAGE = (
+    "The provider would not serve the model this run selected. Choose a "
+    "different model — sending this again will fail the same way."
+)
+
+
+def _model_not_found_code(exc: BaseException) -> RuntimeErrorCode | None:
+    """Translate one provider failure class into a run-level error code.
+
+    Only ``MODEL_NOT_FOUND`` is translated, and the narrowness is the design.
+    The other lifecycle-independent classes already have run-level homes or
+    deliberately have none: ``CANCELLED`` is handled before the graph raises,
+    ``CONTEXT_EXCEEDED`` reaches the user through the context-budget path, and
+    the transient ones are the cases where ``EXTERNAL_SERVICE_ERROR`` with
+    ``retryable=True`` is the correct answer. Widening this map is a separate
+    change with its own evidence; doing it here would silently re-code failures
+    whose current envelope nobody has re-examined.
+
+    Returns ``None`` for anything not decidable from the exception alone, which
+    the caller treats as "keep the existing handling".
+    """
+
+    if classify_without_lifecycle(exc) is ModelFailureClass.MODEL_NOT_FOUND:
+        return RuntimeErrorCode.MODEL_NOT_FOUND
+    return None
+
 
 class _TracedRuntimeCall:
     """Shared logging and error-handling for all runtime invocation functions.
@@ -249,6 +291,34 @@ class _TracedRuntimeCall:
             )
             raise error from exc
         except Exception as exc:
+            # Ask the typed provider taxonomy BEFORE the isinstance fallback
+            # below. That fallback is a guess about Python builtins, not a
+            # verdict about the provider, and it defaults to retryable — so an
+            # Anthropic 404 for a model id shipped as EXTERNAL_SERVICE_ERROR
+            # with ``retryable: true``, and the run card offered a "start a new
+            # run with this goal" button that re-sent the same goal to the same
+            # model the provider had already refused. Five runs died that way in
+            # seven seconds in one benchmark arm.
+            #
+            # The classification is the SDK exception's own class identity and
+            # numeric status, never its message; ``classify_without_lifecycle``
+            # returns ``None`` for anything it cannot decide from the exception
+            # alone, and ``None`` falls through unchanged.
+            code = _model_not_found_code(exc)
+            if code is not None:
+                error = AgentRuntimeError(
+                    code,
+                    MODEL_NOT_FOUND_MESSAGE,
+                    retryable=False,
+                    correlation_id=self._trace_id,
+                )
+                self._log_failure(
+                    error_code=error.code,
+                    retryable=error.retryable,
+                    safe_message=error.safe_message,
+                    metadata=RuntimeLogger.exception_metadata(exc),
+                )
+                raise error from exc
             retryable = not isinstance(exc, _NON_RETRYABLE_ERRORS)
             self._log_failure(
                 error_code=RuntimeErrorCode.EXTERNAL_SERVICE_ERROR,

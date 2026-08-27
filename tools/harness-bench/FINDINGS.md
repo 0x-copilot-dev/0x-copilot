@@ -34,6 +34,11 @@ limit=25 reads `"code": "recursion_limit_exceeded"` — the run was stopped by t
 ceiling, not by anything it was doing wrong. This is, so far, the only measured
 outcome win in the harness program.
 
+The finding stands as stated, because a run the ceiling stopped is a run that
+did not finish and that is what these columns are about. But **the word
+"completed" in this table means terminated, not answered** — §6.1 shows two runs
+counted here that completed and answered the wrong question.
+
 ### How the first pass got this exactly backwards
 
 The first scorer inferred "did the ceiling bind?" from the count of **completed**
@@ -115,7 +120,7 @@ the _cold_ prompt is the lever; anything that only helps warm runs is not.
 
 Unmeasured and worth measuring next: what fraction of real runs hit a cold cache.
 
-## Method notes — two instrument failures, both worth not repeating
+## Method notes — three instrument failures, all worth not repeating
 
 1. The first scorer counted `usage.recorded` events off the events API and
    returned **0 tokens for every task**. A broken instrument reporting zero is
@@ -126,10 +131,30 @@ Unmeasured and worth measuring next: what fraction of real runs hit a cold cache
    failure mode under test** (finding 1). A proxy metric must be checked against
    the thing it proxies before any conclusion rests on it — especially a
    negative conclusion, which is the kind that stops further investigation.
+3. **A completion-rate metric cannot see a wrong answer**, and until now nothing
+   in `recursion_ceiling_ab.py` could. §6.1 has the evidence: two runs that
+   terminated `completed`, counted toward the completion column every published
+   cost number is quoted beside, and answered something other than what was
+   asked. Termination and correctness are separate axes and neither substitutes
+   for the other, so `outcome_ok` is now scored alongside `status` — with the
+   three-valued discipline note 1 earned: `None` means NOT MEASURED, never
+   wrong, because a fabricated negative stops an investigation that a
+   fabricated zero would at least have invited.
 
 `tool_rounds` still counts COMPLETED tool invocations and is still a lower bound
 on super-step spend. It is retained as a rough cost signal only; the ceiling
 question is now answered by `terminal_code`.
+
+Note 1 has a second, still-live instance that the correctness work surfaced. The
+live `llm_calls` column in both committed recursion reports reads **0 on all
+eight rows** while the store records 8 model calls over the same runs, because
+`usage.recorded` does not fire on the ordinary run path at all — the event
+appears zero times in those sessions' `events.jsonl`. The live counter now
+returns `None`; the zeros already in `runs/` are a dead instrument's and should
+be read as `model_calls`. `compare()` had in turn been printing _"the old ceiling
+of 25 was NEVER reached by this task set, so raising it bought nothing"_ off
+that zero — a conclusion finding 1 above had already falsified from the same
+directory.
 
 ## 5. The four short prompts cannot reach most of the remaining claims
 
@@ -141,7 +166,7 @@ how far short they fall:
 ```
 peak COMPLETED tool rounds in any task: 3      (4 invocations)
 peak ESTIMATED super-steps in any task: 22     (fit: 6 + 4/round, ceiling 25)
-peak tool result entering context:      122 tokens   (the cap is 8,192)
+peak tool result entering context:      122 tokens   (the cap is 8,000)
 delegated rounds, in any task:          0
 peak parallel tool calls, in any task:  1
 MCP tool names with an mcp__ prefix:    0
@@ -155,11 +180,11 @@ prediction, and it is the reason the fit is worth carrying.
 So **delegation, parallel execution, the tool-result cap and MCP namespacing are
 all still unmeasured** — not because they failed, but because nothing in the set
 touches them. `heavy_tasks_ab.py` is the task set built to reach them: seven
-tasks, five of which need no folder grant and no connector, each declaring what
+tasks, six of which need no folder grant and no connector, each declaring what
 it needs from the machine, what it plans to spend per tool _name_, and a regex
 its final answer must match. `--plan` prints all of that for free.
 
-Two design constraints came out of reading the runtime rather than guessing:
+Three design constraints came out of reading the runtime rather than guessing:
 
 - `execution.tool_call_budget` is **10 calls of one tool name per run**. A task
   planning more measures the budget cutting the chain off, which looks identical
@@ -170,6 +195,42 @@ Two design constraints came out of reading the runtime rather than guessing:
   `FileMemoryBackend` answers both with an **empty result, not an error**, which
   is the same green-tick-over-nothing shape as the original `ls ~/Downloads`
   defect.
+- **`FileMemoryBackend.read` accepts `offset` and `limit` and uses neither.**
+  It returns the whole document on every call
+  (`runtime_adapters/file/agent_state_store.py`, the params are bound and never
+  referenced). So on the `/memories/` route there is no paging to measure and
+  `reads.default_line_limit` (2000) is unreachable. A prompt that says "page
+  through it with the offset argument" is asking for something that cannot
+  happen, and would grade the model down for it.
+
+#### One claim was LOST when `h6-bigread` moved to `/memories/`, and it is not being dropped quietly
+
+H6 used to claim two things: "a >2000-line read pages correctly **and** pushes
+the tool-result cap". Rebased on `/memories/` so it needs no folder grant, it
+buys the cap and loses the paging half — to the constraint immediately above.
+So:
+
+| claim                               | status                                                                     |
+| ----------------------------------- | -------------------------------------------------------------------------- |
+| pre-model tool-result cap           | now reachable, grant-free — see §8                                         |
+| `reads.default_line_limit` paging   | **newly unmeasured**: the memory backend ignores `offset`/`limit` entirely |
+| host-path refusal / workspace reads | **newly unmeasured**: nothing in the set touches a host path any more      |
+
+Recording it rather than deleting the row is the point. A set of seven tasks
+that silently stops claiming something it used to claim is the same pathology
+`Needs` exists to prevent — it just moves from the row count to the claim
+column. Measuring paging again needs a route whose `read` honours `offset`,
+which the workspace backend does and the memory backend does not.
+
+**The `Needs.HOST_GRANT` lane was removed with it.** Its grant could only be
+minted through the app's own NATIVE folder picker, this host denies the
+controlling process Accessibility, and so across every arm the harness has run
+that lane produced a `skipped` row and never once a measurement. Bringing it
+back costs the enum member, a `fixture_keys` field on `HeavyTask`, the
+substitution branch in `Arm.run_task`, the `_workspace_lib.attach_folder` call —
+all four are in this file's git history — plus a host that grants Accessibility.
+It is not free to restore, and it was not free to keep: a mechanism nothing
+exercises is a mechanism nobody knows still works.
 
 ### The scorer re-derived finding 2 without being told it
 
@@ -250,6 +311,58 @@ waits), `grep` 539 (deepagents). The named next lever is **lossless JSON-schema
 slimming**: pydantic emits a `"title"` for every field, ~15–20% of every args
 schema with zero semantic loss, applying to third-party tools too and requiring
 no model behaviour change at all.
+
+### 6.1 The completion column is not a correctness column
+
+Every number in the table above is a cost or a termination count. Nothing in it
+looks at the answer, so a trim that made the model cheaper **and worse** would
+have read as pure win. That is not a hypothetical about future trims — it is
+already true of the arms those numbers came from:
+
+- **limit=500, `t4-long-chain`** (run `733191036bb64fdb858006d0b5f8b934`):
+  `status: completed`, `terminal_code: run_completed`, 1 model call, 0 tool
+  invocations, 94 output tokens. Its entire final answer:
+  _"**1:** Not prime — 1 has only one divisor (itself), so it doesn't meet the
+  definition of prime."_ It was asked to walk 1 through 12 and list the primes.
+  It answered one number of twelve and listed nothing.
+- **limit=25, `t4-long-chain`** (run `3b323faecf7048f1b670be22d4fb40df`): also
+  `completed`, and it replied with a checklist about **European capitals** —
+  the previous task's content — then "Step 1 — Three European capitals: Paris,
+  Rome, Madrid." It never counted, and never listed a prime.
+
+So `3/4 @ 25 → 4/4` is a **termination** claim and was never an answer-quality
+claim. Read strictly, at most **1 of 4** answers in either arm is verifiably
+right (`t1`, which asked for one word), because `t2` and `t3` as written had no
+unique answer at all: "three primary colours" is red/yellow/blue _or_
+red/green/blue, and "three European capitals … one river in each" is whatever
+the model picks.
+
+**What changed.** Each of the four tasks now declares `expect`, a regex its
+final answer must match, fixed in `recursion_ceiling_ab.py` and derived from a
+constant there. `rescore.py` re-grades it offline from the store, so a
+correctness mistake never costs a paid run. `t2` and `t3` needed new PROMPTS to
+have a checkable answer (`t2` is now arithmetic, `t3` a three-row sort); each
+keeps verbatim the structural instruction that drives its round count, and `t4`
+gained only a sentinel line. Governance, stated so it can be held to: **an
+expectation may be relaxed only by changing the prompt and re-running — never by
+editing the pattern after reading an answer.**
+
+**What this costs the table above, and it is not nothing.** `arm-25` and
+`arm-500` ran **prompt set v1**. They carry no recorded expectation, so they are
+reported `?` — UNKNOWN, explicitly distinct from wrong — and they are _not_
+graded against v2's answers, because an arm is a measurement of the prompts it
+actually ran. Two consequences:
+
+- **§6's trajectory cannot be extended by a v2 arm.** Splicing a v2 row into
+  that table would compare four prompts against three different ones. Both arms
+  must be re-measured under v2 before any new cost claim joins it.
+- **The cost shape of v2 is asserted, not measured.** v1's model calls were
+  1/1/4/2 at limit=25 and 1/1/1/1 at limit=500. The re-run must be compared
+  against those; if they move materially, the trajectory restarts rather than
+  continues.
+
+The first honest correctness number this produces will look worse than `4/4`.
+That is the point of measuring it.
 
 ## 7. The cold-start question §4 left open: it is a process boundary, not a clock
 
@@ -577,9 +690,12 @@ and then recorded that no arm had ever been driven. Both arms are now run.
 `claude-haiku-4-5` via `COPILOT_JOURNEY_MODEL` — the earlier passes silently used
 whatever the app defaulted to, which was `claude-opus-4-5`, the most expensive
 model in the catalog, for a benchmark that writes six files. Task set pinned to
-the five that declare `Needs.NOTHING`, because `h6-bigread` needs a folder grant
-that cannot be driven on this host and `h7-mcp-namespace` needs two hand-connected
-MCP servers. Both arms: same model, same tasks, same order, own process.
+the five that declared `Needs.NOTHING` **at the time of this run** — `h6-bigread`
+then needed a folder grant that cannot be driven on this host, and
+`h7-mcp-namespace` needs two hand-connected MCP servers. Both arms: same model,
+same tasks, same order, own process. (H6 has since been rebased onto
+`/memories/` and needs nothing; the arms below predate that, which is exactly
+why their tool-result-cap row is empty.)
 
 ```
 arm 25 : 5/5 completed, 4/5 correct, 81,330 listed input, $0.0119
@@ -620,12 +736,85 @@ this set, the ceiling raise §1 paid for is not the constraint that matters.
 | per-tool-name budget | unmeasured    | **binds** — 6 `tool_budget_exceeded` rows |
 | delegation           | 0 in any task | **6 → 21** delegated rounds (`h4`)        |
 | parallel execution   | peak 1        | **peak 12** parallel calls                |
-| tool-result cap      | unmeasured    | still unmeasured — peak 68 of 8,192       |
+| tool-result cap      | unmeasured    | reachable but NOT YET RUN — see below     |
 | MCP namespacing      | unmeasured    | still unmeasured — 0 servers connected    |
 
 The two that remain unmeasured are the two whose tasks were excluded, and the
 scorer says so itself rather than reporting a zero: _"zero namespaced names on a
 profile with no connected server is NOT evidence either way."_
+
+#### The tool-result cap: the number in this table's first draft was the wrong constant
+
+That row originally read _"still unmeasured — peak 68 of 8,192"_. Two things
+were wrong with it and both are worth writing down.
+
+**8,192 is not the cap.** It is `context.model_result_preview_bytes`, in bytes,
+read in exactly one place — `runtime_worker/mcp_operation_storage.py` — and it
+never touches a `read_file` result. The cap that actually bounds a tool result
+before the model sees it is `ToolResultAdmissionAdapter.DEFAULT_INLINE_TOKEN_BUDGET`
+= **8,000 estimated tokens** at `ceil(len/4)` chars each, i.e. 32,000 characters,
+applied by `ToolBudgetGuard.admit_model_visible_result` via
+`RuntimeToolControlMiddleware`, wired on the run path in
+`runtime_worker/handlers/run.py`. Sizing a fixture against 8,192 _bytes_ rather
+than 8,000 _tokens_ is a 4x error — enough to land an intended-inline read on the
+wrong side of the threshold and invert what the task measures. `heavy_tasks_ab.py`
+now holds `INLINE_TOKEN_BUDGET` with the confusion written on it, and a gate test
+reads the literal out of the shipped adapter as text.
+
+**"peak 68" was a number from a task that never ran.** `h6-bigread` needed a
+folder grant this host cannot mint, so it recorded `skipped` in both arms; 68 is
+the largest result of the five _other_ tasks, and the cap was never approached by
+anything. H6 is now rebased on `/memories/` and needs nothing — it writes its own
+fixture, which also makes it the one task in the set valid pinned alone
+(`HEAVY_TASKS=h6-bigread`).
+
+Measured offline against the shipped adapter and deepagents' real
+`format_content_with_line_numbers`, the two reads straddle the cap:
+
+```
+after edit 3:  16,113 rendered chars =  4,029 est tokens ( 50% of 8,000) -> INLINE   16,113 chars reach the model
+after edit 4:  63,793 rendered chars = 15,949 est tokens (199% of 8,000) -> OFFLOAD   2,233-char stub
+```
+
+The inline read carries all eight `part-NN owner=X hours=N` rows, so `HOURS=44`
+is answerable from it. The offloaded read returns the header _"Oversized tool
+result offloaded before model admission."_, a `/large_tool_results/<sha256>`
+reference and a preview clipped to 2,000 characters — which is part of **line
+one** — so the same question is not answerable from it. One task, both sides.
+63,793 also sits ~20% under deepagents' own 80,000-char read truncation, so the
+cap under test is ours and not the library's.
+
+**Two things `outcome_ok` cannot tell you about this task**, both now in its
+docstring and both answered by columns instead:
+
+- The agent **authors** the fixture, so it can emit `HOURS=44` from memory
+  without either read reaching it. A green H6 is consistent with the big result
+  never entering context. `offloaded_results` (new in `rescore.py`) is what says
+  the cap fired.
+- `SECOND=FULL` has three causes the answer text cannot separate: the staged
+  runtime has no admission wiring, the model mis-transcribed an expansion (three
+  copies instead of four leaves the file inline at ~20KB with every call
+  reporting success), or the model simply answered wrongly. The on-disk memory
+  document's **byte size** separates the middle one from the other two, which is
+  why `memory_files` now reports sizes.
+
+`rescore.py` needed the offload column for any of this to be visible: an
+offloaded result is labelled `agent_runtime.context:offload_stub`, **not**
+`agent_runtime.conversation:tool_result`, and `occupancy_shape` filtered on the
+latter alone. Shipped as-is, H6's cap-crossing read would have been dropped and
+the report would have shown the peak of the remaining small results — a real
+number, correctly computed, answering a question nobody asked.
+
+While fixing that, the same function's `peak_tokens = peak_bytes = 0` was
+corrected to `None`. A run with no inline tool result reported `0`,
+indistinguishable from one whose results were genuinely tiny — the **third**
+appearance of the defect these method notes open with, and still visible in
+`runs/arm-500.json`, where every task carries a peak of 0.
+
+**Not yet run against a model.** The design is verified offline — `--plan` prints
+the straddle for free, and 24 gate tests cover it, each mutation-checked. Per §5's
+own rule: re-stage from the tree under test, validate with
+`HEAVY_TASKS=h6-bigread` (one task, well under a minute), then pay for the arms.
 
 ### What this does NOT establish
 
@@ -654,3 +843,143 @@ Same shape as §2 — a terminal row with an empty `result_summary`, a tool that
 looks like it threw and never ran — but the cause here is budget exhaustion, not
 a step ceiling. The scorer named it unprompted, which is the second time that
 column has found this shape without being told what to look for.
+
+## 9. The arm that cost a model that no longer exists — and why no catalog filter ships
+
+One heavy arm burned five runs in seven seconds against a model Anthropic has
+retired. This section records what was measured about the catalog, because the
+tempting fix — "stop offering retired models" — turns out to have no reliable
+signal behind it, and shipping it anyway would hide working models.
+
+### What happened
+
+`journey-bench-heavy-25-1787733971337049000/logs/ai-backend.log` carries five
+`runtime.stream.failed` rows:
+
+```
+exception_type     NotFoundError
+exception_message  Error code: 404 - {'type': 'error', 'error':
+                   {'type': 'not_found_error',
+                    'message': 'model: claude-3-haiku-20240307'}}
+error_code         external_service_error
+retryable          true
+safe_message       We couldn't complete this run. Please try again.
+```
+
+The classification half of that is now fixed in the runtime — a provider 404 is
+`model_not_found`, permanent, with copy that does not invite a retry. This
+section is about the other half: how a retired model reached the picker at all.
+
+### The primary source already handles this; the fallback is the hole
+
+models.dev is the primary catalog source and excludes dead rows two independent
+ways. Both verified against the on-disk snapshot:
+
+| measurement                                   | value                                                 |
+| --------------------------------------------- | ----------------------------------------------------- |
+| rows in the snapshot                          | 7,300                                                 |
+| rows with `status` in `{deprecated, retired}` | 190                                                   |
+| OpenAI rows so marked                         | 10 (`gpt-3.5-turbo`, `gpt-4`, `gpt-4-turbo`, `o1`, …) |
+| anthropic rows in the snapshot                | 13, all current                                       |
+| `claude-3-haiku-20240307` under `anthropic`   | **absent**                                            |
+
+`ModelsDevCatalogPolicy.DEAD_STATUSES` is live and drops the 190. Separately,
+models.dev simply does not carry retired Anthropic models — the id appears in
+the snapshot only under `helicone`, a provider key this product does not map.
+Driving `ModelsDevModelSource.records()` against that snapshot yields 303
+records, and the retired id is not among them.
+
+So the retired row can only arrive through the **LiteLLM fallback**, which
+`ModelsDevModelSource.records()` serves when the snapshot is missing — i.e. on a
+fresh `COPILOT_HOME`, before the background fetch lands. That is exactly a
+journey or bench boot. The bench store above holds no `models-dev-catalog.json`
+at all, which is the direct confirmation.
+
+### LiteLLM's own deprecation signal exists, and does not cover this case
+
+`LitellmModelSource._candidate` already drops any row carrying a
+`deprecation_date`. Measured against the bundled offline cost map:
+
+```
+claude-3-opus-20240229   deprecation_date = '2026-05-01'   -> filtered
+claude-3-haiku-20240307  deprecation_date = None           -> offered
+```
+
+I dumped the full row for the retired model. Its 16 fields are pricing,
+context-window and capability flags; there is **no other machine-readable
+retirement field**. The signal exists upstream and is simply not populated for
+this id. Nothing in this repo can supply it.
+
+### The tempting proxy is measurably wrong
+
+"Absent from models.dev" looks like a deprecation signal. It is not:
+
+- 73 of the 193 records the LiteLLM fallback serves are absent from the
+  models.dev tables for the four mapped providers.
+- That set contains live flagships and current dated snapshots —
+  `claude-opus-4-1`, `chatgpt-4o-latest`, `gpt-4.1-2025-04-14` — plus
+  niche-but-alive rows models.dev drops on its own rules
+  (`gpt-4o-audio-preview`, `gpt-4o-mini-search-preview`).
+- It does **not** contain `gpt-3.5-turbo` or `gpt-4-turbo`. Those are present in
+  models.dev, carrying `status: deprecated`.
+
+The proxy has the correlation backwards: the dead ids it would supposedly catch
+are the ones models.dev _does_ carry, with a status that already filters them,
+while the absent set is dominated by models that work. A filter on absence would
+hide working models in order to remove one ugly row. `max_output_tokens`,
+release-date and id-shape heuristics fail the same way.
+
+### Verdict: no catalog filter ships
+
+The rule decides it — a wrong filter that hides a working model is worse than an
+ugly row — and no reliable signal exists for this case. The classification fix
+carries the whole outcome: the row may still be offered, but selecting it now
+fails once, permanently, with copy that says to choose a different model instead
+of offering a retry that cannot succeed.
+
+The one signal that _would_ work is the vendor's own `/v1/models` list. It is not
+this change, for two structural reasons: `models_dev_source.py`'s module contract
+is that the network is never on the request path, and the credential is per-user
+BYOK, so there is no deployment-wide key to enumerate with.
+
+One pre-existing over-filter noticed and deliberately left alone:
+`LitellmModelSource` drops any row with a `deprecation_date` including a
+**future** one, so a model announced for retirement next year is already
+invisible. That is the opposite error from this section's and needs its own
+evidence.
+
+### The mechanism that picked the retired row (harness hygiene, not product)
+
+`tools/desktop-journeys/_lib.py:select_model` matched a case-insensitive
+**substring** of the visible row name. On a fresh store the LiteLLM fallback
+serves, sorted provider-asc then id-asc, so the anthropic haiku rows appear in
+this order:
+
+```
+claude-3-haiku-20240307      "Claude 3 Haiku"                <- retired, sorts first
+claude-haiku-4-5             "Claude Haiku 4.5"
+claude-haiku-4-5-20251001    "Claude Haiku 4.5"
+anthropic/claude-3-haiku     "Claude 3 Haiku (OpenRouter)"
+anthropic/claude-haiku-4.5   "Claude Haiku 4.5 (OpenRouter)"
+```
+
+A fragment of `"haiku"` therefore landed on the retired model, and the helper
+returned `True` without recording which row it clicked. Two bench stores on disk
+carry `"model_name":"claude-3-haiku-20240307"`.
+
+`select_model` now ranks exact over prefix over substring, **refuses** a fragment
+that ties across differently-named rows rather than letting picker order decide,
+and records the row it clicked on `selected_model_row`. Verified against the row
+order above: `"haiku"` is now refused, naming all four candidates; `"Claude Haiku
+4.5"` still resolves, because its two tied rows (the family alias and its dated
+snapshot) render the same name and so are not ambiguous to a name matcher.
+
+One gap left open, and worth knowing before the next arm: the picker renders only
+the **display name**, so the helper cannot match a model **id** at all —
+`COPILOT_JOURNEY_MODEL="claude-haiku-4-5"` matches nothing, because the row reads
+"Claude Haiku 4.5". Closing that needs a `data-model-id` on the product's row
+element in the shared chat surface, which is its own change.
+
+Deliberately **not** addressed by pinning a specific retired id anywhere in the
+harness — that is a hardcoded denylist in test clothing, and it rots the moment a
+vendor retires something else.

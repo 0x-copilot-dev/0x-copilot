@@ -116,6 +116,14 @@ class ModelFailureSignal(StrEnum):
     STREAM_INTERRUPTED = "stream_interrupted"
     CANCELLED = "cancelled"
     DEADLINE_EXCEEDED = "deadline_exceeded"
+    #: The provider says the addressed resource does not exist. Blind spot,
+    #: stated because it decides how the class below may be used: this signal
+    #: cannot tell a retired model id from a mistyped ``base_url`` path or an
+    #: Ollama model the machine never pulled. It proves only that *this*
+    #: configuration addresses nothing — which is the sole property the
+    #: taxonomy needs, since all three are permanent until a human changes
+    #: something. Do not read it as "the vendor retired this model".
+    NOT_FOUND = "not_found"
     UNKNOWN = "unknown"
 
 
@@ -151,6 +159,13 @@ class ModelFailureClass(StrEnum):
     AMBIGUOUS_PROVIDER_STATE = "ambiguous_provider_state"
     CANCELLED = "cancelled"
     DEADLINE_EXCEEDED = "deadline_exceeded"
+    #: The route addresses a model the provider will not serve. Deliberately
+    #: NOT folded into ``REQUEST_INVALID``: that class is the key for the F2
+    #: cache-undecorated retry (``ModelAttemptAdmissionPolicy.decide_cache_fallback``),
+    #: so reusing it would make "no such model" eligible for a re-dispatch that
+    #: is guaranteed to 404 again. It is its own class so the run boundary can
+    #: tell "we sent a malformed request" from "we addressed nothing".
+    MODEL_NOT_FOUND = "model_not_found"
 
 
 class ModelRecoveryScope(StrEnum):

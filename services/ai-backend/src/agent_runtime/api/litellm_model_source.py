@@ -8,6 +8,17 @@ using only generic product policy:
 * the row must be a chat model with tool calling (Deep Agents requires tools);
 * rows LiteLLM marks deprecated and fine-tuned placeholders are omitted.
 
+That third rule is a filter, not a guarantee, and the difference has cost a
+benchmark arm. It removes what LiteLLM *labels*; it cannot remove what LiteLLM
+never labelled. Measured on the bundled offline map: ``claude-3-opus-20240229``
+carries ``deprecation_date`` and is dropped, while ``claude-3-haiku-20240307`` —
+which Anthropic no longer serves, and which 404s on the first call — carries no
+deprecation field at all and is offered. No other retirement signal exists on the
+row. See ``tools/harness-bench/FINDINGS.md`` §9 for why no heuristic replaces it:
+every candidate proxy, "absent from models.dev" included, hides more working
+models than dead ones. A model this source offers is one LiteLLM did not mark
+dead, never one the vendor is known to still serve.
+
 That leaves LiteLLM responsible for additions, capability metadata, context
 windows, and pricing while this module remains responsible only for what the
 product can execute. Provider mirrors such as Vertex and Bedrock are excluded

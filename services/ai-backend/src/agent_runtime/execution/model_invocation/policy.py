@@ -279,10 +279,28 @@ class ProviderFailureClassifier:
         ModelFailureSignal.CONTEXT_EXCEEDED: ModelFailureClass.CONTEXT_EXCEEDED,
         ModelFailureSignal.CANCELLED: ModelFailureClass.CANCELLED,
         ModelFailureSignal.DEADLINE_EXCEEDED: ModelFailureClass.DEADLINE_EXCEEDED,
+        ModelFailureSignal.NOT_FOUND: ModelFailureClass.MODEL_NOT_FOUND,
     }
 
+    def classify_lifecycle_independent(
+        self, observation: ProviderFailureObservation
+    ) -> ModelFailureClass | None:
+        """Classify only where the class is a pure function of the signal.
+
+        ``None`` means *not decidable from this observation*, never "no failure".
+        A caller that never recorded a lifecycle (see
+        ``providers.model_failure_adapters.classify_without_lifecycle``) is
+        holding default ``dispatch_state`` / ``stream_state`` values that were
+        not measured — and for ``CONNECTIVITY`` and ``STREAM_INTERRUPTED`` those
+        two fields are exactly what selects between two different classes. This
+        method is the seam that refuses to answer in that case rather than
+        reporting a default as a measurement.
+        """
+
+        return self._DIRECT_CLASSES.get(observation.signal)
+
     def classify(self, observation: ProviderFailureObservation) -> ModelFailureClass:
-        direct = self._DIRECT_CLASSES.get(observation.signal)
+        direct = self.classify_lifecycle_independent(observation)
         if direct is not None:
             return direct
         if observation.signal is ModelFailureSignal.STREAM_INTERRUPTED:

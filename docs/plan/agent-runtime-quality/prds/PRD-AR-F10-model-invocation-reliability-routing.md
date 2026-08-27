@@ -190,7 +190,11 @@ Initial closed classes:
 - `stream_interrupted_after_content`;
 - `ambiguous_provider_state`;
 - `cancelled`;
-- `deadline_exceeded`.
+- `deadline_exceeded`;
+- `model_not_found`: provider 404 for the addressed model. Permanent, never
+  retried, and deliberately not folded into `request_invalid` — that class keys
+  the F2 cache-undecorated retry, and a 404 must not become eligible for a
+  re-dispatch guaranteed to 404 again.
 
 Retry/fallback matrix is checked in and versioned. Unknown maps to terminal/ambiguous,
 not retry.

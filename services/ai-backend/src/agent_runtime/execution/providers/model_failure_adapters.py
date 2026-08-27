@@ -11,10 +11,12 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from agent_runtime.execution.model_invocation.contracts import (
+    ModelFailureClass,
     ModelFailureSignal,
     ProviderFailureObservation,
 )
 from agent_runtime.execution.model_invocation.lifecycle import ProviderAttemptLifecycle
+from agent_runtime.execution.model_invocation.policy import ProviderFailureClassifier
 
 
 @dataclass(frozen=True, slots=True)
@@ -112,6 +114,15 @@ class TypedProviderFailureAdapter:
             return ModelFailureSignal.AUTH_INVALID
         if raw_status == 403:
             return ModelFailureSignal.POLICY_INCOMPATIBLE
+        if raw_status == 404:
+            # The provider's own numeric status, not its prose: 404 is the one
+            # status that proves the *addressed resource* does not exist, which
+            # for a model call means the model id (or the endpoint path it was
+            # sent to) is not something this deployment can reach. Without this
+            # row a vendor 404 fell through to UNKNOWN and then to
+            # AMBIGUOUS_PROVIDER_STATE — "we cannot tell" — which is the one
+            # verdict a 404 never warrants.
+            return ModelFailureSignal.NOT_FOUND
         if raw_status in {408, 504}:
             return ModelFailureSignal.DEADLINE_EXCEEDED
         if raw_status == 429:
@@ -242,6 +253,34 @@ class ProviderFailureAdapterRegistry:
         )
 
 
+def classify_without_lifecycle(error: BaseException) -> ModelFailureClass | None:
+    """Classify a provider exception where no attempt lifecycle was recorded.
+
+    Exists for the *run* boundary. ``_TracedRuntimeCall.guard`` catches whatever
+    escaped the graph roughly two hundred frames above the model call, so the
+    ``ProviderAttemptLifecycle`` that :class:`ProviderFailureClassifier` normally
+    reads is long out of scope. What survives is the exception object, and every
+    adapter here reads only its SDK class identity and its numeric status — so
+    the subset of the taxonomy that does not depend on how far the attempt got
+    is still decidable from it alone.
+
+    The blind spot is the contract, not a caveat: ``None`` means *this class is
+    not observable without a lifecycle*, and never "no failure". ``CONNECTIVITY``
+    and ``STREAM_INTERRUPTED`` genuinely resolve to different classes depending
+    on ``dispatch_state`` / ``stream_state`` (pre-dispatch transient vs ambiguous
+    provider state; interrupted before vs after visible content), so guessing one
+    here would manufacture a verdict from a fact nobody measured. Only the signals
+    in :attr:`ProviderFailureClassifier._DIRECT_CLASSES` — the ones whose class is
+    a pure function of the signal — are returned. Callers must treat ``None`` as
+    "fall through to your existing handling", which is what the run boundary does.
+    """
+
+    observation = ProviderFailureAdapterRegistry.defaults().observe_unattributed(
+        error, ProviderAttemptLifecycle()
+    )
+    return ProviderFailureClassifier().classify_lifecycle_independent(observation)
+
+
 __all__ = (
     "ProviderExceptionClass",
     "ProviderExceptionTypes",
@@ -249,6 +288,7 @@ __all__ = (
     "ProviderFailureAdapterRegistry",
     "TypedProviderFailureAdapter",
     "anthropic_failure_adapter",
+    "classify_without_lifecycle",
     "google_genai_failure_adapter",
     "openai_failure_adapter",
 )
