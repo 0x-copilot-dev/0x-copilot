@@ -531,7 +531,17 @@ def enter_focus(s: DriverSession) -> None:
     healthy. The ⌘M fallback is the same chord `useRunMode` binds.
     """
 
-    if s.run_mode() == "focus":
+    mode_now = s.run_mode()
+    if mode_now == "focus":
+        return
+    if mode_now is None:
+        # No thread canvas yet — this phase has not bound a run. Calling the
+        # mode control here would assert against nothing, so leave it to the
+        # phase that sends first. In a full journey run TR-6 has already
+        # switched and this returns early; pinned alone, the phase then fails
+        # on its OWN assertion, which is the pre-existing behaviour and a
+        # truer message than "could not enter Focus".
+        log("      no thread canvas yet — deferring the Focus switch")
         return
     s.evaluate(
         """
@@ -577,6 +587,7 @@ def fa_streaming(s: DriverSession) -> None:
 
 def fa_tool_card(s: DriverSession) -> None:
     log("── J2 tool card ─────────────────────────────────────────────")
+    enter_focus(s)
     prev = int(s.evaluate(JS_ASSISTANT_COUNT) or 0)
     send_in_run(s, P_TOOL)
     assert fa_wait_new_turn(s, prev), (
@@ -629,6 +640,7 @@ def fa_tool_card(s: DriverSession) -> None:
 
 def fa_fleet_card(s: DriverSession) -> None:
     log("── J3 subagent fleet card ───────────────────────────────────")
+    enter_focus(s)
     prev = int(s.evaluate(JS_ASSISTANT_COUNT) or 0)
     send_in_run(s, P_FLEET)
     assert fa_wait_new_turn(s, prev), "no new assistant turn after the subagent prompt"
@@ -675,6 +687,7 @@ def fa_fleet_card(s: DriverSession) -> None:
 
 def fa_focus_panel(s: DriverSession) -> None:
     log("── J4 focus panel + collapse ────────────────────────────────")
+    enter_focus(s)
     # Focus OPENS FOLDED since `e306c084 fix(run): Focus opens without the
     # Run-details column`, so the panel is not on screen when this phase
     # starts — the icon rail is. Expand it first and then run the
