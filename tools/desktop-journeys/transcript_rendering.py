@@ -357,6 +357,21 @@ def ensure_fleet_card_interaction(s: DriverSession, fleet_host_test_id: str) -> 
         )
 
     assert s.present(toggle), "fleet card has no semantic disclosure control"
+    # Once a LATER run binds, a finished run's activity is re-parented into a
+    # collapsed `<details data-testid=tool-run-group>` — the "long run collapses
+    # to one line" behaviour TR-16 asserts on purpose. The fleet toggle is then
+    # in the DOM with correct aria, and has no visible box, so `click` times out
+    # after 15s reporting "element is not visible". Open every enclosing
+    # disclosure first; the sibling tool-card check already does this via
+    # `ensure_native_disclosure`, and the asymmetry was the whole bug.
+    opened = s.evaluate(
+        "(() => {const el=document.querySelector(%s);if(!el)return 0;"
+        "let n=0,p=el.parentElement;"
+        "while(p){if(p.tagName==='DETAILS'&&!p.open){p.open=true;n++;}p=p.parentElement;}"
+        "return n})()" % json.dumps(host)
+    )
+    if opened:
+        log(f"      opened {opened} enclosing disclosure(s) to reach the fleet toggle")
     assert expanded() == "false", "terminal fleet should start compact"
     s.click(toggle)
     assert expanded() == "true", "fleet-card pointer click did not expand details"
@@ -501,6 +516,52 @@ def fa_fleet_card_state(s: DriverSession) -> dict | None:
     return json.loads(raw) if raw else None
 
 
+def enter_focus(s: DriverSession) -> None:
+    """Switch the cockpit into Focus the way a user does, then verify it took.
+
+    This USED to be an assertion that Focus was already the mode, which was
+    true when the phase was written and stopped being true on 2026-07-26 —
+    `9993aaf0 feat(chat-surface): make Studio the default run mode` set
+    `DEFAULT_RUN_MODE = "studio"`. The phase then failed for a month with
+    "expected Focus cockpit, got data-mode='studio'", which reads like Focus is
+    broken when the real message is that the DEFAULT moved.
+
+    So: press the control, do not assume the default. `focus_panel_default.py`
+    drives it exactly this way, and its pass is what proves the mode itself is
+    healthy. The ⌘M fallback is the same chord `useRunMode` binds.
+    """
+
+    mode_now = s.run_mode()
+    if mode_now == "focus":
+        return
+    if mode_now is None:
+        # No thread canvas yet — this phase has not bound a run. Calling the
+        # mode control here would assert against nothing, so leave it to the
+        # phase that sends first. In a full journey run TR-6 has already
+        # switched and this returns early; pinned alone, the phase then fails
+        # on its OWN assertion, which is the pre-existing behaviour and a
+        # truer message than "could not enter Focus".
+        log("      no thread canvas yet — deferring the Focus switch")
+        return
+    s.evaluate(
+        """
+        (() => {
+          const b = [...document.querySelectorAll('button, [role=tab], [role=radio]')]
+            .find(x => (x.textContent||'').trim() === 'Focus');
+          if (b) { b.click(); return 'clicked'; }
+          return 'not-found';
+        })()
+        """
+    )
+    time.sleep(2)
+    if s.run_mode() != "focus":
+        s.press("body", "Meta+m")
+        time.sleep(2)
+    mode = s.run_mode()
+    assert mode == "focus", f"could not enter Focus; data-mode={mode!r}"
+    log(f"PASS  cockpit switched to Focus (thread-canvas data-mode={mode})")
+
+
 def fa_streaming(s: DriverSession) -> None:
     log("── J1 streaming ─────────────────────────────────────────────")
     # first message of the run is the streaming probe
@@ -509,9 +570,7 @@ def fa_streaming(s: DriverSession) -> None:
     assert s.wait_for("[data-testid^=tc-chat-message-]", 60), "no message rendered"
     s.shot("j1-run-landed")
 
-    mode = s.run_mode()
-    assert mode == "focus", f"expected Focus cockpit, got data-mode={mode!r}"
-    log(f"PASS  cockpit is Focus (thread-canvas data-mode={mode})")
+    enter_focus(s)
 
     steps = fa_poll_growth(s)
     s.shot("j1-streaming-grown")
@@ -528,6 +587,7 @@ def fa_streaming(s: DriverSession) -> None:
 
 def fa_tool_card(s: DriverSession) -> None:
     log("── J2 tool card ─────────────────────────────────────────────")
+    enter_focus(s)
     prev = int(s.evaluate(JS_ASSISTANT_COUNT) or 0)
     send_in_run(s, P_TOOL)
     assert fa_wait_new_turn(s, prev), (
@@ -580,6 +640,7 @@ def fa_tool_card(s: DriverSession) -> None:
 
 def fa_fleet_card(s: DriverSession) -> None:
     log("── J3 subagent fleet card ───────────────────────────────────")
+    enter_focus(s)
     prev = int(s.evaluate(JS_ASSISTANT_COUNT) or 0)
     send_in_run(s, P_FLEET)
     assert fa_wait_new_turn(s, prev), "no new assistant turn after the subagent prompt"
@@ -626,6 +687,15 @@ def fa_fleet_card(s: DriverSession) -> None:
 
 def fa_focus_panel(s: DriverSession) -> None:
     log("── J4 focus panel + collapse ────────────────────────────────")
+    enter_focus(s)
+    # Focus OPENS FOLDED since `e306c084 fix(run): Focus opens without the
+    # Run-details column`, so the panel is not on screen when this phase
+    # starts — the icon rail is. Expand it first and then run the
+    # collapse/re-expand contract, rather than asserting the old default and
+    # reporting "Run-details focus panel absent" for a column that is folded
+    # exactly as designed.
+    if s.present("[data-testid=tc-focus-strip]"):
+        s.click("[data-testid=tc-focus-strip-expand]")
     assert s.wait_for("[data-testid=tc-focus-panel]"), "Run-details focus panel absent"
     width = s.evaluate(
         "(document.querySelector('[data-testid=tc-focus-panel]')||{}).offsetWidth||0"
