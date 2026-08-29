@@ -123,7 +123,13 @@ import {
 } from "./services/secure-storage-policy";
 import type { ServiceSupervisor } from "./services/supervisor";
 import { TransportBridge } from "./transport-bridge";
+import { installStdioResilience } from "./stdio-resilience";
 import { createMainWindow } from "./window";
+
+// FIRST, before anything can log. The CLI spawns this process with
+// `stdio: "inherit"`, so the window outlives the terminal that launched it and
+// a closed terminal turns the next console.* into an uncaught EPIPE.
+installStdioResilience();
 
 applyBrandIdentity(app, { platform: process.platform });
 
