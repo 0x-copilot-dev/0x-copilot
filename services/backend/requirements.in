@@ -1,6 +1,6 @@
 # Top-level runtime + test deps for services/backend. Regenerate lock:
 #   cd services/backend && .venv/bin/pip-compile --generate-hashes --resolver=backtracking requirements.in -o requirements.txt
-cryptography==50.0.0
+cryptography==50.0.1
 fastapi==0.141.1
 # PR 8.3 — UploadFile / multipart parsing on the avatar route.
 python-multipart==0.0.32
@@ -8,9 +8,9 @@ httpx==0.28.1
 psycopg[binary]==3.3.4
 psycopg_pool==3.3.1
 pydantic==2.13.4
-python-dotenv==1.2.2
+python-dotenv==1.2.3
 PyYAML==6.0.3
-uvicorn==0.52.1
+uvicorn==0.52.4
 pytest==9.1.1
 opentelemetry-api==1.44.0
 opentelemetry-sdk==1.44.0
@@ -31,7 +31,7 @@ python3-saml==1.16.0
 # Sign-In-With-Ethereum (SIWE). EIP-191 personal_sign recovery for the
 # EIP-4361 verify path (backend_app/identity/siwe.py). Pure-Python signing
 # stack — no node/solc toolchain required.
-eth-account==0.13.7
+eth-account==0.14.0
 # eth-account declares `eth-abi>=4.0.0-b.2`; the pre-release lower bound
 # makes resolvers consider betas (it would lock 6.0.0b1). Pin the current
 # stable so the hashed lock never carries a pre-release.
