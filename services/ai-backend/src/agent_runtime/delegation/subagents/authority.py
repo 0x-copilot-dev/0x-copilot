@@ -17,6 +17,22 @@ Concretely, for every axis:
 * approval policy (read / write / destructive) — the *stricter* of parent and
   definition, per :meth:`SubagentPolicyGrant.narrow`. A definition may tighten
   its own posture and that wins; it may not loosen and have it stick.
+* filesystem rules — the parent's rule list is the ceiling and the floor, per
+  :meth:`SubagentAuthorityPolicy.narrow_fs_permissions`. A definition-owned
+  ``allow`` survives only where the parent already allows the same operation on
+  the same ground; a ``deny`` always survives, because a deny only tightens.
+
+The filesystem axis is the newest and was the one missing, so it is worth
+saying why it needed a rule of its own rather than another set intersection.
+Deep Agents resolves a subagent's ``permissions`` as ``spec.get("permissions",
+permissions)`` — a *replacement*, not an intersection — and its matcher answers
+``allow`` when NO rule matches. Those two facts compose into the opposite of a
+ceiling: a child rule list is a widening device by construction, because
+everything it fails to mention becomes unmatched, and unmatched means allow.
+``narrow_fs_permissions`` is what converts that replacement back into an
+intersection, and it does so structurally — the surviving child rules are a
+PREFIX and the parent's whole list is appended behind them, so every path the
+child did not name still meets the parent's own ordered verdict.
 
 Two consequences a reader routinely gets backwards:
 
@@ -70,8 +86,9 @@ the coordinator lands; it is deliberately not faked here.
 
 from __future__ import annotations
 
-from collections.abc import Iterable
-from typing import ClassVar
+from collections.abc import Iterable, Mapping, Sequence
+from pathlib import PurePosixPath
+from typing import ClassVar, Final, Literal
 
 from pydantic import Field, field_validator
 
@@ -152,6 +169,59 @@ class SubagentPolicyGrant(RuntimeContract):
             ToolUsePolicyKind.WRITE: self.write,
             ToolUsePolicyKind.DESTRUCTIVE: self.destructive,
         }[kind]
+
+
+#: Characters ``wcmatch`` reads as pattern syntax under the flags Deep Agents
+#: matches with (``BRACE | GLOBSTAR``). A path segment containing any of them is
+#: where a pattern stops being a literal prefix and starts being a guess.
+_GLOB_SYNTAX: Final[frozenset[str]] = frozenset("*?[]{}!")
+
+_ALLOW: Final = "allow"
+_RULE_FIELDS: Final[tuple[str, ...]] = ("operations", "paths", "mode")
+
+
+class FilesystemGrant(RuntimeContract):
+    """One rule of a filesystem boundary, in this domain's own vocabulary.
+
+    A structural mirror of the two rule shapes this module has to compare:
+    Deep Agents' ``FilesystemPermission`` dataclass (what the parent run's
+    boundary is made of) and ``SubagentDefinition.fs_permissions``'
+    ``FilesystemPermissionSpec`` (what a declared child asks for). Adapting both
+    into one type here is what lets the clamp be a single pure function instead
+    of one written twice, and it keeps Deep Agents out of the domain — the same
+    reason ``capabilities.desktop.host_filesystem`` emits plain dicts.
+
+    ``mode`` carries all three Deep Agents verdicts, not the two a definition
+    may express: the parent's list contains ``interrupt`` rules, and a clamp
+    that could not read them would mistake "ask the user" for "no opinion".
+    """
+
+    operations: tuple[str, ...] = ()
+    paths: tuple[str, ...] = ()
+    mode: Literal["allow", "deny", "interrupt"] = _ALLOW
+
+    @classmethod
+    def from_rules(cls, rules: Iterable[object]) -> tuple["FilesystemGrant", ...]:
+        """Adapt rule-shaped objects or mappings into grants, or refuse.
+
+        Accepts anything carrying ``operations`` / ``paths`` / ``mode``, whether
+        as attributes (Deep Agents' dataclass, ``FilesystemPermissionSpec``) or
+        as keys (the dicts ``HostFilesystemRules.build`` emits).
+
+        A rule it cannot read raises rather than being skipped. Skipping would
+        be fail-open on the half that matters most: an unreadable rule in the
+        PARENT list is a restriction, and dropping it silently would widen the
+        very ceiling this type exists to measure.
+        """
+
+        return tuple(
+            cls(
+                operations=tuple(str(item) for item in _rule_field(rule, "operations")),
+                paths=tuple(str(item) for item in _rule_field(rule, "paths")),
+                mode=_rule_field(rule, "mode"),  # type: ignore[arg-type]
+            )
+            for rule in rules
+        )
 
 
 class SubagentCapabilityGrant(RuntimeContract):
@@ -285,6 +355,77 @@ class SubagentAuthorityPolicy:
             policy=SubagentPolicyGrant.narrow(parent.policy, definition_policy),
         )
 
+    @classmethod
+    def narrow_fs_permissions(
+        cls,
+        *,
+        parent: Sequence[FilesystemGrant],
+        definition: Sequence[FilesystemGrant],
+    ) -> tuple[FilesystemGrant, ...]:
+        """Intersect a declared child's filesystem rules with its parent's.
+
+        The result is the child's COMPLETE effective rule list, ordered: the
+        surviving definition-owned rules first, then the parent's list verbatim.
+        Both halves are load-bearing.
+
+        * The surviving child rules go first because Deep Agents' matcher
+          returns the FIRST match, so a rule appended after the parent's
+          catch-alls would decide nothing.
+        * The parent's list is appended because a child's ``permissions``
+          REPLACES the parent's rather than composing with it, and the matcher
+          answers ``allow`` for a path no rule mentions. Without the append, a
+          child list saying "allow me ``/drafts/``" would silently also say
+          "and everything else is unmatched, therefore permitted" — losing the
+          parent's ``interrupt`` on every other read and its ``deny`` on every
+          other write. That is a widening dressed as a narrowing, and it is
+          what made this axis a bypass.
+
+        Which child rules survive:
+
+        * ``deny`` and ``interrupt`` — always. They can only tighten, and a
+          definition tightening itself is the whole legitimate use.
+        * ``allow`` — only for the (path, operation) pairs the parent already
+          allows. "Already allows" is the parent's own first-match verdict, read
+          from its ordered list, so a granted root that is read-allow and
+          write-interrupt hands the child exactly that split.
+
+        An empty ``parent`` means the run has no filesystem boundary at all —
+        the hosted images, where ``_host_filesystem_permissions`` returns
+        nothing and the supervisor itself is unrestricted over a virtual-only
+        backend. That is a measured fact about the run, not an unmeasured one,
+        and the child is returned unchanged because there is no ceiling to clamp
+        to and none to append. Callers must therefore always pass the parent's
+        real list; a defaulted empty one would turn "nobody asked" into "no
+        limits", which is the failure mode this method exists to prevent.
+        """
+
+        if not definition:
+            return tuple(parent)
+        if not parent:
+            return tuple(definition)
+        narrowed: list[FilesystemGrant] = []
+        for rule in definition:
+            if rule.mode != _ALLOW:
+                narrowed.append(rule)
+                continue
+            # Split per path: one spec may name several paths, and the parent's
+            # verdict differs between them (a read-only grant and a writable one
+            # can both be named by a single child rule). Emitting one narrowed
+            # rule per surviving path is the only shape that can say so.
+            for path in rule.paths:
+                operations = tuple(
+                    operation
+                    for operation in rule.operations
+                    if _parent_allows(parent, path=path, operation=operation)
+                )
+                if operations:
+                    narrowed.append(
+                        rule.model_copy(
+                            update={"paths": (path,), "operations": operations}
+                        )
+                    )
+        return tuple(narrowed) + tuple(parent)
+
     @staticmethod
     def require_same_tenant(
         *,
@@ -316,6 +457,108 @@ def _iterable(value: object) -> tuple[object, ...]:
         raise ValueError("subagent capability grants must be iterables") from exc
 
 
+def _rule_field(rule: object, name: str) -> object:
+    """Read one field off a rule-shaped mapping or object, or refuse."""
+
+    if isinstance(rule, Mapping):
+        if name in rule:
+            return rule[name]
+    else:
+        try:
+            return getattr(rule, name)
+        except AttributeError:
+            pass
+    raise SubagentAuthorityError(
+        f"filesystem rule is missing {name!r} and cannot be narrowed: {rule!r}"
+    )
+
+
+def _parent_allows(
+    parent: Sequence[FilesystemGrant], *, path: str, operation: str
+) -> bool:
+    """Does the parent's ordered list allow ``operation`` everywhere ``path`` reaches?
+
+    Deep Agents decides one CONCRETE path against the first rule that matches
+    it. A child's rule is a PATTERN, so the honest question is whether every
+    concrete path it could reach gets the same ``allow``. This answers it
+    conservatively, on the same first-match walk:
+
+    * the first parent rule whose ground OVERLAPS the candidate decides — not
+      the first that contains it. A restriction the candidate only partly
+      escapes still refuses it, so a child cannot step around a narrow ``deny``
+      by asking for its parent directory;
+    * that rule must both be ``allow`` and CONTAIN the candidate outright.
+      Overlap is not enough to permit; only containment is.
+
+    Anything it cannot reason about is a refusal: an operation no parent rule
+    mentions (``execute``, which Deep Agents 0.7.x never checks), a single-``*``
+    pattern whose depth is fixed, a candidate reaching wider than any rule.
+    A refusal costs the definition a rule; a wrong ``True`` costs the user the
+    boundary.
+    """
+
+    for rule in parent:
+        if operation not in rule.operations:
+            continue
+        if not any(_overlaps(pattern, path) for pattern in rule.paths):
+            continue
+        return rule.mode == _ALLOW and any(
+            _covers(pattern, path) for pattern in rule.paths
+        )
+    return False
+
+
+def _covers(pattern: str, candidate: str) -> bool:
+    """Does every path ``candidate`` can reach lie inside ``pattern``'s ground?"""
+
+    if not _is_glob(pattern):
+        # A literal rule path matches exactly itself and nothing beneath it.
+        return not _is_glob(candidate) and _normalized(candidate) == _normalized(
+            pattern
+        )
+    if "**" not in pattern:
+        # A single ``*`` matches one segment, so the ground it covers is a
+        # fixed depth rather than a subtree. Reasoning about that correctly
+        # means reimplementing the matcher; refusing means losing a rule.
+        return False
+    return _within(_literal_prefix(candidate), _literal_prefix(pattern))
+
+
+def _overlaps(pattern: str, candidate: str) -> bool:
+    """Can ``pattern`` and ``candidate`` reach any path in common?"""
+
+    ground = _literal_prefix(pattern)
+    reach = _literal_prefix(candidate)
+    return _within(reach, ground) or _within(ground, reach)
+
+
+def _within(candidate: str, root: str) -> bool:
+    """Is ``candidate`` at or below ``root``? Both are literal prefixes."""
+
+    if root == "/":
+        return True
+    return candidate == root or candidate.startswith(f"{root}/")
+
+
+def _literal_prefix(pattern: str) -> str:
+    """The deepest ancestor of ``pattern`` that contains no pattern syntax."""
+
+    segments: list[str] = []
+    for segment in PurePosixPath(pattern).parts[1:]:
+        if _is_glob(segment):
+            break
+        segments.append(segment)
+    return "/" + "/".join(segments)
+
+
+def _normalized(path: str) -> str:
+    return str(PurePosixPath(path))
+
+
+def _is_glob(text: str) -> bool:
+    return any(character in _GLOB_SYNTAX for character in text)
+
+
 def _requested_or_configured(
     requested: Iterable[str], configured: frozenset[str]
 ) -> frozenset[str]:
@@ -327,6 +570,7 @@ def _requested_or_configured(
 
 
 __all__ = (
+    "FilesystemGrant",
     "SubagentAuthorityError",
     "SubagentAuthorityPolicy",
     "SubagentCapabilityGrant",

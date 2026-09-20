@@ -25,11 +25,22 @@ see in ``context_occupancy.jsonl``.
 
 Two directions matter and both are covered:
 
-* ``off`` removes exactly the three, and nothing else — a gate that also
+* ``off`` removes exactly the family, and nothing else — a gate that also
   swallowed a neighbouring tool would be a regression, not a saving; and
 * the gate **fails toward including**. The artifact lane is live and has
   causal-lane sealing consequences, so every way of not-saying-off (unset
   document, unset section, an absent knob) must still yield the tools.
+
+**Scope note.** ``stage_rowset_write`` is no longer among the tools this knob
+decides on the default surface. It gained its own row,
+``tool_surface.rowset_staging_tool``, which ships ``off`` because the corpus
+that motivated *this* knob also showed the three members behaving nothing alike:
+``publish_artifact`` 142 invocations, ``revise_artifact`` 36, and
+``stage_rowset_write`` zero. This file therefore asserts the two-tool family
+plus one direction the split must not break — family ``off`` still withholds the
+row-set tool even when its own row says ``always``. The row-set tool's own
+withholding, and the tokens it takes off the wire, live in
+``test_rowset_staging_tool_gate.py``.
 """
 
 from __future__ import annotations
@@ -58,6 +69,15 @@ from runtime_worker.handlers.run import RuntimeRunHandler
 ARTIFACT_FAMILY = frozenset(
     {"publish_artifact", "revise_artifact", "stage_rowset_write"}
 )
+
+#: The members ``artifact_family`` alone decides. ``stage_rowset_write`` left
+#: this set when it gained its own row: it is withheld by the shipped
+#: ``tool_surface.rowset_staging_tool='off'`` on evidence that points at it and
+#: not at its siblings (zero invocations against their 142 and 36), so on the
+#: default surface the family switch governs exactly these two. The split is
+#: asserted rather than assumed by
+#: ``tests/unit/runtime_worker/test_rowset_staging_tool_gate.py``.
+FAMILY_ON_THE_DEFAULT_SURFACE = frozenset({"publish_artifact", "revise_artifact"})
 
 
 class _McpRegistry:
@@ -218,14 +238,20 @@ class ArtifactSurfaceMixin:
 
 class TestArtifactFamilyExposure(ArtifactSurfaceMixin):
     def test_family_is_on_the_surface_when_the_knob_is_unset(self) -> None:
-        """The shipped default keeps every artifact run working, untouched."""
+        """The shipped default keeps every artifact run working, untouched.
+
+        Two tools rather than three since ``stage_rowset_write`` gained its own
+        row; that the third is *deliberately* absent (and that its 900 tokens
+        actually left the wire) is asserted in ``test_rowset_staging_tool_gate``
+        rather than inferred from its absence here.
+        """
 
         names = self.names(self.compose(None))
 
-        assert ARTIFACT_FAMILY <= names
+        assert FAMILY_ON_THE_DEFAULT_SURFACE <= names
 
     def test_family_is_on_the_surface_when_the_knob_says_always(self) -> None:
-        assert ARTIFACT_FAMILY <= self.names(self.compose("always"))
+        assert FAMILY_ON_THE_DEFAULT_SURFACE <= self.names(self.compose("always"))
 
     def test_family_is_absent_from_the_surface_when_the_knob_says_off(self) -> None:
         """The assertion the saving rests on, made against the surface."""
@@ -238,13 +264,41 @@ class TestArtifactFamilyExposure(ArtifactSurfaceMixin):
         )
 
     def test_off_removes_the_family_and_nothing_else(self) -> None:
-        """A saving that also dropped a neighbour would be a regression."""
+        """A saving that also dropped a neighbour would be a regression.
+
+        Measured on the default surface, where the row-set tool is already
+        withheld by its own row — so what ``artifact_family='off'`` removes
+        here is the two artifact tools and, critically, nothing besides.
+        """
 
         on = self.names(self.compose("always"))
         off = self.names(self.compose("off"))
 
-        assert on - off == ARTIFACT_FAMILY
+        assert on - off == FAMILY_ON_THE_DEFAULT_SURFACE
         assert not off - on
+
+    def test_family_off_still_withholds_the_rowset_tool_it_no_longer_owns(
+        self,
+    ) -> None:
+        """The narrower knob may not become a way to smuggle the tool back.
+
+        ``admits_rowset_staging_tool`` composes with ``admits_artifact_family``
+        rather than replacing it, so an operator who switched the whole family
+        off and the row-set row on must still get nothing — otherwise the split
+        would have widened the surface while claiming to narrow it.
+        """
+
+        settings = RuntimeSettings.load(
+            environ={
+                **self.LANE_ON_ENV,
+                "COPILOT_HP__TOOL_SURFACE__ARTIFACT_FAMILY": "off",
+                "COPILOT_HP__TOOL_SURFACE__ROWSET_STAGING_TOOL": "always",
+            },
+            env_file=os.devnull,
+        )
+        handler = self.handler(settings)
+
+        assert handler._stage_rowset_write_tool(self.command(), self.run()) is None
 
     def test_off_saves_the_measured_schema_tokens(self) -> None:
         """Prove the saving with the occupancy report's own instrument.

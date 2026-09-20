@@ -108,6 +108,15 @@ def _settings(
     environment = {
         "SURFACES_V2": "true" if surfaces_v2 else "false",
         "OPERATION_GATEWAY_MODE": mode.value,
+        # These tests are about how the row-set tool ASSEMBLES — which stager it
+        # binds in enforce vs shadow, and that it never dispatches — not about
+        # whether it is offered to a model. The shipped document withholds it
+        # (``tool_surface.rowset_staging_tool='off'``: zero invocations across
+        # the measured corpus against a 900-token resident schema), so the
+        # assembly under test has to be asked for explicitly. Turning the knob on
+        # here is deliberate, and keeps this file testing one thing: were it left
+        # off, every assertion below would pass vacuously against ``None``.
+        "COPILOT_HP__TOOL_SURFACE__ROWSET_STAGING_TOOL": "always",
     }
     if mode is OperationGatewayMode.ENFORCE and surfaces_v2:
         capabilities = (

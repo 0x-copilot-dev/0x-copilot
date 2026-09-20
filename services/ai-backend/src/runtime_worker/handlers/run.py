@@ -2364,22 +2364,43 @@ class RuntimeRunHandler:
         *,
         mcp_gateway_services: McpOperationGatewayServices | None = None,
     ) -> object | None:
-        """Build the per-run ``stage_rowset_write`` tool, or ``None`` (flag off).
+        """Build the per-run ``stage_rowset_write`` tool, or ``None`` (withheld).
 
         Wired to the same event producer every emission uses (via
         ``RuntimeStageLedger``), the durable queue (for an allow-always
         auto-apply), and the C1 policy resolver. The stager never touches an MCP
         client — only the shared effect-dispatch path dispatches.
 
-        It shares the artifact family's exposure knob because it shares their
-        cost profile (1,223 resident tokens of schema for a bulk-write proposal
-        builder most runs never reach for). Withholding it removes only the
-        model-visible proposal builder: already-staged row-set effects still
-        execute through ``runtime_worker.builtin_effect_executor``, which
-        resolves them by effect kind and never by tool availability.
+        **This is the gate, and it is here rather than later on purpose.** What
+        the tool costs is its schema, and a schema is billed at *registration*,
+        not at invocation: a tool that registers and then refuses inside
+        ``_stage`` saves nothing at all. Returning ``None`` is what stops
+        ``execution.factory`` ever appending it, which is the only thing that
+        removes the bytes from the wire. Same reasoning, same shape, as
+        ``run_tool_program``'s gate in ``capability_tool_wiring``.
+
+        The knob is ``tool_surface.rowset_staging_tool``, which **composes with**
+        (never replaces) the artifact family's — so ``artifact_family='off'``
+        still withholds all three, while the shipped
+        ``rowset_staging_tool='off'`` withholds this one and leaves
+        ``publish_artifact`` and ``revise_artifact`` bit-identical. It ships off
+        because over 1,441 recorded ``tool_invocations`` on the measuring
+        machine this tool was invoked zero times while those two were invoked
+        142 and 36 times, yet its schema was resident on 883 of 883 measured
+        model calls at a reproduced 3,704 bytes / 900 estimated tokens each.
+
+        Withholding it removes only the *agent-initiated* proposal builder.
+        Already-staged row-set effects still execute through
+        ``runtime_worker.builtin_effect_executor``, which resolves them by
+        effect kind and never by tool availability; and
+        ``SurfaceWriteBackCoordinator`` still stages row sets from user-driven
+        write-backs with no model involvement, so the staged-table review
+        surface keeps a live producer. What the product loses is the model's
+        ability to *propose* a bulk write unasked — a decision, stated plainly,
+        not a side effect.
         """
 
-        if not self._artifact_family_model_visible(
+        if not self.settings.hyperparameters.tool_surface.admits_rowset_staging_tool(
             lane_enabled=bool(self.settings.execution.surfaces_v2 and run is not None)
         ):
             return None
