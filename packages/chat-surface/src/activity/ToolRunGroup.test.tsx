@@ -136,3 +136,37 @@ describe("ToolRunGroup", () => {
     );
   });
 });
+
+describe("ToolRunGroup — the digest", () => {
+  const DIGEST = "Searched the web · Read 3 files";
+
+  it("names the work a settled group folds, keeping the 'Worked for' prefix", () => {
+    // `Worked for` is pinned by the TR-16 journey (`label.startswith`), so the
+    // digest replaces only the count after it.
+    render(g({ digest: DIGEST }));
+    expect(label()).toBe(`Worked for 8.3s · ${DIGEST}`);
+  });
+
+  it("names the work a FAILED group folds too", () => {
+    render(g({ state: "failed", digest: DIGEST }));
+    expect(label()).toBe(`Failed after 8.3s · ${DIGEST}`);
+  });
+
+  it("leaves the running label alone — an open group's cards already say it", () => {
+    render(g({ state: "running", done: 1, total: 6, digest: DIGEST }));
+    expect(label()).toBe("Working · 1 of 6");
+  });
+
+  it("falls back to the count rather than folding silently", () => {
+    render(g({ digest: "   " }));
+    expect(label()).toBe("Worked for 8.3s · 3 steps");
+  });
+
+  it("keeps the full sentence recoverable when the label ellipsizes", () => {
+    render(g({ digest: DIGEST }));
+    expect(screen.getByTestId("tool-run-group-label")).toHaveAttribute(
+      "title",
+      `Worked for 8.3s · ${DIGEST}`,
+    );
+  });
+});

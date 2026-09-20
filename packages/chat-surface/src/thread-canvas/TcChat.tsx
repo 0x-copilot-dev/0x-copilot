@@ -78,6 +78,7 @@ import { ToolRunGroup } from "../activity/ToolRunGroup";
 // PRD-03 FR-3.10 — reuse the formatter that already exists rather than adding a
 // third. PRD-07 renames/consolidates it; this call site moves with it.
 import { formatSubagentDuration } from "../subagents/labels";
+import { describeActivity, type ActivityDigestMember } from "./activityDigest";
 import {
   groupActivityStream,
   summariseGroup,
@@ -1729,6 +1730,7 @@ function MessageListBody(props: MessageListBodyProps): ReactNode {
                 runFailed,
               ),
               total: absorbed.length,
+              digest: describeActivity(absorbed.flatMap(toDigestMember)),
             },
       );
     }
@@ -1877,6 +1879,7 @@ function MessageListBody(props: MessageListBodyProps): ReactNode {
                     ? null
                     : formatSubagentDuration(summary.elapsedMs)
                 }
+                digest={describeActivity(members.flatMap(toDigestMember))}
                 compact={compact}
               >
                 {members.map(renderItem)}
@@ -2043,6 +2046,7 @@ function renderPart(
           : {
               activity: activity.cards,
               stepCount: activity.total,
+              digest: activity.digest,
               failedCount: activity.summary.retried,
               activityRunning: activity.summary.state === "running",
             })}
@@ -2127,6 +2131,31 @@ interface ThoughtActivity {
   readonly cards: readonly ReactNode[];
   readonly summary: GroupSummary;
   readonly total: number;
+  /** What the cards did, for the settled header — see `activityDigest.ts`. */
+  readonly digest: string | null;
+}
+
+/**
+ * One folded stream item, as the digest sees it.
+ *
+ * `flatMap`-shaped (an array of zero or one) because BOTH fold sites call it and
+ * a group's members are not only tools and fleets: anything else contributes no
+ * phrase rather than a wrong one.
+ */
+function toDigestMember(item: StreamItem): readonly ActivityDigestMember[] {
+  if (item.kind === "tool") {
+    return [
+      {
+        kind: "tool",
+        toolName: item.toolCall.toolName,
+        args: item.toolCall.args,
+      },
+    ];
+  }
+  if (item.kind === "fleet") {
+    return [{ kind: "fleet", total: item.fleet.total }];
+  }
+  return [];
 }
 
 // PR-3.8 — reuse the hoisted `SubagentFleetCard` (Phase 1D) with the projected
