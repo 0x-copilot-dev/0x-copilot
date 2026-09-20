@@ -69,7 +69,7 @@ jobs:
 
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: "22"
+          node-version-file: ".nvmrc"
           cache: npm
 
       - name: Install Node dependencies
@@ -133,7 +133,7 @@ jobs:
 
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: "22"
+          node-version-file: ".nvmrc"
           cache: npm
 
       # --ignore-scripts skips electron's postinstall (a ~100 MB download this job
@@ -236,7 +236,7 @@ jobs:
 
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: "22"
+          node-version-file: ".nvmrc"
           cache: npm
 
       # _lib.py needs 3.11+ (StrEnum). Pinned rather than trusting whatever
