@@ -9,6 +9,6 @@
   },
   "dependencies": {
     "playwright": "*",
-    "viem": "^2.21.55"
+    "viem": "^2.55.11"
   }
 }
