@@ -1043,3 +1043,115 @@ element in the shared chat surface, which is its own change.
 Deliberately **not** addressed by pinning a specific retired id anywhere in the
 harness — that is a hardcoded denylist in test clothing, and it rots the moment a
 vendor retires something else.
+
+## 10. The first honest correctness numbers — and the ceiling raise bought none of them
+
+Three arms on `claude-haiku-4-5`, 2026-09-20, against a stage built from the tree
+that carries the `stage_rowset_write` gate. Stage discipline first, as §5 demands:
+
+```
+staged src mtime   Sep 20 16:10:44
+newest src commit  Sep 20 15:55:07      ← stage is NEWER than the tree
+```
+
+### 10.1 Completion is not correctness, measured
+
+§6.1 predicted that "the first honest correctness number this produces will look
+worse than `4/4`". It does:
+
+```
+recursion set, prompt set v2           completed    correct
+  limit=25                                3/4          2/4
+  limit=500                               4/4          2/4
+heavy set, limit=500 (six tasks)          5/6          3/6
+```
+
+**Raising the ceiling bought +1 completion and +0 correct answers.** At limit=25
+`t3-todo-driven` was stopped by the step ceiling — §1's finding reproduces on a
+different model and a rewritten prompt, so it is robust. At limit=500 the same
+task _completed_ and its final answer was a serialized todo-list update rather
+than the ordering it was asked for. The published `3/4 → 4/4` was a true
+statement about termination and said nothing about whether the work got done.
+
+Two `completed` heavy tasks were also simply wrong: `h2-crossref` returned
+`TOTAL=33 TOP=omar` and `h5-longchain` `ADA=15 LIN=5 OMAR=13`. A completion count
+reads both as wins, at full price.
+
+### 10.2 `t4-long-chain` has never measured a chain
+
+`t4` made **1 model call and 0 tool calls** in both arms here — and did the same
+in both v1 arms on a different model. It fails the same way every time: it
+answers about the _previous_ task's content (`Beta 9, Alpha 4, Gamma 6` is `t3`'s
+data) or handles only the first number (`No. A prime number must have exactly
+two distinct positive divisors…`). The prompt asks the model to "work through the
+numbers one at a time", but nothing in the task requires a tool, so the run ends
+at the first assistant message. A one-call task cannot be a long chain. `t4`
+should be rebuilt on tool calls the way `h5-longchain` is, or deleted; as written
+it contributes a confident row to every table and measures nothing.
+
+### 10.3 The tool-result cap, measured for the first time — it fires
+
+`h6-bigread`, rebased onto `/memories/` so it needs no folder grant, ran for the
+first time in any arm. Reproduced twice (pinned alone, then inside the full arm):
+
+```
+results OFFLOADED before the model saw them : 1      ← the pre-model cap FIRED
+largest object in the store                 : 63,793 bytes   (the designed fixture size)
+largest result that got THROUGH the cap     : 2,665 tokens
+```
+
+`outcome_ok` was `Y` both times and is deliberately not the evidence: H6's agent
+authors its own fixture and can answer from memory of the seed. The `offl` column
+is the claim. Of the five claims §5 listed as unreachable, four are now measured;
+MCP namespacing still needs two hand-connected servers.
+
+### 10.4 The `stage_rowset_write` gate, confirmed on a live request
+
+```
+                      tools resident    tools segment
+before (§8's arms)          20             7,910 tok
+after  (this arm)           19             7,010 tok      −900, exactly as predicted
+```
+
+`stage_rowset_write` is absent from the request; `publish_artifact` and
+`revise_artifact` are both still present. This is the ledger's own per-call
+record of a real request, not an offline composition — i.e. the saving is at the
+seam the model reads, which is the distinction that killed title-slimming (§6).
+
+### 10.5 A correction to §7: the process boundary is not the driver either
+
+§7 found a store's first run cold 67.7% of the time regardless of elapsed time,
+and named its own blind spot: "first in store" conflated a process start with a
+prefix change, on a corpus of heterogeneous journey configs. These arms are the
+homogeneous case that corpus lacked — three fresh stores, identical config,
+minutes apart — and **all three opened warm**:
+
+```
+first model call of a FRESH store      input     cached
+  recursion arm 25                     12,973     7,621
+  recursion arm 500                    12,973     7,621
+  heavy arm 500                        13,183     7,621
+```
+
+So a process boundary does not by itself cost a cold prompt; a **prefix change**
+does. §7's 67.7% was measuring how often two journeys happened to share a config.
+Note what stayed cold: the cached 7,621 is almost exactly the tools segment
+(7,010), so the provider cache carried the tools block across stores and nothing
+after it. **Hypothesis, not yet verified:** the system block diverges per store
+within its first few hundred tokens (a path, a date, an id), which would make it
+structurally uncacheable across sessions that share everything else. n=3, one
+afternoon, one model. Diffing two stores' assembled system prompts would settle
+it, and the system-block attribution work is what makes that diff readable.
+
+For the shipping product — one store per user — what matters is prefix stability
+_across that user's sessions_, and the second call of every store here was ~99%
+cached (12,963 of 13,047). §7's practical conclusion stands: the opening run of a
+session pays for whatever part of the prefix is not byte-stable.
+
+### What these arms cost
+
+Three arms plus a one-task validation — 15 runs, all priced: **$0.0644** on
+`claude-haiku-4-5`, summed from `cost_micro_usd` in the stores rather than estimated.
+The v1 arms (`runs/arm-25.json`, `runs/arm-500.json`) are left untouched as the
+record §1–§6 cite; the v2 arms are `runs/arm-25-v2.json` and `runs/arm-500-v2.json`.
+Per §6.1, no v2 number is spliced into §6's trajectory.
