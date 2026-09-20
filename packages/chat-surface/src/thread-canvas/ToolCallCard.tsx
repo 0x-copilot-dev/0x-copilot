@@ -74,6 +74,11 @@ export function ToolCallCard({
         role="group"
         aria-label={`Tool: ${toolCall.title}`}
         data-tool-status={toolCall.status}
+        // WHICH tool, as data. The card's visible title is model-authored
+        // ("math.isqrt docs"), so the raw name appears nowhere on screen, and a
+        // journey that read copy to learn the tool broke the day the title
+        // stopped being the name. Same reasoning as `data-tool-status`.
+        data-tool-name={toolCall.toolName}
         data-tool-waiting={waiting ? "true" : "false"}
         {...(blocked === null ? {} : { "data-tool-blocked": blocked })}
       >
@@ -89,6 +94,7 @@ export function ToolCallCard({
       style={activityCardFrameStyle}
       aria-label={`Tool: ${toolCall.title}`}
       data-tool-status={toolCall.status}
+      data-tool-name={toolCall.toolName}
       data-tool-waiting={waiting ? "true" : "false"}
       {...(blocked === null ? {} : { "data-tool-blocked": blocked })}
       // CONTROLLED, seeded from the view. A bare `open={true}` would be

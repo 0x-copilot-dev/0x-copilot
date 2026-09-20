@@ -249,3 +249,57 @@ describe("ThinkingBlock · folded activity", () => {
     expect(block().open).toBe(false);
   });
 });
+
+describe("ThinkingBlock — the digest", () => {
+  const DIGEST = "Searched the web · Dispatched 1 subagent";
+  const steps = (): HTMLElement =>
+    screen.getByTestId("cs-thinking-block-steps");
+
+  it("names what the folded cards did instead of counting them", () => {
+    // The live capture behind this: a settled turn read
+    // "Thought process · 2 steps" and nothing recorded the search or the
+    // subagent. A number says work exists; it takes a noun to say what it was.
+    render(
+      <ThinkingBlock text="" running={false} stepCount={2} digest={DIGEST} />,
+    );
+    expect(steps()).toHaveTextContent(`· ${DIGEST}`);
+    expect(screen.getByTestId("cs-thinking-block")).toHaveAttribute(
+      "data-steps",
+      "2",
+    );
+  });
+
+  it("falls back to the count when the caller cannot describe its cards", () => {
+    render(<ThinkingBlock text="" running={false} stepCount={2} digest="  " />);
+    expect(steps()).toHaveTextContent("· 2 steps");
+  });
+
+  it("says nothing about steps when there are none, digest or not", () => {
+    render(
+      <ThinkingBlock text="" running={false} stepCount={0} digest={DIGEST} />,
+    );
+    expect(screen.queryByTestId("cs-thinking-block-steps")).toBeNull();
+  });
+
+  it("makes the digest the ONE item that yields in a narrow column", () => {
+    // jsdom runs no layout, so this asserts the shrink CONTRACT that decides
+    // clipping order. The digest is the only unbounded string in the header; if
+    // it were `flex: none`, a ~335px Studio column would push the chevron — the
+    // only affordance this control has — off the edge instead.
+    render(
+      <ThinkingBlock text="" running={false} stepCount={2} digest={DIGEST} />,
+    );
+    expect(steps()).toHaveStyle({
+      flex: "0 1 auto",
+      minWidth: "0",
+      overflow: "hidden",
+      textOverflow: "ellipsis",
+      whiteSpace: "nowrap",
+    });
+    expect(steps()).toHaveAttribute("title", DIGEST);
+    const summary = screen
+      .getByTestId("cs-thinking-block")
+      .querySelector("summary") as HTMLElement;
+    expect(summary).toHaveStyle({ maxWidth: "100%" });
+  });
+});

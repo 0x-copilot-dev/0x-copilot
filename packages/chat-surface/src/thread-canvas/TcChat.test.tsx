@@ -2726,9 +2726,13 @@ describe("TcChat — tool calls folded into the thought", () => {
     expect(screen.queryByTestId("tool-run-group")).not.toBeInTheDocument();
   });
 
-  it("states how many steps it folded away", () => {
-    // The count is the honesty guarantee: the row is collapsed by default, so
-    // without it, folding the cards in would simply be hiding them.
+  it("NAMES the work it folded away, not just how much of it", () => {
+    // The row is collapsed by default, so without a statement of what is under
+    // it, folding the cards in would simply be hiding them. That statement used
+    // to be a count ("· 2 steps"), and a live capture showed the count is not
+    // enough: a settled turn that had searched the web and dispatched a
+    // subagent read "Thought process · 2 steps", and nothing on screen recorded
+    // that either had happened. The guarantee is now a NOUN.
     renderTurn({
       toolCalls: [
         toolCall({ id: "call-1", runId: RUN, sequenceNo: 2 }),
@@ -2736,7 +2740,12 @@ describe("TcChat — tool calls folded into the thought", () => {
       ],
     });
     expect(screen.getByTestId("cs-thinking-block-steps")).toHaveTextContent(
-      "· 2 steps",
+      "· Searched the web ×2",
+    );
+    // The count survives as data for anything that needs the number.
+    expect(screen.getByTestId("cs-thinking-block")).toHaveAttribute(
+      "data-steps",
+      "2",
     );
   });
 

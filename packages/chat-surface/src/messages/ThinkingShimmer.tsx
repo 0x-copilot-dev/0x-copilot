@@ -136,6 +136,13 @@ const summaryStyle: CSSProperties = {
   margin: "0 -6px",
   borderRadius: 6,
   width: "fit-content",
+  // Bounded, because the header now carries one unbounded string — the digest.
+  // `fit-content` alone grows past the column, and the Studio chat column is
+  // ~335px: the row would push its own chevron (the only affordance this
+  // control has) off the edge.
+  maxWidth: "100%",
+  minWidth: 0,
+  boxSizing: "border-box",
 };
 
 const bodyStyle: CSSProperties = {
@@ -165,6 +172,8 @@ const activityListStyle: CSSProperties = {
 const settledLabelStyle: CSSProperties = {
   color: "var(--color-text-muted, #98989f)",
   fontSize: CHROME_SIZE,
+  flex: "none",
+  whiteSpace: "nowrap",
 };
 
 /** The step count riding next to the label. Deliberately NOT inside the
@@ -174,6 +183,23 @@ const stepsStyle: CSSProperties = {
   color: "var(--color-text-subtle, #64646d)",
   fontSize: CHROME_SIZE,
   whiteSpace: "nowrap",
+  // THE item that gives way. The label and the chevron stay `flex: none`; this
+  // span is the only arbitrary-length thing in the row, so it is the one that
+  // ellipsizes in a narrow column. The full sentence stays on `title`.
+  flex: "0 1 auto",
+  minWidth: 0,
+  overflow: "hidden",
+  textOverflow: "ellipsis",
+};
+
+/** The digest variant. The bare count is decoration and sits one rung quieter
+ *  than the label; a sentence naming the work is CONTENT — after a run settles
+ *  it is the only record on screen of what the agent did — so it gets the
+ *  label's contrast. `--color-text-subtle` on the app background is ~3.3:1,
+ *  under AA for text; `--color-text-muted` is ~7:1. */
+const digestStyle: CSSProperties = {
+  ...stepsStyle,
+  color: "var(--color-text-muted, #98989f)",
 };
 
 const failedStepsStyle: CSSProperties = {
@@ -197,6 +223,19 @@ export interface ThinkingBlockProps {
   readonly activity?: ReactNode;
   /** How many cards `activity` holds. Drives the header's `· N steps`. */
   readonly stepCount?: number;
+  /**
+   * WHAT those cards did — "Searched the web · Dispatched 1 subagent" —
+   * supplied by `TcChat` from `describeActivity`. When present it REPLACES the
+   * bare count in the header.
+   *
+   * The count was written as the guard against this block hiding work ("the
+   * only thing that tells a reader work is folded under a collapsed row"), and
+   * a live capture showed it is not enough of one: a settled turn read
+   * "Thought process · 2 steps" and nothing on screen recorded that a search
+   * and a subagent had happened. A number says work exists; it takes a noun to
+   * say what it was. A plain string, so this module never learns about tools.
+   */
+  readonly digest?: string | null;
   /** How many of them failed. Drives the header's red `· N failed`. */
   readonly failedCount?: number;
   /**
@@ -227,6 +266,7 @@ export function ThinkingBlock({
   children,
   activity,
   stepCount = 0,
+  digest = null,
   failedCount = 0,
   activityRunning = false,
 }: ThinkingBlockProps): ReactElement {
@@ -275,8 +315,15 @@ export function ThinkingBlock({
     [],
   );
 
+  // The digest wins when there is one; the count stays as the fallback so a
+  // caller that cannot describe its cards still never folds them silently.
+  const hasDigest = digest !== null && digest.trim() !== "";
   const steps =
-    stepCount > 0 ? `${stepCount} step${stepCount === 1 ? "" : "s"}` : null;
+    stepCount <= 0
+      ? null
+      : hasDigest
+        ? digest
+        : `${stepCount} step${stepCount === 1 ? "" : "s"}`;
 
   return (
     <details
@@ -307,7 +354,11 @@ export function ThinkingBlock({
             reader work is folded under a collapsed row. Without it, absorbing
             the tool cards would BE hiding them. */}
         {steps !== null ? (
-          <span style={stepsStyle} data-testid="cs-thinking-block-steps">
+          <span
+            style={hasDigest ? digestStyle : stepsStyle}
+            data-testid="cs-thinking-block-steps"
+            title={steps}
+          >
             · {steps}
           </span>
         ) : null}

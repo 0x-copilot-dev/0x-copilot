@@ -48,6 +48,19 @@ export interface ToolRunGroupProps {
   readonly retried?: number;
   /** Pre-formatted elapsed (PRD-07's single formatter). `null` → omitted. */
   readonly elapsed?: string | null;
+  /**
+   * WHAT the members did — "Searched the web · Read 3 files" — from
+   * `describeActivity`. Replaces the bare `N steps` in the SETTLED and FAILED
+   * labels; the running label keeps its `N of M`, because a running group is
+   * open and its cards are already saying this themselves.
+   *
+   * PRD-03's reference table shows the half this component originally dropped:
+   * Codex folds to `Worked for 26s ›`, but Claude Desktop keeps a noun —
+   * `Read depth.py ›`. A count tells the reader work is folded; only a noun
+   * tells them what it was, and a settled group is the one moment nothing else
+   * on screen can.
+   */
+  readonly digest?: string | null;
   /** The member cards. */
   readonly children?: ReactNode;
   /**
@@ -71,9 +84,15 @@ function summaryLabel(props: {
   total: number;
   elapsed: string | null;
   compact: boolean;
+  digest: string | null;
 }): string {
-  const { state, done, total, elapsed, compact } = props;
-  const steps = `${total} step${total === 1 ? "" : "s"}`;
+  const { state, done, total, elapsed, compact, digest } = props;
+  // The digest wins when there is one; the count is the fallback, so a caller
+  // that cannot describe its members still never folds them silently.
+  const steps =
+    digest !== null && digest.trim() !== ""
+      ? digest
+      : `${total} step${total === 1 ? "" : "s"}`;
   if (state === "running") {
     return compact ? `${done}/${total}` : `Working · ${done} of ${total}`;
   }
@@ -91,6 +110,7 @@ export function ToolRunGroup({
   total,
   retried = 0,
   elapsed = null,
+  digest = null,
   children,
   compact = false,
   id,
@@ -144,7 +164,7 @@ export function ToolRunGroup({
     [],
   );
 
-  const label = summaryLabel({ state, done, total, elapsed, compact });
+  const label = summaryLabel({ state, done, total, elapsed, compact, digest });
 
   return (
     <details
@@ -171,7 +191,13 @@ export function ToolRunGroup({
             "⚙"
           )}
         </span>
-        <span style={labelStyle} data-testid="tool-run-group-label">
+        {/* `title` because the label ellipsizes in a narrow column, and a
+            sentence that names the work is worth recovering on hover. */}
+        <span
+          style={labelStyle}
+          data-testid="tool-run-group-label"
+          title={label}
+        >
           {label}
         </span>
         {/* PRD-04 territory: the red lives inside the group, not on it. This is

@@ -620,6 +620,22 @@ body {
   background: var(--color-bg);
   color: var(--color-text);
   font-family: var(--font-sans);
+  /* Grayscale smoothing, matching the committed design and OUR OWN SPLASH.
+   *
+   * Every design mock sets this on body (design-kit/app-v3/copilot.css:110), and
+   * the boot splash sets it on `.boot` (apps/desktop/renderer/BootProgress.css:34)
+   * — so until this rule existed, text rendering visibly CHANGED the moment the
+   * splash unmounted: stems went from the splash's thin grayscale to Blink's
+   * heavier default, inside one React root. On a dark theme the default reads
+   * as slightly bold and slightly smeared, which is a fair description of "the
+   * fonts look off" that has nothing to do with the typeface.
+   *
+   * macOS-only properties: inert on Windows, where ClearType owns this. Face-
+   * independent, so it holds whichever way the A-vs-C typeface decision in
+   * docs/plan/agent-execution/TYPOGRAPHY-PROPOSAL.md goes. Revert = delete two
+   * lines. */
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
   /* v3 "quiet" base body size. The design anchors general body text at a literal
    * 13px (copilot.css:104 `body{font-size:13px}`); before this token existed on
    * `body` at all, every text node WITHOUT an explicit size fell back to the
