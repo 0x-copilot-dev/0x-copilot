@@ -21,7 +21,7 @@
     "@opentelemetry/instrumentation-document-load": "0.66.0",
     "@opentelemetry/instrumentation-fetch": "0.220.0",
     "@opentelemetry/resources": "2.10.0",
-    "@opentelemetry/sdk-trace-web": "2.9.0",
+    "@opentelemetry/sdk-trace-web": "2.10.0",
     "@opentelemetry/semantic-conventions": "1.43.0",
     "@radix-ui/react-popover": "1.1.23",
     "@vitejs/plugin-react": "6.0.3",
