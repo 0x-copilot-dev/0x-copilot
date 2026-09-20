@@ -290,14 +290,17 @@ Same four tasks, same model, same stage discipline (re-staged from the tree
 under test before every run). Cold prompt is run 1's input, which is the one
 paid at full price.
 
-| build                                   | cold prompt | tools segment | 4-task total | completion |
-| --------------------------------------- | ----------- | ------------- | ------------ | ---------- |
-| baseline (harness program as merged)    | 23,181      | 9,759         | 95,655       | 3/4 @ 25   |
-| + `run_tool_program` gated, attribution | 22,304      | 9,159         | 91,098       | 4/4        |
-| + first-party tool disclosure           | **20,547**  | **7,910**     | **83,662**   | 4/4        |
+| build                                      | cold prompt | tools segment | 4-task total | completion |
+| ------------------------------------------ | ----------- | ------------- | ------------ | ---------- |
+| baseline (harness program as merged)       | 23,181      | 9,759         | 95,655       | 3/4 @ 25   |
+| + `run_tool_program` gated, attribution    | 22,304      | 9,159         | 91,098       | 4/4        |
+| + first-party tool disclosure              | **20,547**  | **7,910**     | **83,662**   | 4/4        |
+| + `stage_rowset_write` gated _(predicted)_ | _19,647_    | _7,010_       | _unscored_   | _unscored_ |
 
-**Cumulative: −2,634 cold tokens (−11.4%), −11,993 total (−12.5%), completion
-3/4 → 4/4.**
+**Cumulative measured: −2,634 cold tokens (−11.4%), −11,993 total (−12.5%),
+completion 3/4 → 4/4.** The fourth row is a **prediction, not a result** — it is
+recorded here before any paid run so that it can be scored rather than asserted,
+which is the discipline §1 exists to enforce.
 
 The disclosure step was predicted at −1,326 and measured **−1,757** — it beat its
 own estimate, because deferring prose also shrank text the estimate attributed
@@ -305,12 +308,69 @@ elsewhere. Predictions here are worth recording precisely so they can be scored;
 this one was conservative.
 
 What remains resident and what it costs: `write_todos` 997 (third-party,
-LangChain middleware), `stage_rowset_write` 900, `publish_artifact` 805,
-`ask_a_question` 667 (deliberately resident — it is reached while a human
-waits), `grep` 539 (deepagents). The named next lever is **lossless JSON-schema
-slimming**: pydantic emits a `"title"` for every field, ~15–20% of every args
-schema with zero semantic loss, applying to third-party tools too and requiring
-no model behaviour change at all.
+LangChain middleware), `publish_artifact` 805, `ask_a_question` 667 (deliberately
+resident — it is reached while a human waits), `grep` 539 (deepagents).
+`stage_rowset_write` 900 **left this list**: it is now withheld by
+`tool_surface.rowset_staging_tool="off"` in the shipped hyperparameter document.
+
+> **Correction (2026-08-26).** An earlier revision of this paragraph named
+> **lossless JSON-schema slimming** as the next lever — dropping pydantic's
+> per-field `"title"`, claimed at ~15–20% of every args schema. A scoping pass
+> refuted it before any code was written: **titles never reach the provider.**
+> `context_tool_ledger.py` only _observes_ the pydantic schema; what crosses the
+> wire is `bind_tools(...)`, and both providers convert through
+> `langchain_core.utils.function_calling`, which already strips them. The figure
+> measured a shape the model never receives. A saving measured at an observation
+> seam is not a saving.
+
+### Why `stage_rowset_write` was the one to gate, and what "never invoked" means
+
+Same evidence shape as `run_tool_program`, on a bigger corpus. Across every run
+store on this machine — 1,441 `tool_invocations` rows over 323 run ids, 43,551
+run-event lines over 272 sessions, 883 `context_occupancy` model-call rows over
+475 runs:
+
+| tool                 | invocations | run events | resident on         |
+| -------------------- | ----------- | ---------- | ------------------- |
+| `publish_artifact`   | 142         | 18,866     | 883/883 model calls |
+| `revise_artifact`    | 36          | 3,930      | 883/883 model calls |
+| `stage_rowset_write` | **0**       | **0**      | 883/883 model calls |
+
+The two non-zero rows are the point, not decoration: they are the positive
+controls that make the zero mean something. A first pass at this scan returned a
+zero for _every_ tool because it read the wrong key off the JSONL rows (they are
+`{"op":…,"record":{…}}`, so top-level reads yield nothing and raise nothing) —
+a false zero that read exactly like a genuine one. No zero in this file should be
+believed without a control on the same query.
+
+`stage_rowset_write`'s siblings being heavily used is also why
+`ArtifactToolFamilyExposure` could not be the lever: it is all-or-nothing over
+all three, and flipping it would have withheld the third most-used tool in the
+product. The tool got its own row instead.
+
+**Blind spots, both directions.** `tool_invocations` rows are written at
+`TOOL_CALL_STARTED` — when the model emits the call, before any policy or
+refusal — so a call that was attempted and rejected would still have left a row;
+zero rows means the model never chose it. But this is one machine's corpus,
+dominated by journey-harness boots rather than human sessions, so it is evidence
+about this corpus and not proof about every user. Re-opening is a one-line diff.
+
+The 900 is **not an estimate**. Composing the production chain offline
+(`RuntimeRunHandler._stage_rowset_write_tool` → `_model_visible_tools` →
+`wrap_tools_with_display`) and counting with the occupancy ledger's own
+`ContextTokenCounter` reproduces **3,704 bytes / 900 estimated tokens**,
+byte-for-byte identical to a live `context_occupancy.jsonl` record. Skipping the
+display wrap gives 3,963 B / 978 tok, so the match pins the exact object rather
+than landing there by rounding. Two caveats on how to quote it: 900 is the
+figure on a deployment whose `/tools/` guidance route mounts (on one that does
+not, the same tool measures 4,983 B / 1,223 tok — the older figure the corpus
+also contains, 601 of 883 calls); and per §4/§7 the saving is realised on **cold**
+calls at list price, so it is "−900 per cold prompt", never "−900 × every model
+call".
+
+The named next lever is still **lossless JSON-schema slimming**: pydantic emits a
+`"title"` for every field, ~15–20% of every args schema with zero semantic loss,
+applying to third-party tools too and requiring no model behaviour change at all.
 
 ### 6.1 The completion column is not a correctness column
 
@@ -983,3 +1043,115 @@ element in the shared chat surface, which is its own change.
 Deliberately **not** addressed by pinning a specific retired id anywhere in the
 harness — that is a hardcoded denylist in test clothing, and it rots the moment a
 vendor retires something else.
+
+## 10. The first honest correctness numbers — and the ceiling raise bought none of them
+
+Three arms on `claude-haiku-4-5`, 2026-09-20, against a stage built from the tree
+that carries the `stage_rowset_write` gate. Stage discipline first, as §5 demands:
+
+```
+staged src mtime   Sep 20 16:10:44
+newest src commit  Sep 20 15:55:07      ← stage is NEWER than the tree
+```
+
+### 10.1 Completion is not correctness, measured
+
+§6.1 predicted that "the first honest correctness number this produces will look
+worse than `4/4`". It does:
+
+```
+recursion set, prompt set v2           completed    correct
+  limit=25                                3/4          2/4
+  limit=500                               4/4          2/4
+heavy set, limit=500 (six tasks)          5/6          3/6
+```
+
+**Raising the ceiling bought +1 completion and +0 correct answers.** At limit=25
+`t3-todo-driven` was stopped by the step ceiling — §1's finding reproduces on a
+different model and a rewritten prompt, so it is robust. At limit=500 the same
+task _completed_ and its final answer was a serialized todo-list update rather
+than the ordering it was asked for. The published `3/4 → 4/4` was a true
+statement about termination and said nothing about whether the work got done.
+
+Two `completed` heavy tasks were also simply wrong: `h2-crossref` returned
+`TOTAL=33 TOP=omar` and `h5-longchain` `ADA=15 LIN=5 OMAR=13`. A completion count
+reads both as wins, at full price.
+
+### 10.2 `t4-long-chain` has never measured a chain
+
+`t4` made **1 model call and 0 tool calls** in both arms here — and did the same
+in both v1 arms on a different model. It fails the same way every time: it
+answers about the _previous_ task's content (`Beta 9, Alpha 4, Gamma 6` is `t3`'s
+data) or handles only the first number (`No. A prime number must have exactly
+two distinct positive divisors…`). The prompt asks the model to "work through the
+numbers one at a time", but nothing in the task requires a tool, so the run ends
+at the first assistant message. A one-call task cannot be a long chain. `t4`
+should be rebuilt on tool calls the way `h5-longchain` is, or deleted; as written
+it contributes a confident row to every table and measures nothing.
+
+### 10.3 The tool-result cap, measured for the first time — it fires
+
+`h6-bigread`, rebased onto `/memories/` so it needs no folder grant, ran for the
+first time in any arm. Reproduced twice (pinned alone, then inside the full arm):
+
+```
+results OFFLOADED before the model saw them : 1      ← the pre-model cap FIRED
+largest object in the store                 : 63,793 bytes   (the designed fixture size)
+largest result that got THROUGH the cap     : 2,665 tokens
+```
+
+`outcome_ok` was `Y` both times and is deliberately not the evidence: H6's agent
+authors its own fixture and can answer from memory of the seed. The `offl` column
+is the claim. Of the five claims §5 listed as unreachable, four are now measured;
+MCP namespacing still needs two hand-connected servers.
+
+### 10.4 The `stage_rowset_write` gate, confirmed on a live request
+
+```
+                      tools resident    tools segment
+before (§8's arms)          20             7,910 tok
+after  (this arm)           19             7,010 tok      −900, exactly as predicted
+```
+
+`stage_rowset_write` is absent from the request; `publish_artifact` and
+`revise_artifact` are both still present. This is the ledger's own per-call
+record of a real request, not an offline composition — i.e. the saving is at the
+seam the model reads, which is the distinction that killed title-slimming (§6).
+
+### 10.5 A correction to §7: the process boundary is not the driver either
+
+§7 found a store's first run cold 67.7% of the time regardless of elapsed time,
+and named its own blind spot: "first in store" conflated a process start with a
+prefix change, on a corpus of heterogeneous journey configs. These arms are the
+homogeneous case that corpus lacked — three fresh stores, identical config,
+minutes apart — and **all three opened warm**:
+
+```
+first model call of a FRESH store      input     cached
+  recursion arm 25                     12,973     7,621
+  recursion arm 500                    12,973     7,621
+  heavy arm 500                        13,183     7,621
+```
+
+So a process boundary does not by itself cost a cold prompt; a **prefix change**
+does. §7's 67.7% was measuring how often two journeys happened to share a config.
+Note what stayed cold: the cached 7,621 is almost exactly the tools segment
+(7,010), so the provider cache carried the tools block across stores and nothing
+after it. **Hypothesis, not yet verified:** the system block diverges per store
+within its first few hundred tokens (a path, a date, an id), which would make it
+structurally uncacheable across sessions that share everything else. n=3, one
+afternoon, one model. Diffing two stores' assembled system prompts would settle
+it, and the system-block attribution work is what makes that diff readable.
+
+For the shipping product — one store per user — what matters is prefix stability
+_across that user's sessions_, and the second call of every store here was ~99%
+cached (12,963 of 13,047). §7's practical conclusion stands: the opening run of a
+session pays for whatever part of the prefix is not byte-stable.
+
+### What these arms cost
+
+Three arms plus a one-task validation — 15 runs, all priced: **$0.0644** on
+`claude-haiku-4-5`, summed from `cost_micro_usd` in the stores rather than estimated.
+The v1 arms (`runs/arm-25.json`, `runs/arm-500.json`) are left untouched as the
+record §1–§6 cite; the v2 arms are `runs/arm-25-v2.json` and `runs/arm-500-v2.json`.
+Per §6.1, no v2 number is spliced into §6's trajectory.

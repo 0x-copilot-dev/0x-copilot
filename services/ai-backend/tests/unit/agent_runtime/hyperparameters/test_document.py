@@ -49,11 +49,27 @@ class CheckedInDocumentMixin:
             "index_summary_max_bytes": 96,
             "index_summary_min_bytes": 24,
         },
-        # ``always`` is today's behaviour, so landing the knob changes nothing.
-        # The saving is realised by an operator writing ``off`` here — a
-        # reviewable one-line diff, which is the whole point of the document.
+        # ``artifact_family: always`` is today's behaviour, so landing that knob
+        # changed nothing. The saving is realised by an operator writing ``off``
+        # here — a reviewable one-line diff, which is the point of the document.
+        #
+        # ``rowset_staging_tool: off`` is the opposite: it is the one row in
+        # this section that ships WITHHELD, and like ``tool_program.enabled``
+        # below that is a measured choice rather than a placeholder. Over every
+        # run store on the measuring machine ``stage_rowset_write`` was invoked
+        # zero times in 1,441 ``tool_invocations`` rows and appeared in zero of
+        # 43,551 run events, while ``publish_artifact`` (142 invocations, the
+        # third most-used tool in the product) and ``revise_artifact`` (36) ran
+        # over the same corpus — so this is one dead tool inside a live family,
+        # which is exactly why it needed its own row rather than a third state
+        # on ``artifact_family``. Its schema was nonetheless resident on 883 of
+        # 883 measured model calls at a reproduced 3,704 bytes / 900 estimated
+        # tokens. Flipping this row back to ``always`` is the review moment for
+        # accepting that rent — and see PRD-D3 for the reason to pair it with a
+        # widened ``REVIEWED_ROWSET_TARGETS`` or an honest description.
         "tool_surface": {
             "artifact_family": "always",
+            "rowset_staging_tool": "off",
         },
         "reads": {
             "default_line_limit": 2000,

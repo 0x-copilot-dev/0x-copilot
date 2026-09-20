@@ -78,6 +78,59 @@ class ArtifactToolFamilyExposure(StrEnum):
     OFF = "off"
 
 
+class RowsetStagingToolExposure(StrEnum):
+    """Whether ``stage_rowset_write`` alone occupies the tool block.
+
+    A second, narrower knob rather than a third state on
+    :class:`ArtifactToolFamilyExposure` because the two questions have opposite
+    answers on the same evidence. Over every run store on the measuring machine
+    — 1,441 ``tool_invocations`` rows across 323 run ids, and 43,551 run events
+    across 272 sessions — ``publish_artifact`` was invoked **142** times (the
+    third most-used tool in the product) and ``revise_artifact`` **36**, while
+    ``stage_rowset_write`` was invoked **zero** times. Over the same corpus its
+    schema was resident on **883 of 883** measured model calls in **475 of 475**
+    runs. Flipping ``artifact_family`` to withhold it would also withhold the
+    third most-used tool in the product, so the granularity had to be split.
+
+    The cost, reproduced offline through the production composition chain and
+    matching a live ``context_occupancy.jsonl`` record byte-for-byte, is
+    **3,704 bytes / 900 estimated tokens** on the deployed surface (where the
+    ``/tools/`` guidance route defers the long description). On a deployment
+    whose guidance route does not mount, the same tool measures 4,983 bytes /
+    1,223 tokens — the figure :class:`ArtifactToolFamilyExposure` records — so
+    the saving is a range, 900 at the low end, and 900 is the number to quote.
+
+    **Blind spot, stated because a corpus is not a population.** "Never
+    invoked" is a fact about one machine's stores, which are dominated by
+    journey-harness boots rather than human sessions. It is nonetheless a
+    *strong* fact rather than an absence of data: ``tool_invocations`` rows are
+    written at ``TOOL_CALL_STARTED``, when the model emits the call and before
+    any gate, policy or refusal runs, so a call that was attempted and then
+    refused would still have left a row. Zero rows means the model never chose
+    the tool, not that something downstream ate the attempt.
+
+    **What this does NOT do**, by name, because the lane is live: the row-set
+    repository, ``RuntimeStageLedger``, ``WriteStager``,
+    ``RowsetPolicyResolver``, ``RuntimeStageCommitQueue``,
+    ``runtime_worker.builtin_effect_executor``'s ``BuiltinRowSetEffectExecutor``
+    and every approval / resume path are keyed on the effect *kind* and never on
+    tool availability, so an already-staged row set still executes exactly as
+    before. ``SurfaceWriteBackCoordinator`` keeps staging row sets from
+    user-driven write-backs with no model involvement. What stops is the one
+    *agent-initiated* producer: with this knob off, staged row-set tables arise
+    from the user's own write-back, never from the model proposing one.
+    """
+
+    #: The tool is model-visible whenever its lane is composed — the behaviour
+    #: before this knob existed, and the value to set when re-opening the lane.
+    ALWAYS = "always"
+    #: The schema is withheld from the model surface. The shipped default, and
+    #: the only member of this section that ships withheld rather than failing
+    #: toward including; see :meth:`ToolSurfaceHyperparameters.
+    #: admits_rowset_staging_tool` for why that inversion is safe here.
+    OFF = "off"
+
+
 #: The tokenizer-free ratio `SearchContentBudget` converts with. Mirrored
 #: rather than imported to keep this module free of capability imports.
 _CHARS_PER_TOKEN: Final[int] = 4
@@ -263,6 +316,7 @@ class ToolSurfaceHyperparameters(HyperparameterSection):
     """
 
     artifact_family: ArtifactToolFamilyExposure = ArtifactToolFamilyExposure.ALWAYS
+    rowset_staging_tool: RowsetStagingToolExposure = RowsetStagingToolExposure.OFF
 
     def admits_artifact_family(self, *, lane_enabled: bool) -> bool:
         """Return whether the artifact / row-set family may be model-visible.
@@ -287,6 +341,39 @@ class ToolSurfaceHyperparameters(HyperparameterSection):
 
         return lane_enabled and self.artifact_family is not (
             ArtifactToolFamilyExposure.OFF
+        )
+
+    def admits_rowset_staging_tool(self, *, lane_enabled: bool) -> bool:
+        """Return whether ``stage_rowset_write`` alone may be model-visible.
+
+        Composes with :meth:`admits_artifact_family` rather than replacing it,
+        and the direction matters in both senses: ``artifact_family='off'``
+        still withholds all three tools (this knob cannot resurrect a family
+        its operator switched off), while ``rowset_staging_tool='off'`` — the
+        shipped default — withholds exactly one and leaves ``publish_artifact``
+        and ``revise_artifact`` bit-identical. That is the whole reason the knob
+        exists: the family switch is the wrong granularity for evidence that
+        points at one member of it.
+
+        **This is the one knob in the section that ships withheld**, inverting
+        the "fail toward including" rule its neighbour documents. The inversion
+        is deliberate and rests on measurement, not taste: the tool was invoked
+        zero times in 1,441 recorded invocations while its two siblings were
+        invoked 178 times between them, and a withheld schema removes no
+        behaviour — the staging lane, its ledger, its executor and its approval
+        path are all keyed on effect kind (see
+        :class:`RowsetStagingToolExposure`). Re-open it with
+        ``{"tool_surface": {"rowset_staging_tool": "always"}}`` in the document
+        or ``COPILOT_HP__TOOL_SURFACE__ROWSET_STAGING_TOOL=always``.
+
+        A misspelled value is still rejected at boot by enum validation plus
+        ``extra="forbid"``, so there is no third path: the tool is withheld
+        because the default says so or because an operator said so, never
+        because a typo read as ``off``.
+        """
+
+        return self.admits_artifact_family(lane_enabled=lane_enabled) and (
+            self.rowset_staging_tool is not RowsetStagingToolExposure.OFF
         )
 
 
