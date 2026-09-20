@@ -10,6 +10,43 @@ ledger outcome (`result: "partial"`). Under an allow-always connector policy, un
 rows auto-apply (ledgered with `actor: "policy"`) while agent pre-holds **still hold**
 (FR-C8). Flag off ⇒ byte-identical behavior to today.
 
+## Status — the model-facing tool ships WITHHELD (and the reason is not this PRD's)
+
+`stage_rowset_write` is **built, wired, and not offered to the model**. The shipped
+hyperparameter document sets `tool_surface.rowset_staging_tool: "off"`, so
+`RuntimeRunHandler._stage_rowset_write_tool` returns `None` and `execution.factory`
+never appends the schema. Nothing else in this PRD changed: the repository, the
+ledger, `WriteStager`, `RowsetPolicyResolver`, the commit queue,
+`BuiltinRowSetEffectExecutor` and every approval / partial-apply path are keyed on
+effect **kind** and are untouched, and `SurfaceWriteBackCoordinator` still stages
+row sets from user-driven write-backs. Re-open with
+`{"tool_surface": {"rowset_staging_tool": "always"}}` or
+`COPILOT_HP__TOOL_SURFACE__ROWSET_STAGING_TOOL=always`.
+
+**The measurement.** Across every run store on the measuring machine the tool was
+invoked **0** times in 1,441 `tool_invocations` rows and appeared in **0** of 43,551
+run events, while its two family siblings ran over the same corpus
+(`publish_artifact` 142 — the third most-used tool in the product — and
+`revise_artifact` 36). Its schema was nonetheless resident on **883 of 883** measured
+model calls at a reproduced **3,704 bytes / 900 estimated tokens**. Detail and blind
+spots: `tools/harness-bench/FINDINGS.md` §6.
+
+**The other finding, which this gate does NOT fix.** The zero is not caused by
+unreachability — the lane composes and the tool is genuinely offered — but the tool
+is far narrower than it says it is. `REVIEWED_ROWSET_TARGETS`
+(`capabilities/tools/builtin/stage_rowset_write.py`) admits exactly one connector
+op, `("linear", "update_issue")`, and `_stage` refuses every other target outright.
+The model-facing description (`prompts/tools.py`) advertises generic bulk writes and
+offers **"update 12 contacts"** as its own example, never disclosing the one-pair
+whitelist. Already recorded as a dead-end path in
+[docs/audit/generative-ui/FINDINGS.md](../../../audit/generative-ui/FINDINGS.md) §4.2.
+
+Gating the schema stops the 900-token rent; it does not close the gap between what
+the tool claims and what it will accept. **That gap is the review moment**: re-open
+this knob alongside a widened whitelist or an honest description, not on its own —
+otherwise the surface returns to advertising a general capability that refuses
+almost every use it invites.
+
 ## Implementer brief
 
 You are implementing this in a monorepo. Work in a **fresh git worktree branched off
