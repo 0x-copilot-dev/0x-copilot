@@ -50,6 +50,10 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      # Deliberately NOT the repo's pinned Node: this job exists to prove the
+      # published launcher still runs on the oldest Node tools/cli claims to
+      # support (`engines: >=20`). It installs nothing from the root lockfile,
+      # so the pin does not apply to it.
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "20"
@@ -74,7 +78,7 @@ jobs:
 
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: "20"
+          node-version-file: ".nvmrc"
           cache: npm
           cache-dependency-path: package-lock.json
 
@@ -86,11 +90,7 @@ jobs:
       # matched only the CLI's own suite. They cover the staging modules this job
       # then packs, so this is their natural home.
       - name: Test desktop-runtime staging modules
-        # Glob UNQUOTED so bash expands it. This job runs Node 20, where
-        # `node --test` does not expand glob patterns itself — quoting it made
-        # node look for a literal file named "*.test.mjs" and fail with
-        # "Could not find". The desktop workflow gets away with the quoted form
-        # only because it runs Node 22.
+        # Glob left UNQUOTED so the shell expands it, which works on every Node.
         run: node --test tools/desktop-runtime/*.test.mjs
 
       - name: Build payload inputs

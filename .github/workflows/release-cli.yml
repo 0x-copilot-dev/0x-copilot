@@ -80,12 +80,11 @@ jobs:
         with:
           python-version: "3.13"
 
-      # Node 22, not the 20 the CI workflows use: trusted publishing requires
-      # >= 22.14.0. ci-desktop already runs 22, so this is not a new runtime for
-      # the desktop and frontend builds this job performs.
+      # The repo's pinned Node, same as every other builder. Trusted publishing
+      # needs >= 22.14.0, which the pin satisfies.
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: "22"
+          node-version-file: ".nvmrc"
           cache: npm
           cache-dependency-path: package-lock.json
           registry-url: "https://registry.npmjs.org"
