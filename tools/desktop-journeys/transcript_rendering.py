@@ -123,6 +123,48 @@ def wait_new_assistant(s: DriverSession, before: int, timeout_s: int = 60) -> No
     raise AssertionError("no assistant turn appeared after sending the prompt")
 
 
+#: Read a node as if every disclosure above it were open, then put them back.
+#:
+#: WHY THIS EXISTS. These journeys were written against a model that emits no
+#: reasoning, where a tool or fleet card is a top-level transcript row. On a
+#: REASONING model — what a real user on Claude Opus or a thinking Sonnet has —
+#: `absorbThoughtActivity` folds every card into the "Thought process" block,
+#: and that block closes when the run settles. `innerText` is layout-aware, so a
+#: settled card then reads as `''` and phases failed with messages that look like
+#: product bugs ("no required new fleet card appeared … 'text': ''").
+#:
+#: Open → read → restore happens inside ONE evaluate, and reading `innerText`
+#: forces the layout flush, so the text is real and nothing repaints. Restoring
+#: matters: TR-16 asserts every settled group IS collapsed, and a snapshot that
+#: left older groups open would fail it three phases later with no trail back.
+JS_WITH_REVEALED = """
+const withRevealed=(node,read)=>{
+  const opened=[];
+  let p=node.parentElement;
+  while(p){ if(p.tagName==='DETAILS'&&!p.open){ p.open=true; opened.push(p); } p=p.parentElement; }
+  try { return read(node); } finally { opened.forEach((d)=>{ d.open=false; }); }
+};
+"""
+
+
+def reveal(s: DriverSession, selector: str) -> int:
+    """Open every disclosure ABOVE ``selector`` and leave it open.
+
+    The mutating sibling of ``JS_WITH_REVEALED``, for phases that go on to CLICK
+    the element: a user who wants to operate a folded card opens the fold first,
+    and Playwright will not click what has no visible box.
+    """
+
+    return int(
+        s.evaluate(
+            "(()=>{const el=document.querySelector(%s);if(!el)return 0;let n=0,"
+            "p=el.parentElement;while(p){if(p.tagName==='DETAILS'&&!p.open)"
+            "{p.open=true;n++;}p=p.parentElement;}return n})()" % json.dumps(selector)
+        )
+        or 0
+    )
+
+
 def card_snapshots(s: DriverSession, kind: str) -> list[dict]:
     """Read the activity card hosts a user sees, preserving their stable ids."""
     if kind == "tool":
@@ -132,8 +174,9 @@ def card_snapshots(s: DriverSession, kind: str) -> list[dict]:
     else:
         raise ValueError(f"unsupported card kind {kind!r}")
     js = f"""(()=>{{
+      {JS_WITH_REVEALED}
       const selector={json.dumps(selector)};
-      return JSON.stringify([...document.querySelectorAll(selector)].map((node)=>{{
+      return JSON.stringify([...document.querySelectorAll(selector)].map((host)=>withRevealed(host,(node)=>{{
         const fleet=node.querySelector('[data-fleet-id]');
         return {{
           testId:node.getAttribute('data-testid'),
@@ -148,7 +191,7 @@ def card_snapshots(s: DriverSession, kind: str) -> list[dict]:
           }})),
           hasDetails:!!node.querySelector('details > summary'),
         }};
-      }}));
+      }})));
     }})()"""
     raw = s.evaluate(js)
     return json.loads(raw) if raw else []
@@ -261,6 +304,9 @@ def ensure_native_disclosure(
         )
 
     assert s.present(summary), f"{label}: disclosure summary is missing"
+    opened = reveal(s, details_selector)
+    if opened:
+        log(f"      {label}: opened {opened} enclosing disclosure(s) first")
     if is_open():
         s.click(summary)
     assert not is_open(), f"{label}: could not establish a closed disclosure"
@@ -364,12 +410,7 @@ def ensure_fleet_card_interaction(s: DriverSession, fleet_host_test_id: str) -> 
     # after 15s reporting "element is not visible". Open every enclosing
     # disclosure first; the sibling tool-card check already does this via
     # `ensure_native_disclosure`, and the asymmetry was the whole bug.
-    opened = s.evaluate(
-        "(() => {const el=document.querySelector(%s);if(!el)return 0;"
-        "let n=0,p=el.parentElement;"
-        "while(p){if(p.tagName==='DETAILS'&&!p.open){p.open=true;n++;}p=p.parentElement;}"
-        "return n})()" % json.dumps(host)
-    )
+    opened = reveal(s, host)
     if opened:
         log(f"      opened {opened} enclosing disclosure(s) to reach the fleet toggle")
     assert expanded() == "false", "terminal fleet should start compact"
@@ -495,25 +536,87 @@ def fa_poll_growth(
     return steps
 
 
-def fa_tool_card_state(s: DriverSession) -> dict | None:
+def fa_tool_card_state(s: DriverSession, known: set[str] | None = None) -> dict | None:
+    """The NEWEST tool card this phase produced — see ``fa_fleet_card_state``.
+
+    Same two stale assumptions (first card in a shared conversation; `innerText`
+    of a folded card), plus a third of its own: it learned WHICH tool ran by
+    reading the card's copy. The title is model-authored now ("math.isqrt
+    docs"), so the raw name is on no pixel — it is on `data-tool-name`.
+    """
+
     js = (
-        "(()=>{const c=document.querySelector('[data-testid^=tc-chat-tool-]:not([data-testid$=-args])"
-        ":not([data-testid$=-result])');if(!c)return null;"
-        "const sum=c.querySelector('summary');return JSON.stringify({"
-        "status:c.getAttribute('data-tool-status'),text:c.innerText,"
-        "hasDetails:!!(sum&&/Details/.test(sum.innerText))})})()"
-    )
+        "(()=>{" + JS_WITH_REVEALED + "const known=new Set(%s);"
+        # HOSTS only: the <li> carrying data-tool-status. The bare prefix also
+        # matches a card's own `…-details` / `…-args` children, and "the last
+        # match" is then a fragment of a card rather than a card.
+        "const all=[...document.querySelectorAll('[data-testid^=tc-chat-tool-][data-tool-status]')]"
+        ".filter(c=>!known.has(c.getAttribute('data-testid')));"
+        "const c=all[all.length-1];if(!c)return null;"
+        "return JSON.stringify(withRevealed(c,(n)=>{"
+        "const named=n.matches('[data-tool-name]')?n:n.querySelector('[data-tool-name]');"
+        "const stat=n.matches('[data-tool-status]')?n:n.querySelector('[data-tool-status]');"
+        "const sum=n.querySelector('summary');return {"
+        "status:(stat||n).getAttribute('data-tool-status'),"
+        "toolName:named?named.getAttribute('data-tool-name'):null,"
+        "text:n.innerText,hasDetails:!!sum}}))})()"
+    ) % json.dumps(sorted(known or ()))
     raw = s.evaluate(js)
     return json.loads(raw) if raw else None
 
 
-def fa_fleet_card_state(s: DriverSession) -> dict | None:
-    js = (
-        "(()=>{const c=document.querySelector('[data-testid^=tc-chat-fleet-]');"
-        "if(!c)return null;return JSON.stringify({text:c.innerText})})()"
+def fa_known_tool_ids(s: DriverSession) -> set[str]:
+    raw = s.evaluate(
+        "JSON.stringify([...document.querySelectorAll("
+        "'[data-testid^=tc-chat-tool-][data-tool-status]')]"
+        ".map(c=>c.getAttribute('data-testid')))"
     )
+    return set(json.loads(raw or "[]"))
+
+
+def fa_fleet_card_state(s: DriverSession, known: set[str] | None = None) -> dict | None:
+    """The NEWEST fleet card this phase produced, read the way a user sees it.
+
+    Two assumptions from this helper's first life no longer hold, and each
+    failed as "fleet card missing 'Dispatched' copy: ''" — a message that reads
+    like Focus dropping subagents, which it does not:
+
+    * **It took the FIRST fleet card in the DOM.** When this was its own journey
+      that was the only one. Grouped phases share a boot AND a conversation, so
+      by TR-8 the first fleet card is TR-2's, six turns old.
+    * **It read `innerText` without opening anything.** `innerText` is
+      layout-aware, so it is `''` for a card inside a closed disclosure — and a
+      settled card sits inside one twice over: the run-group a later run folds
+      it into, and the "Thought process" block a reasoning model's work is
+      absorbed by.
+
+    So: skip the cards that existed before this phase sent, take the last of
+    what is left, and read it THROUGH its folds (`JS_WITH_REVEALED`: open, read,
+    restore). That does not weaken the assertion, which is about the card's
+    COPY — and it leaves the transcript as the user left it.
+    """
+
+    js = (
+        "(()=>{const known=new Set(%s);"
+        "const all=[...document.querySelectorAll('[data-testid^=tc-chat-fleet-]')]"
+        ".filter(c=>!known.has(c.getAttribute('data-testid')));"
+        "const c=all[all.length-1];if(!c)return null;"
+        "return JSON.stringify(withRevealed(c,(n)=>({text:n.innerText,"
+        "testId:n.getAttribute('data-testid')})))})()"
+    ) % json.dumps(sorted(known or ()))
+    js = js.replace("(()=>{", "(()=>{" + JS_WITH_REVEALED, 1)
     raw = s.evaluate(js)
     return json.loads(raw) if raw else None
+
+
+def fa_known_fleet_ids(s: DriverSession) -> set[str]:
+    """Fleet cards already on screen — everything a new turn did NOT produce."""
+
+    raw = s.evaluate(
+        "JSON.stringify([...document.querySelectorAll('[data-testid^=tc-chat-fleet-]')]"
+        ".map(c=>c.getAttribute('data-testid')))"
+    )
+    return set(json.loads(raw or "[]"))
 
 
 def enter_focus(s: DriverSession) -> None:
@@ -588,6 +691,7 @@ def fa_streaming(s: DriverSession) -> None:
 def fa_tool_card(s: DriverSession) -> None:
     log("── J2 tool card ─────────────────────────────────────────────")
     enter_focus(s)
+    known = fa_known_tool_ids(s)
     prev = int(s.evaluate(JS_ASSISTANT_COUNT) or 0)
     send_in_run(s, P_TOOL)
     assert fa_wait_new_turn(s, prev), (
@@ -596,7 +700,7 @@ def fa_tool_card(s: DriverSession) -> None:
 
     card = None
     for _ in range(160):  # up to ~40s for the model to call the tool
-        card = fa_tool_card_state(s)
+        card = fa_tool_card_state(s, known)
         if card is not None:
             break
         time.sleep(0.25)
@@ -609,17 +713,18 @@ def fa_tool_card(s: DriverSession) -> None:
         )
         return
 
-    assert "web_search" in card["text"], (
-        f"tool card did not name web_search: {card['text']!r}"
+    assert card["toolName"] == "web_search", (
+        f"newest tool card is {card['toolName']!r}, not web_search; text={card['text']!r}"
     )
-    log("PASS  inline tool card present and names web_search")
+    assert card["text"].strip(), "the web_search card rendered no visible copy"
+    log("PASS  inline tool card present, is web_search, and has visible copy")
 
     # wait for it to resolve to done
     # The renderer's durable status token is ``complete``; older staged
     # payloads used ``done``. The visible label remains “done” in both cases.
     done = card["status"] in {"complete", "done"}
     for _ in range(120):
-        card = fa_tool_card_state(s)
+        card = fa_tool_card_state(s, known)
         if card and card["status"] in {"complete", "done"}:
             done = True
             break
@@ -641,13 +746,14 @@ def fa_tool_card(s: DriverSession) -> None:
 def fa_fleet_card(s: DriverSession) -> None:
     log("── J3 subagent fleet card ───────────────────────────────────")
     enter_focus(s)
+    known = fa_known_fleet_ids(s)
     prev = int(s.evaluate(JS_ASSISTANT_COUNT) or 0)
     send_in_run(s, P_FLEET)
     assert fa_wait_new_turn(s, prev), "no new assistant turn after the subagent prompt"
 
     fleet = None
     for _ in range(200):  # up to ~50s — subagent dispatch can be slower
-        fleet = fa_fleet_card_state(s)
+        fleet = fa_fleet_card_state(s, known)
         if fleet is not None:
             break
         time.sleep(0.25)
@@ -670,7 +776,7 @@ def fa_fleet_card(s: DriverSession) -> None:
     # observe progression to done
     done = "done" in text.lower() or "1/1" in text
     for _ in range(160):
-        fleet = fa_fleet_card_state(s)
+        fleet = fa_fleet_card_state(s, known)
         if fleet and ("done" in fleet["text"].lower() or "1/1" in fleet["text"]):
             done = True
             break
@@ -1319,6 +1425,10 @@ def tr1_direct_web_search_card(s: DriverSession) -> None:
     host = css_test_id(tool["testId"])
     details, body = f"{host} details", f"{host} [data-testid$=-details]"
     assert tool["hasDetails"], "completed web-search card is missing its disclosure"
+    # On a reasoning model the settled card sits inside a closed "Thought
+    # process" block, so the summary has no visible box until the fold above
+    # it is opened — which is also what a user would do to reach it.
+    reveal(s, details)
     s.click(f"{details} > summary")
     detail_text = s.evaluate(
         f"(document.querySelector({json.dumps(body)})||{{}}).innerText||''"

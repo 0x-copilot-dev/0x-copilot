@@ -366,3 +366,38 @@ describe("ToolCallCard — refused vs waiting on a decision", () => {
     ).toBeInTheDocument();
   });
 });
+
+describe("ToolCallCard — which tool, as data", () => {
+  // The visible title is model-authored ("Get Linear issue", "math.isqrt
+  // docs"), so the raw tool name is on no pixel. A live journey that read copy
+  // to learn the tool broke the day the title stopped being the name; this is
+  // what it reads instead, stamped beside `data-tool-status`.
+  it("stamps the raw tool name on a card WITH details", () => {
+    const { container } = render(<ToolCallCard toolCall={detailedToolCall} />);
+    const root = container.querySelector("[data-tool-status]");
+    expect(root).toHaveAttribute("data-tool-name", "get_issue");
+    expect(root?.tagName).toBe("DETAILS");
+  });
+
+  it("stamps it on a card with NO details too — both render arms", () => {
+    const { container } = render(
+      <ToolCallCard
+        toolCall={{
+          createdAtMs: 0,
+          id: "call-bare",
+          sequenceNo: 1,
+          runId: null,
+          status: "running",
+          // `hasToolDetails` counts a title that differs from the name as a
+          // detail, so the bare <div> arm needs them equal — which is what a
+          // call looks like before the projector has a display title for it.
+          title: "web_search",
+          toolName: "web_search",
+        }}
+      />,
+    );
+    const root = container.querySelector("[data-tool-status]");
+    expect(root).toHaveAttribute("data-tool-name", "web_search");
+    expect(root?.tagName).toBe("DIV");
+  });
+});
