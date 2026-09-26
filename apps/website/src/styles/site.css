@@ -9,8 +9,7 @@
      body     IBM Plex Sans   (the readable face we liked)
      mono     JetBrains Mono  (labels, code, addresses)
 
-   Palette, layout, and components are the kit's. The token-page classes at the
-   bottom (.tk-*) extend the same idiom for our richer tokenomics content.
+   Palette, layout, and components are the kit's.
    ========================================================================== */
 
 :root {
@@ -247,18 +246,6 @@ nav {
   background: var(--jade);
   box-shadow: 0 0 0 4px rgba(87, 199, 133, 0.15);
 }
-.dot.pulse {
-  animation: pulse 2.2s ease-in-out infinite;
-}
-@keyframes pulse {
-  0%,
-  100% {
-    box-shadow: 0 0 0 3px rgba(87, 199, 133, 0.12);
-  }
-  50% {
-    box-shadow: 0 0 0 7px rgba(87, 199, 133, 0);
-  }
-}
 
 /* hero */
 .hero {
@@ -399,17 +386,6 @@ h1 em {
   height: 100%;
   object-fit: cover;
   display: block;
-}
-.cap {
-  text-align: center;
-  color: var(--mut2);
-  font-family: var(--mono);
-  font-size: 13px;
-  margin-top: 16px;
-}
-.cap b {
-  color: var(--mut);
-  font-weight: 400;
 }
 .tm {
   position: absolute;
@@ -1388,75 +1364,6 @@ pre .p {
   color: #dde0e6;
 }
 
-/* token teaser (home) */
-.tok {
-  background: linear-gradient(180deg, rgba(95, 178, 236, 0.05), transparent);
-}
-.bar {
-  display: flex;
-  height: 66px;
-  border-radius: 13px;
-  overflow: hidden;
-  border: 1px solid var(--line2);
-  margin-top: 44px;
-  max-width: 960px;
-}
-.seg {
-  display: flex;
-  align-items: center;
-  padding: 0 22px;
-  font-family: var(--mono);
-  font-weight: 700;
-  font-size: 19px;
-  color: #08131d;
-}
-.seg.mkt {
-  flex: 45.56;
-  background: linear-gradient(180deg, var(--sky-hi), var(--sky-lo));
-}
-.seg.bld {
-  flex: 29.19;
-  background: linear-gradient(180deg, #8ce8b4, #3da56c);
-}
-.seg.pro {
-  flex: 25;
-  background: linear-gradient(180deg, #f6a184, #e0603c);
-}
-.tlegend {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 24px;
-  margin-top: 26px;
-  max-width: 960px;
-}
-.tl-item .lt {
-  font-family: var(--disp);
-  font-weight: 600;
-  color: #fff;
-  display: flex;
-  align-items: center;
-  gap: 9px;
-}
-.tl-item .sw {
-  width: 12px;
-  height: 12px;
-  border-radius: 4px;
-}
-.sw.mkt {
-  background: var(--sky);
-}
-.sw.bld {
-  background: var(--jade);
-}
-.sw.pro {
-  background: var(--ember);
-}
-.tl-item p {
-  color: var(--mut);
-  font-size: 14.5px;
-  margin: 8px 0 0;
-}
-
 /* faq */
 .faq {
   display: grid;
@@ -1565,95 +1472,6 @@ footer {
   color: var(--mut);
 }
 
-/* ---- token page (our content, kit idiom) ---------------------------------- */
-.tk-bucket {
-  border-top: 1px solid var(--line);
-  padding: 44px 0;
-  display: grid;
-  grid-template-columns: 168px 1fr;
-  gap: 44px;
-}
-.tk-bucket:first-of-type {
-  border-top: 0;
-}
-.tk-pct {
-  font-family: var(--disp);
-  font-weight: 600;
-  font-size: 44px;
-  line-height: 1;
-  color: var(--tx);
-}
-.tk-pct.mkt {
-  color: var(--sky);
-}
-.tk-pct span {
-  display: block;
-  margin-top: 8px;
-  font-family: var(--mono);
-  font-size: 11px;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  color: var(--mut2);
-  font-weight: 400;
-}
-.tk-body h3 {
-  font-size: 24px;
-  font-weight: 600;
-  margin-bottom: 12px;
-}
-.tk-body p {
-  color: var(--mut);
-  font-size: 15.5px;
-  margin: 0 0 12px;
-  max-width: 62ch;
-}
-.tk-body p b {
-  color: #dde0e6;
-}
-.tk-facts {
-  list-style: none;
-  margin: 20px 0 0;
-  padding: 0;
-  max-width: 62ch;
-}
-.tk-facts li {
-  display: grid;
-  grid-template-columns: 150px 1fr;
-  gap: 16px;
-  padding: 11px 0;
-  border-top: 1px solid var(--line);
-  font-size: 14.5px;
-  color: var(--mut);
-  line-height: 1.55;
-}
-.tk-facts b {
-  font-family: var(--mono);
-  font-weight: 400;
-  font-size: 12px;
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
-  color: var(--mut2);
-}
-.tbd {
-  font-family: var(--mono);
-  font-size: 12px;
-  color: var(--amber);
-  border: 1px dashed rgba(232, 180, 94, 0.5);
-  border-radius: 4px;
-  padding: 1px 7px;
-  white-space: nowrap;
-}
-.legal {
-  max-width: 64ch;
-  margin-top: 28px;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  color: var(--mut2);
-  font-size: 13.5px;
-  line-height: 1.65;
-}
-
 @media (prefers-reduced-motion: reduce) {
   html {
     scroll-behavior: auto;
@@ -1683,7 +1501,6 @@ footer {
   .cards,
   .surf,
   .two,
-  .tlegend,
   .faq,
   .contact {
     grid-template-columns: 1fr;
@@ -1693,18 +1510,6 @@ footer {
   }
   .sec {
     padding: 60px 0;
-  }
-  .tk-bucket,
-  .tk-facts li {
-    grid-template-columns: 1fr;
-    gap: 8px;
-  }
-  .bar {
-    flex-direction: column;
-    height: auto;
-  }
-  .seg {
-    padding: 12px 22px;
   }
 }
 @media (max-width: 760px) {

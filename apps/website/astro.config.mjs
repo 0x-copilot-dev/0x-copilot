@@ -13,7 +13,7 @@ import react from "@astrojs/react";
  * check-links.mjs fails the build if the emitted HTML disagrees.
  *
  * Note this only governs Astro's own emitted assets (/_astro/*). Hand-authored
- * refs use relative URLs (./media/..., ./token.html) so they resolve under
+ * refs use relative URLs (./media/..., ./install.html) so they resolve under
  * both a root and a subpath deploy.
  */
 const base = process.env.SITE_BASE ?? "/";
@@ -23,6 +23,6 @@ export default defineConfig({
   base,
   output: "static",
   integrations: [react()],
-  build: { format: "file" }, // /token.html rather than /token/index.html
+  build: { format: "file" }, // /install.html rather than /install/index.html
   devToolbar: { enabled: false },
 });
