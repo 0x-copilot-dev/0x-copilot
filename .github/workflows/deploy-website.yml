@@ -52,7 +52,7 @@ jobs:
         # force-push and stops serving HTTPS for it.
         run: |
           set -euo pipefail
-          for f in index.html install.html docs.html media/app-run.png favicon.svg; do
+          for f in index.html install.html docs.html media/og.png favicon.svg; do
             test -f "apps/website/dist/$f" || { echo "::error::missing dist/$f"; exit 1; }
           done
           if [ ! -f apps/website/dist/CNAME ]; then
