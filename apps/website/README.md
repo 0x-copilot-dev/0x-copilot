@@ -3,8 +3,7 @@
 Marketing site for 0xCopilot. Astro, static output, deployed to GitHub Pages.
 
 ```
-src/pages/index.astro        home — pitch, end-to-end run journey, six surfaces, local/BYOK, token
-src/pages/token.astro        $CPILOT tokenomics — 45.56 / 29.19 / 25 / 0.25
+src/pages/index.astro        home — pitch, end-to-end run journey, six surfaces, local/BYOK
 src/pages/install.astro      install — copilot CLI (npm/bun), first-run, platforms
 src/pages/docs.astro         documentation index — live install guide + upcoming chapters
 src/pages/moodboard.astro    local visual lab — directions and run-card palette trials
@@ -36,7 +35,7 @@ Push to `main` with anything under `apps/website/**` changed.
 fails the build instead of shipping unstyled), then force-pushes `dist/` into
 that repo. Path-filtered, so product changes never trigger a site deploy.
 
-Hand-authored links are relative (`./token.html`, `./media/…`) so they resolve
+Hand-authored links are relative (`./install.html`, `./media/…`) so they resolve
 under both a root and a subpath deploy.
 
 ### Custom domain
@@ -120,27 +119,9 @@ Two traps that cost a capture each, recorded so the next person skips them:
   on. The script asserts the row is unwrapped, and self-checks that assertion by
   squeezing to 1200 and confirming it trips.
 
-## Post-launch — the numbers on the page
+## No token content
 
-`$CPILOT` is **live** on Virtuals Protocol, on Robinhood Chain
-([listing](https://app.virtuals.io/virtuals/113720)). The old amber `FILL:`
-markers are gone — `token.astro` now carries the real launch parameters, read
-off the live listing:
-
-| Bucket                      | Share  | Note                                             |
-| --------------------------- | ------ | ------------------------------------------------ |
-| Liquidity pool              | 45.56% | fixed supply, live at launch                     |
-| Automated Capital Formation | 25.00% | Limit Order Program, 2M → 160M FDV               |
-| Team vesting                | 25.00% | Virtuals default team vesting                    |
-| Sniper-tax buyback (team)   | 2.19%  | locked 3 mo, then 9 mo linear                    |
-| Team initial buy            | 2.00%  | bought on the open curve — **disclosed on-page** |
-| veVIRTUAL airdrop           | 0.25%  | to veVIRTUAL holders                             |
-
-The page groups the three team-associated lines (25 + 2 + 2.19) as one **29.19%
-Team & contributors** bucket, and the veVIRTUAL airdrop is the fourth bucket the
-old 50/25/25 split was missing. Total supply is a fixed **1,000,000,000**.
-
-Deliberately **not** on the page: the live price and the "unlocks in N days"
-countdown (both volatile — link out to the listing), and a token **contract
-address** (verification points to the Virtuals listing so there's one canonical
-source). Paste a verified address here only if you want it rendered on-page.
+The site carries no token content and does not link to the Virtuals listing.
+`src/layouts/Base.astro` keeps the invisible `virtual-protocol-site-verification`
+meta tag so that listing's ownership check of the domain keeps passing; visitors
+never see it.
