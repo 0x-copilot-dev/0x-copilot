@@ -14,8 +14,8 @@
 # how a job ended up with pytest but no pytest-asyncio.
 -r requirements.in
 
-pytest==9.1.1
-pytest-asyncio==1.4.0
+pytest==9.2.0
+pytest-asyncio==1.4.1
 
 # Optional AC6 "Code Mode" interpreter. It is gated OFF at runtime by
 # RUNTIME_ENABLE_MONTY and imported lazily behind InterpreterPort, so it is not
